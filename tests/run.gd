@@ -10,15 +10,33 @@ class Check:
 	var passed := 0
 	var current := ""
 
-	## Числа — численно (2 и 2.0 одно и то же), остальное — только при одинаковом типе:
-	## сравнение разных типов в GDScript не «ложь», а ошибка.
+	## Числа — численно и с допуском (2 и 2.0, 31.5 и 31.4999… — одно и то же), векторы,
+	## списки и словари — поэлементно, остальное — только при одинаковом типе: сравнение
+	## разных типов в GDScript не «ложь», а ошибка.
 	static func same(a: Variant, b: Variant) -> bool:
 		var na := typeof(a) == TYPE_INT or typeof(a) == TYPE_FLOAT
 		var nb := typeof(b) == TYPE_INT or typeof(b) == TYPE_FLOAT
 		if na and nb:
-			return is_equal_approx(float(a), float(b))
+			return absf(float(a) - float(b)) <= 1e-4 * maxf(1.0, absf(float(b)))
 		if typeof(a) != typeof(b):
 			return false
+		match typeof(a):
+			TYPE_VECTOR2, TYPE_VECTOR2I:
+				return same(a.x, b.x) and same(a.y, b.y)
+			TYPE_ARRAY:
+				if a.size() != b.size():
+					return false
+				for i in a.size():
+					if not same(a[i], b[i]):
+						return false
+				return true
+			TYPE_DICTIONARY:
+				if a.size() != b.size():
+					return false
+				for k in a:
+					if not b.has(k) or not same(a[k], b[k]):
+						return false
+				return true
 		return a == b
 
 	func eq(label: String, got: Variant, want: Variant) -> void:
