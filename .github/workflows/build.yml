@@ -1,0 +1,96 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+env:
+  GODOT: "4.3"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Godot
+        run: |
+          curl -sSL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT}-stable/Godot_v${GODOT}-stable_linux.x86_64.zip"
+          unzip -q godot.zip
+          mkdir -p "$HOME/bin"
+          mv "Godot_v${GODOT}-stable_linux.x86_64" "$HOME/bin/godot"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      # Шаблоны экспорта весят больше гигабайта, а нужны из них только андроидные — они
+      # кэшируются между сборками, чтобы не качать их каждый раз.
+      - name: Cache export templates
+        id: templates
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/godot/export_templates/${{ env.GODOT }}.stable
+          key: godot-android-templates-${{ env.GODOT }}
+
+      - name: Export templates
+        if: steps.templates.outputs.cache-hit != 'true'
+        run: |
+          curl -sSL -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT}-stable/Godot_v${GODOT}-stable_export_templates.tpz"
+          dir="$HOME/.local/share/godot/export_templates/${GODOT}.stable"
+          mkdir -p "$dir"
+          unzip -j templates.tpz 'templates/android_*' 'templates/version.txt' -d "$dir"
+          ls -la "$dir"
+
+      - name: Import resources
+        run: godot --headless --import || true
+
+      # Проверки — до сборки: упавшая проверка останавливает её, и сломанная версия до
+      # телефона не доезжает.
+      - name: Tests
+        run: godot --headless -s tests/run.gd
+
+      - name: Point Godot at the Android SDK
+        run: |
+          f="$HOME/.config/godot/editor_settings-${GODOT}.tres"
+          sed -i "s|^export/android/android_sdk_path = .*|export/android/android_sdk_path = \"$ANDROID_HOME\"|" "$f"
+          sed -i "s|^export/android/java_sdk_path = .*|export/android/java_sdk_path = \"$JAVA_HOME\"|" "$f"
+          grep -n "export/android/" "$f"
+
+      - name: Stamp the build number
+        run: |
+          sed -i "s|^version/code=.*|version/code=${GITHUB_RUN_NUMBER}|" export_presets.cfg
+          sed -i "s|^version/name=.*|version/name=\"0.1.${GITHUB_RUN_NUMBER}\"|" export_presets.cfg
+
+      # Ключ подписи лежит в репозитории: без одного и того же ключа телефон не ставит новую
+      # сборку поверх старой. Для личной игры, которая не выкладывается в магазин, этого
+      # достаточно.
+      - name: Export APK
+        env:
+          GODOT_ANDROID_KEYSTORE_RELEASE_PATH: ${{ github.workspace }}/android/release.keystore
+          GODOT_ANDROID_KEYSTORE_RELEASE_USER: opushka
+          GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD: opushka-release
+        run: |
+          mkdir -p build
+          godot --headless --export-release "Android" build/opushka.apk
+          ls -la build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: opushka-apk
+          path: build/opushka.apk
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Опушка — сборка ${{ github.run_number }}
+          body: |
+            Коммит ${{ github.sha }}.
+          files: build/opushka.apk
