@@ -245,6 +245,7 @@ func _timers(c: Creature, dt: float) -> void:
 	c.zap_cd -= dt
 	c.invuln -= dt
 	c.calm_t += dt
+	c.scared_t -= dt
 	c.player_hit_t += dt
 	c.flash = maxf(0.0, c.flash - dt * 4.0)
 	c.bite_anim = maxf(0.0, c.bite_anim - dt * 3.0)
@@ -526,10 +527,36 @@ func _gain(amount: float) -> void:
 	if mode == "arena":
 		return
 	if evo.add_dna(amount):
+		var old_r := player.size_r
 		player.sync_player(evo)
 		player.hp = player.max_hp
 		player.grow_anim = 1.0
-		events.append({"t": "levelup", "level": evo.level()})
+		events.append({"t": "levelup", "level": evo.level(), "old_r": old_r, "pos": player.pos})
+		_growth_wave()
+
+## Сколько после роста тебя не трогают и сколько соседи держатся подальше.
+const GROW_SAFE := 2.5
+const GROW_SCARE := 3.0
+
+## Рост: от клетки расходится волна — соседей отбрасывает, они ненадолго пугаются,
+## паразиты отваливаются, а тебя пару секунд не трогают.
+func _growth_wave() -> void:
+	player.invuln = maxf(player.invuln, GROW_SAFE)
+	_shake_off()
+	var reach := maxf(vision(), player.radius * 8.0)
+	for m in mobs:
+		if is_giant(m) or m.host != null:
+			continue
+		var d := m.pos - player.pos
+		var dist := d.length()
+		if dist >= reach or dist < 0.01:
+			continue
+		var k := 1.0 - dist / reach
+		m.vel += d / dist * (160.0 + 240.0 * k)
+		m.scared_t = GROW_SCARE
+		m.ai_state = "flee"
+		m.ai_target = null
+		m.desire = d / dist
 
 
 # --- победы и гибель ------------------------------------------------------------------
@@ -715,6 +742,11 @@ func _think(m: Creature, dt: float) -> void:
 		return
 	if b == "ambush" and m.revealed_t <= 0.0:
 		_ambush_wait(m)
+		return
+	# Напуган волной роста — плывёт прочь.
+	if m.scared_t > 0.0:
+		m.ai_state = "flee"
+		m.desire = (m.pos - player.pos).normalized()
 		return
 	_mob_ability(m)
 	var hunts := _hunts(m)

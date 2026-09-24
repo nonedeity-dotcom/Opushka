@@ -5,6 +5,18 @@ extends Control
 signal closed
 signal changed(settings: Settings)
 signal new_world
+## Послушать один звук (список «Проверка звуков»).
+signal test_sound(id: String)
+
+## Что за звук — по-русски, чтобы можно было сказать: «вот этот режет ухо».
+const SOUND_NAMES := {"eat": "Съел водоросль", "eat_meat": "Съел мясо", "bite": "Укус", "hit": "Удар", "hurt": "Тебя ранили",
+	"kill": "Победа", "pickup": "Подобрал часть", "newpart": "Новая часть", "levelup": "Рост", "dash": "Рывок", "zap": "Разряд",
+	"poison": "Яд", "death": "Тебя съели", "ui": "Кнопка", "place": "Поставил часть", "remove": "Убрал часть", "nope": "Нельзя",
+	"goal": "Задача выполнена", "drop": "Выпала часть", "rock": "Камень", "mate": "Пара", "parasite": "Паразит", "ability": "Умение",
+	"boss": "Рык гиганта", "wave": "Волна арены", "chirp": "Писк мелких", "growl": "Рычание хищника", "boom": "Гул гиганта",
+	"hiss": "Шипение паразита", "spit": "Плевок", "split": "Делитель", "whale": "Песня кита", "heart": "Сердцебиение",
+	"bubbles": "Пузырьки вдали", "creak": "Скрип со дна", "deep": "Зов из глубины", "swell": "Событие в океане"}
+var _sounds_open := false
 
 var settings: Settings
 var evo: Evolution
@@ -106,6 +118,42 @@ func rebuild() -> void:
 	if settings.sound or settings.ambience or settings.music:
 		_choice(col, "Громкость", "volume", [["quiet", "Тихо"], ["normal", "Средне"], ["loud", "Громко"]])
 	_toggle(col, "Вибрация", "Отклик на укусы, победы и находки", "vibration")
+	var open_btn := Button.new()
+	open_btn.focus_mode = Control.FOCUS_NONE
+	open_btn.custom_minimum_size = Vector2(0, 56)
+	open_btn.text = ("Скрыть проверку звуков" if _sounds_open else "Проверка звуков: послушать каждый по отдельности")
+	open_btn.add_theme_font_size_override("font_size", 20)
+	for st in ["normal", "hover", "pressed", "hover_pressed"]:
+		open_btn.add_theme_stylebox_override(st, Kit.box(Color(1, 1, 1, 0.05), 18, Color(1, 1, 1, 0.1)))
+	open_btn.pressed.connect(func():
+		_sounds_open = not _sounds_open
+		rebuild())
+	Kit.press_fx(open_btn)
+	col.add_child(open_btn)
+	if _sounds_open:
+		col.add_child(Kit.muted("Нажми — прозвучит. Если какой-то режет ухо, слишком громкий или тихий — напиши его номер или название.", 18))
+		var grid := GridContainer.new()
+		grid.columns = 2
+		grid.add_theme_constant_override("h_separation", 8)
+		grid.add_theme_constant_override("v_separation", 8)
+		var n := 0
+		for id: String in SOUND_NAMES:
+			n += 1
+			var b := Button.new()
+			b.focus_mode = Control.FOCUS_NONE
+			b.text = "%d · %s" % [n, SOUND_NAMES[id]]
+			b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+			b.custom_minimum_size = Vector2(0, 50)
+			b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			b.add_theme_font_size_override("font_size", 18)
+			for st in ["normal", "hover"]:
+				b.add_theme_stylebox_override(st, Kit.box(Art.CARD, 16, Color(0, 0, 0, 0), 14))
+			for st in ["pressed", "hover_pressed"]:
+				b.add_theme_stylebox_override(st, Kit.box(Art.GREEN_DARK, 16, Color(0, 0, 0, 0), 14))
+			b.pressed.connect(func(): test_sound.emit(id))
+			Kit.press_fx(b)
+			grid.add_child(b)
+		col.add_child(grid)
 
 	_section(col, "Экран")
 	_toggle(col, "Показывать задачу", "Строка с подсказкой, что делать дальше", "show_goal")

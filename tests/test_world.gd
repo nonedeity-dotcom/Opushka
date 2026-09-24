@@ -508,3 +508,17 @@ func test_на_арене_событий_нет(c) -> void:
 	p._event_cd = 0.0
 	p._world_events(0.1)
 	c.ok("на арене не начинается", p.event == "")
+
+func test_волна_роста(c) -> void:
+	var p := _pond(_evo_with([["filter", 0]], 35.0))
+	p._safe_t = 0.0
+	var h := p.spawn("kusaka", p.player.pos + Vector2(p.player.radius * 3.0, 0))
+	var par := p.spawn("piyavka", p.player.pos + Vector2(0, p.player.radius))
+	par.host = p.player
+	var d0 := h.pos.distance_to(p.player.pos)
+	p._gain(10.0)
+	c.ok("вырос", p.events.any(func(e): return e.t == "levelup" and e.old_r < p.player.size_r))
+	c.ok("пару секунд не трогают", p.player.invuln > 2.0)
+	c.ok("паразит отвалился", par.host == null)
+	_run(p, 1.0)
+	c.ok("хищника отбросило, он держится подальше", h.pos.distance_to(p.player.pos) > d0 + 60.0 and h.scared_t > 0.0)

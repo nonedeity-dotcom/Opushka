@@ -147,6 +147,7 @@ func _ready() -> void:
 	setup.closed.connect(func(): setup.visible = false)
 	setup.changed.connect(_settings_changed)
 	setup.new_world.connect(_to_menu)
+	setup.test_sound.connect(func(id): sound.play(id))
 
 	shop = ShopPanel.new()
 	shop.visible = false
@@ -431,6 +432,8 @@ func _handle(events: Array) -> void:
 					hud.toast("%s: копия %d из %d до уровня %d" % [def.name, e.have, e.need, e.level + 1])
 			"levelup":
 				sound.play("levelup")
+				# Миг тишины: мир замирает, клетка светится — и сбрасывает оболочку.
+				_heavy(0.3, 0.25)
 				hud.grew()
 				_dirty = true
 				_buzz(50)
@@ -930,6 +933,18 @@ func _run_script() -> void:
 					m.hp = m.max_hp * float(p[1])
 		"ability":
 			pond.use_ability()
+		"grow":
+			# Дорасти до следующего размера (для снимков).
+			var lv := evo.level()
+			if lv < Content.LEVELS.size():
+				pond._gain(float(Content.LEVELS[lv].dna) - evo.dna_total + 0.5)
+				view.effects(pond.events)
+				_handle(pond.events)
+		"sounds":
+			setup._sounds_open = true
+			setup.rebuild()
+			var to := int(p[1]) if p.size() > 1 else 0
+			get_tree().create_timer(0.3).timeout.connect(func(): setup._body.get_child(1).scroll_vertical = to)
 		"myhp":
 			pond.player.hp = pond.player.max_hp * float(p[1])
 		"event":

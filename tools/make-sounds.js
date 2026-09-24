@@ -471,6 +471,27 @@ S.swell = (() => {
   return finish(lowpass(x, 2500), 0.5);
 })();
 
+// --- слышно и в телефоне ----------------------------------------------------------------
+// Динамик телефона почти не играет ниже ~300 Гц, и низкие звуки в нём пропадали (это
+// показала tools/sound-check.js). Добавляем обертоны: гнём волну (x·|x| — чётные, x³ —
+// нечётные), берём из этого всё выше 250 Гц и подмешиваем. Ухо по обертонам само
+// «слышит» низкий тон. Случайных чисел здесь нет — другие звуки не меняются.
+function presence(x, amount) {
+  let peak = 0;
+  for (const v of x) peak = Math.max(peak, Math.abs(v));
+  const h = new Float32Array(x.length);
+  for (let i = 0; i < x.length; i++) {
+    const v = x[i] / (peak || 1);
+    h[i] = 0.6 * v * Math.abs(v) + 0.8 * v * v * v;
+  }
+  highpass(h, 250);
+  highpass(h, 250);
+  lowpass(h, 3000);
+  for (let i = 0; i < x.length; i++) x[i] += h[i] * amount * (peak || 1);
+  return finish(x, peak);
+}
+for (const [name, amount] of [["boom", 5.0], ["boss", 2.2], ["deep", 3.0], ["heart", 6.0], ["swell", 1.6], ["growl", 1.4]]) S[name] = presence(S[name], amount);
+
 fs.mkdirSync(OUT, { recursive: true });
 let total = 0;
 for (const [name, x] of Object.entries(S)) total += writeWav(name, x);

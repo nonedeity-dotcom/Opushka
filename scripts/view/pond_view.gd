@@ -15,6 +15,9 @@ var _font: Font
 var _waves: Array = []
 ## Когда в поле зрения со дна поднимется новая стайка пузырьков.
 var _bubbles_t := 1.0
+## Рост: сколько секунд прошло с него (-1 — не растём) и каким был зум до него.
+var _grow_t := -1.0
+var _grow_from := 1.0
 
 
 func setup(p: Pond) -> void:
@@ -46,6 +49,18 @@ func _process(delta: float) -> void:
 		return
 	t += delta
 	var z := lerpf(camera.zoom.x, target_zoom(), 1.0 - exp(-2.0 * delta))
+	# Рост: камера на миг подаётся к клетке, потом рывком отъезжает — чуть дальше, чем
+	# надо, — и мягко возвращается. Мир вокруг заметно «уменьшается».
+	if _grow_t >= 0.0:
+		_grow_t += delta
+		if _grow_t < 0.35:
+			z = lerpf(camera.zoom.x, _grow_from * 1.1, 1.0 - exp(-10.0 * delta))
+		elif _grow_t < 1.9:
+			z = lerpf(camera.zoom.x, target_zoom() * 0.86, 1.0 - exp(-3.5 * delta))
+		elif _grow_t < 4.0:
+			z = lerpf(camera.zoom.x, target_zoom(), 1.0 - exp(-1.2 * delta))
+		else:
+			_grow_t = -1.0
 	camera.zoom = Vector2(z, z)
 	var p := pond.player
 	camera.position = camera.position.lerp(p.pos, 1.0 - exp(-8.0 * delta))
@@ -127,8 +142,18 @@ func effects(events: Array) -> void:
 				# Находка влетает в клетку.
 				_fx.append({"k": "fly", "from": e.pos, "part": e.part, "life": 1.0, "speed": 2.5})
 			"levelup":
-				_ring(pond.player.pos, pond.player.radius * 4.0, Art.GREEN, 1.2)
-				_ring(pond.player.pos, pond.player.radius * 2.5, Color.WHITE, 0.9)
+				var me := pond.player
+				_grow_t = 0.0
+				_grow_from = camera.zoom.x
+				# Линька: старая оболочка лопается кусками и тает позади.
+				_fx.append({"k": "molt", "pos": me.pos, "r": e.get("old_r", me.size_r * 0.85), "heading": me.heading, "shape": me.shape,
+					"col": me.color, "life": 1.0, "speed": 0.55})
+				for i in 10:
+					_fx.append({"k": "shard", "pos": me.pos + Vector2.from_angle(randf() * TAU) * me.radius * 0.8, "vel": Vector2.from_angle(randf() * TAU) * randf_range(40.0, 120.0),
+						"life": 1.0, "speed": 0.9, "col": me.color.lightened(0.45), "r": me.radius * randf_range(0.08, 0.16), "rot": randf() * TAU})
+				_ring(me.pos, me.radius * 4.0, Art.GREEN, 1.2)
+				_ring(me.pos, me.radius * 7.0, Color(Art.GREEN, 0.5), 1.6)
+				wave(me.pos, 2.2)
 			"zap":
 				_fx.append({"k": "zap", "from": e.from, "to": e.to, "life": 0.25, "speed": 1.0})
 			"poison":
@@ -422,6 +447,8 @@ func _draw_fx() -> void:
 				draw_colored_polygon(pts, Color(f.col, a))
 			"ink":
 				draw_circle(f.pos, f.r * (1.5 - a * 0.5), Color(0.12, 0.08, 0.2, 0.55 * a))
+			"molt":
+				_molt(f, a)
 			"heart":
 				Art.heart(self, f.pos, f.r, Color(0.95, 0.5, 0.7, a))
 			"text":
@@ -429,6 +456,31 @@ func _draw_fx() -> void:
 				var w := _font.get_string_size(f.s, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
 				draw_string_outline(_font, f.pos - Vector2(w / 2.0, 0), f.s, HORIZONTAL_ALIGNMENT_LEFT, -1, size, maxi(2, int(4.0 / camera.zoom.x)), Color(0, 0, 0, 0.6 * a))
 				draw_string(_font, f.pos - Vector2(w / 2.0, 0), f.s, HORIZONTAL_ALIGNMENT_LEFT, -1, size, Color(f.col, a))
+
+## Сброшенная оболочка: сначала светится вокруг клетки, потом трескается на куски, они
+## расходятся, поворачиваются и тают.
+func _molt(f: Dictionary, a: float) -> void:
+	var q := 1.0 - a  # 0 → 1 за время жизни
+	var r: float = f.r
+	var col: Color = f.col.lightened(0.5)
+	if q < 0.3:
+		draw_circle(f.pos, r * (1.2 + q), Color(1.0, 1.0, 0.9, 0.25 * (1.0 - q / 0.3)))
+	var pieces := 7
+	var crack := 0.0 if q < 0.18 else minf(1.0, (q - 0.18) / 0.5)
+	var w := maxf(2.5, r * 0.2)
+	for i in pieces:
+		var a0 := TAU * i / pieces + 0.05 * crack
+		var a1 := TAU * (i + 1) / pieces - 0.05 * crack
+		var mid := (a0 + a1) / 2.0
+		var out := Vector2.from_angle(f.heading + mid) * r * 1.8 * (1.0 - pow(1.0 - crack, 2.0))
+		var spin := (0.4 if i % 2 == 0 else -0.4) * crack
+		var pts := PackedVector2Array()
+		for j in 7:
+			var th := lerpf(a0, a1, j / 6.0)
+			var rr := r * (1.0 + 0.12 * q) * Content.shape_at(f.shape, th)
+			pts.append(f.pos + out + Vector2.from_angle(f.heading + th + spin) * rr)
+		draw_polyline(pts, Color(f.col.darkened(0.35), 0.8 * a), w * 1.35, true)
+		draw_polyline(pts, Color(col, 0.9 * a), w, true)
 
 ## Течения — бегущие штрихи вдоль потока.
 func _currents(view: Rect2) -> void:

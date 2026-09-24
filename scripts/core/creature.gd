@@ -126,6 +126,8 @@ var flash := 0.0
 var bite_anim := 0.0
 var eat_anim := 0.0
 var grow_anim := 0.0
+## Напуган волной роста: сколько ещё секунд плывёт прочь от тебя.
+var scared_t := 0.0
 var phase := 0.0
 var wobble := 0.0
 

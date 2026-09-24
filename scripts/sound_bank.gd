@@ -11,8 +11,8 @@ const EFFECTS := ["eat", "eat_meat", "bite", "hit", "hurt", "kill", "pickup", "n
 ## Звуки меню и подсказок — чистые, мимо «воды».
 const DRY := ["ui", "nope", "goal", "place", "remove"]
 ## Насколько тише остальных: частые звуки не должны заглушать редкие.
-const LEVEL := {"eat": -6.0, "ui": -4.0, "nope": -3.0, "hit": -2.0, "dash": -3.0, "chirp": -8.0, "hiss": -6.0, "spit": -5.0,
-	"heart": -2.0, "bubbles": -10.0, "creak": -9.0, "deep": -7.0, "swell": -5.0}
+const LEVEL := {"eat": -6.0, "ui": -4.0, "place": -3.0, "nope": -3.0, "hit": -2.0, "dash": -3.0, "chirp": -8.0, "hiss": -6.0, "spit": -5.0,
+	"heart": -1.0, "bubbles": -10.0, "creak": -9.0, "deep": -7.0, "swell": -5.0}
 
 var effects_on := true
 var effects_db := -6.0
@@ -42,6 +42,12 @@ func _buses() -> void:
 	_water_bus = AudioServer.get_bus_index("Вода")
 	if _water_bus != -1:
 		return
+	# Игра звучала тихо (около −31 LUFS по записи, у мобильных игр обычно −16…−20):
+	# на общем выходе — ограничитель, он поднимает всё на 7 дБ и не пускает пики к потолку.
+	var lim := AudioEffectHardLimiter.new()
+	lim.pre_gain_db = 7.0
+	lim.ceiling_db = -1.0
+	AudioServer.add_bus_effect(0, lim)
 	_water_bus = AudioServer.bus_count
 	AudioServer.add_bus()
 	AudioServer.set_bus_name(_water_bus, "Вода")
