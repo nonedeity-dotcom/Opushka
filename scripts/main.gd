@@ -217,7 +217,7 @@ func _handle(events: Array) -> void:
 				var def: Dictionary = Content.PARTS[e.part]
 				if e.new:
 					sound.play("newpart")
-					hud.announce("Новая часть!", "%s — %s. Поставь её в «Эволюции»" % [def.name, def.hint.to_lower()])
+					hud.announce("Новая часть!", "%s — %s. Поставь её в «Эволюции»" % [def.name, Content.lc_first(def.hint)])
 					hud.editor_btn.badge = "!"
 					hud.editor_btn.queue_redraw()
 					_buzz(40)

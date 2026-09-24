@@ -187,3 +187,9 @@ static func sources(part: String) -> Array:
 			if d[0] == part:
 				out.append([sid, d[1]])
 	return out
+
+## «Удары вдвое слабее. Чуть медленнее» → «удары вдвое слабее. Чуть медленнее»: строчной
+## делается только первая буква, чтобы подсказку можно было вставить в середину фразы.
+static func lc_first(text: String) -> String:
+	return text.left(1).to_lower() + text.substr(1)
+

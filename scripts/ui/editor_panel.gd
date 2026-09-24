@@ -268,7 +268,7 @@ func _update_info() -> void:
 	if picked >= 0 and picked < evo.body.size():
 		var id: String = evo.body[picked].id
 		var def: Dictionary = Content.PARTS[id]
-		_info.text = "%s, ур. %d — %s" % [def.name, evo.unlocked.get(id, 1), def.hint.to_lower()]
+		_info.text = "%s, ур. %d — %s" % [def.name, evo.unlocked.get(id, 1), Content.lc_first(def.hint)]
 		var off := Button.new()
 		off.text = "Убрать +%d" % def.cost
 		off.focus_mode = Control.FOCUS_NONE
@@ -288,7 +288,7 @@ func _update_info() -> void:
 		if evo.unlocked.has(selected):
 			var lvl: int = evo.unlocked[selected]
 			var up := "" if lvl >= Content.PART_MAX_LEVEL else ", копий к следующему %d/%d" % [evo.shards.get(selected, 0), Evolution.copies_for(lvl)]
-			_info.text = "%s (ур. %d%s) · %d ДНК — %s. Веди пальцем по краю клетки и отпусти." % [def.name, lvl, up, def.cost, def.hint.to_lower()]
+			_info.text = "%s (ур. %d%s) · %d ДНК — %s. Веди пальцем по краю клетки и отпусти." % [def.name, lvl, up, def.cost, Content.lc_first(def.hint)]
 		else:
 			_info.text = "%s — ещё не найдена. %s" % [def.name, where_to_get(selected)]
 	else:
