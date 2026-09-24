@@ -456,3 +456,55 @@ func test_особи_разные(c) -> void:
 		pats[m.pattern] = true
 	c.ok("оттенки разные", cols.size() > 20)
 	c.ok("у некоторых есть узор", pats.size() >= 2)
+
+func test_события_в_океане(c) -> void:
+	var p := _pond()
+	p.nature = true
+	var plants0 := p._plant_target()
+	var mobs0 := p._mob_target()
+	var vis0 := p.vision()
+	var calm := p.current_at(Vector2(12345, 678))
+	# Цветение: водорослей больше, нарастает плавно.
+	p.start_event("bloom")
+	c.ok("событие объявлено", p.events.any(func(e): return e.t == "world_event" and e.id == "bloom"))
+	p.event_k = 1.0
+	c.ok("в цветение водорослей втрое больше", p._plant_target() >= plants0 * 2.9)
+	# Буря: сносит везде.
+	p.start_event("storm")
+	p.event_k = 1.0
+	c.ok("буря сносит везде", (p.current_at(Vector2(12345, 678)) - calm).length() > Pond.STORM_FORCE * 0.9)
+	var start := p.player.pos
+	_run(p, 1.0)
+	c.ok("и тебя тоже", p.player.pos.distance_to(start) > Pond.STORM_FORCE * 0.7)
+	# Мёртвая зона: темнее и пусто.
+	p.start_event("dead")
+	p.event_k = 1.0
+	c.ok("в мёртвой зоне видно хуже", p.vision() < vis0 * 0.75)
+	c.ok("и живых меньше", p._mob_target() < mobs0)
+	# Нерест: стайки малышей.
+	var before := p.mobs.size()
+	p.start_event("spawn")
+	var kids := p.mobs.slice(before)
+	c.ok("приплыли малыши (%d)" % kids.size(), kids.size() >= 6)
+	c.ok("они мельче тебя и мирные", kids.all(func(m): return m.size_r < p.player.size_r * 0.55 and not p._hunts(m)))
+
+func test_событие_кончается(c) -> void:
+	var p := _pond()
+	p.start_event("bloom")
+	p.event_t = 0.5
+	p.event_k = 1.0
+	var ev: Array = []
+	for i in 40:
+		p._world_events(0.05)
+		ev.append_array(p.events)
+		p.events.clear()
+	c.ok("кончилось и сказало об этом", p.event == "" and ev.any(func(e): return e.t == "world_event_end"))
+	c.ok("спадает плавно, а не разом", p.event_k > 0.0 and p.event_look == "bloom")
+	c.ok("следующее — не скоро", p._event_cd > 200.0)
+
+func test_на_арене_событий_нет(c) -> void:
+	var p := _pond()
+	p.start_arena()
+	p._event_cd = 0.0
+	p._world_events(0.1)
+	c.ok("на арене не начинается", p.event == "")

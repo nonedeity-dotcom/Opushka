@@ -82,6 +82,18 @@ var arena_over := false
 ## Сверхсложность: вид вымер — мир замирает.
 var extinct := false
 
+## Событие в океане (Content.EVENTS): "" — обычная вода. event_k — насколько оно в силе
+## (0–1, нарастает и спадает плавно); event_look — что показывать, пока спадает.
+var event := ""
+var event_t := 0.0
+var event_k := 0.0
+var event_look := ""
+var storm_dir := Vector2.RIGHT
+var _event_cd := 0.0
+var _event_last := ""
+var _spawn_wave_t := 0.0
+var _event_rng := RandomNumberGenerator.new()
+
 
 func _init(e: Evolution, seed := 0) -> void:
 	evo = e
@@ -98,6 +110,10 @@ func _init(e: Evolution, seed := 0) -> void:
 	player = Creature.of_player(evo)
 	if evo.sandbox:
 		mode = "sandbox"
+	# У событий свой счёт случайностей — чтобы не сдвигать всё остальное в мире.
+	_event_rng.seed = rng.seed + 97
+	# Первое событие — через несколько минут: сначала надо освоиться.
+	_event_cd = _event_rng.randf_range(200.0, 320.0)
 
 ## Наполнить океан вокруг — при старте и после рождения заново.
 func fill() -> void:
@@ -166,6 +182,7 @@ func step(dt: float, input: Vector2, dash := false) -> void:
 			_manage()
 		_directing(dt)
 		_roamers(dt)
+		_world_events(dt)
 		_ally_t -= dt
 		if allies.size() < evo.brood and _ally_t <= 0.0:
 			_ally_t = 45.0
@@ -390,7 +407,8 @@ func _hurt(y: Creature, dmg: float, from: Creature, kind: String, silent := fals
 		y.flash = 1.0
 		var at := y.pos if from == null else y.pos + (from.pos - y.pos).normalized() * y.radius
 		events.append({"t": "hit", "kind": kind, "pos": at, "dmg": dmg, "blocked": mult < 1.0,
-			"to_player": y.is_player, "from_player": from != null and from.is_player})
+			"to_player": y.is_player, "from_player": from != null and from.is_player,
+			"giant": from != null and from.giant, "share": dmg / maxf(y.max_hp, 0.1)})
 	if y.hp <= 0.0:
 		y.hp = 0.0
 		y.alive = false
@@ -765,13 +783,16 @@ func _plant_outer() -> float:
 
 func _plant_target() -> int:
 	# Отдельных водорослей немного — основная еда травоядных растёт по краям кругов.
-	return 45
+	# В цветение их втрое больше, в мёртвой зоне — вдвое меньше.
+	return int(45.0 * _event_mult("bloom", 3.0) * _event_mult("dead", 0.5))
 
 func _mob_target() -> int:
 	# Кого ты только что съел, того место пустует ещё какое-то время: иначе хищник
 	# ел бы без передышки, а новые приплывали бы прямо под нос.
 	_kills_recent = _kills_recent.filter(func(t): return time - t < KILL_QUIET)
-	return maxi(4, mini(8 + evo.level() / 2, 14) - _kills_recent.size())
+	var n := maxi(4, mini(8 + evo.level() / 2, 14) - _kills_recent.size())
+	# В мёртвой зоне живых вдвое меньше.
+	return maxi(2, int(n * _event_mult("dead", 0.5)))
 
 ## Водоросли гуще на «лугах» — пятнах плавного шума.
 func _spawn_plant(inner: float, outer: float, anywhere := false) -> void:
@@ -838,7 +859,7 @@ func _spawn_mob(anywhere := false, at := Vector2.INF) -> Creature:
 			pick = p[0]
 			break
 	var def: Dictionary = Content.SPECIES[pick]
-	var golden: bool = def.behavior != "roamer" and not def.has("school") and rng.randf() < Content.GOLDEN_CHANCE
+	var golden: bool = def.behavior != "roamer" and not def.has("school") and rng.randf() < Content.GOLDEN_CHANCE * _event_mult("dead", 4.0)
 	var first := spawn(pick, at, golden)
 	# Стайка появляется вся сразу, кучкой: двое или трое, не больше.
 	var group := rng.randi_range(2, mini(int(def.school), 3)) if def.has("school") else (rng.randi_range(2, 3) if def.behavior == "roamer" else 1)
@@ -1512,16 +1533,18 @@ func _mate_step(dt: float) -> void:
 func current_at(p: Vector2) -> Vector2:
 	if mode == "arena" or not nature:
 		return Vector2.ZERO
+	# Буря: везде сносит в одну сторону.
+	var storm := storm_dir * STORM_FORCE * event_k if event_look == "storm" else Vector2.ZERO
 	var n := _flow.get_noise_2d(p.x, p.y)
 	var band := 1.0 - absf(n) / 0.07
 	if band <= 0.0:
-		return Vector2.ZERO
+		return storm
 	var e := 4.0
 	var grad := Vector2(_flow.get_noise_2d(p.x + e, p.y) - _flow.get_noise_2d(p.x - e, p.y), _flow.get_noise_2d(p.x, p.y + e) - _flow.get_noise_2d(p.x, p.y - e))
 	if grad.length_squared() < 1e-12:
 		return Vector2.ZERO
 	# Вдоль линии — поперёк уклона; сила — в середине полосы больше.
-	return grad.normalized().orthogonal() * 85.0 * band * band
+	return grad.normalized().orthogonal() * 85.0 * band * band + storm
 
 ## Сколько видно: глаза, вода и сложность.
 func vision() -> float:
@@ -1529,6 +1552,8 @@ func vision() -> float:
 	var k := clampf(player.eyes / 2.0, 0.0, 1.0)
 	var v := lerpf(player.vision, maxf(player.vision, view_radius * 1.1), k) * player.light
 	v *= float(evo.diff().vision)
+	# Мёртвая зона — темно.
+	v *= _event_mult("dead", 0.7)
 	# На арене видно весь круг — прятаться там не в чем.
 	return maxf(v * 1.6, arena_radius * 1.15) if mode == "arena" else v
 
@@ -1817,3 +1842,66 @@ func _school_pull(m: Creature) -> Vector2:
 	center /= n
 	var pull := (center - m.pos) / 120.0
 	return (pull + heading.normalized() * 0.5).limit_length(1.0)
+
+
+# --- события в океане ------------------------------------------------------------------
+
+## Как сильно буря сносит (точек в секунду).
+const STORM_FORCE := 55.0
+
+## Множитель от события: пока идёт событие id — плавно тянется к k, иначе 1.
+func _event_mult(id: String, k: float) -> float:
+	return lerpf(1.0, k, event_k) if event_look == id else 1.0
+
+## Раз в несколько минут — событие; держится свой срок и плавно спадает.
+func _world_events(dt: float) -> void:
+	if mode == "arena":
+		return
+	event_k = move_toward(event_k, 1.0 if event != "" else 0.0, dt / 4.0)
+	if event == "" and event_k <= 0.0:
+		event_look = ""
+	if event != "":
+		event_t -= dt
+		if event == "storm":
+			storm_dir = storm_dir.rotated(0.03 * dt * sin(time * 0.1))
+		if event == "spawn":
+			_spawn_wave_t -= dt
+			if _spawn_wave_t <= 0.0:
+				_spawn_wave_t = 15.0
+				_spawn_brood()
+		if event_t <= 0.0:
+			events.append({"t": "world_event_end", "id": event})
+			event = ""
+			_event_cd = _event_rng.randf_range(280.0, 420.0)
+		return
+	_event_cd -= dt
+	if _event_cd <= 0.0:
+		var ids: Array = Content.EVENTS.keys().filter(func(id): return id != _event_last)
+		start_event(ids[_event_rng.randi() % ids.size()])
+
+## Начать событие сейчас (и для проверок).
+func start_event(id: String) -> void:
+	event = id
+	event_look = id
+	_event_last = id
+	event_t = float(Content.EVENTS[id].len)
+	if id == "storm":
+		storm_dir = Vector2.from_angle(_event_rng.randf() * TAU)
+	if id == "spawn":
+		_spawn_wave_t = 15.0
+		_spawn_brood()
+	events.append({"t": "world_event", "id": id})
+
+## Нерест: две-три стайки малышей мирного вида — впереди и по сторонам.
+func _spawn_brood() -> void:
+	var calm: Array = _species_pool().map(func(x): return x[0]).filter(func(id):
+		var b: String = Content.SPECIES[id].behavior
+		return (b == "grazer" or b == "skittish") and not Content.SPECIES[id].has("scale"))
+	if calm.is_empty():
+		calm = ["kroshka"]
+	for g in rng.randi_range(2, 3):
+		var id: String = calm[rng.randi() % calm.size()]
+		var at := player.pos + Vector2.from_angle(_spawn_angle()) * rng.randf_range(vision() * 0.9, view_radius + 200.0)
+		for i in rng.randi_range(3, 5):
+			var m := spawn(id, at + Vector2.from_angle(rng.randf() * TAU) * rng.randf_range(0.0, 50.0), false, player.size_r * rng.randf_range(0.35, 0.5))
+			m.school = true

@@ -421,6 +421,56 @@ S.whale = (() => {
   return finish(lowpass(x, 1500), 0.55);
 })();
 
+// --- добавлены позже: атмосфера ------------------------------------------------------
+
+// Сердцебиение, когда мало здоровья: «тук-тук», глухо.
+S.heart = (() => {
+  const x = buf(0.6);
+  const thump = () => lowpass(tone(58, 0.25, { attack: 0.006, decay: 0.06, harmonics: [1, 0.5, 0.2], glide: -0.4 }), 300);
+  mix(x, thump(), 0, 1);
+  mix(x, thump(), 0.2, 0.7);
+  return finish(x, 0.6);
+})();
+
+// Струйка пузырьков вдалеке.
+S.bubbles = (() => {
+  const x = buf(1.6);
+  for (let k = 0; k < 11; k++) mix(x, bubble(380 + rnd() * 700, 0.12 + rnd() * 0.06, 3 + rnd() * 3), 0.05 + k * 0.11 + rnd() * 0.05, 0.25 + rnd() * 0.2);
+  return finish(lowpass(x, 2500), 0.4);
+})();
+
+// Далёкий скрип и потрескивание — будто что-то огромное шевелится на дне.
+S.creak = (() => {
+  const x = buf(1.8);
+  for (let i = 0; i < x.length; i++) {
+    const t = i / RATE;
+    const f = 70 + 25 * Math.sin(TAU * 0.7 * t) + 8 * Math.sin(TAU * 13 * t);
+    x[i] = Math.sin(TAU * f * t) * 0.4 * Math.sin((Math.PI * t) / 1.8);
+  }
+  for (let k = 0; k < 9; k++) mix(x, burst(0.03, { decay: 0.006, lo: 700, hi: 3000 }), 0.2 + rnd() * 1.3, 0.35);
+  return finish(lowpass(x, 1200), 0.45);
+})();
+
+// Зов из глубины: низкий протяжный стон, как у кита, только дальше.
+S.deep = (() => {
+  const x = buf(3.2);
+  mix(x, tone(98, 3.0, { attack: 0.8, decay: 1.0, harmonics: [1, 0.45, 0.2, 0.1], glide: 0.12 }), 0, 0.7);
+  mix(x, tone(73.4, 2.4, { attack: 0.6, decay: 0.9, harmonics: [1, 0.3], glide: -0.08 }), 0.6, 0.5);
+  return finish(lowpass(x, 700), 0.55);
+})();
+
+// Событие в океане: медленно нарастающий гул с мерцанием.
+S.swell = (() => {
+  const x = buf(3.0);
+  for (let i = 0; i < x.length; i++) {
+    const t = i / RATE;
+    const e = Math.sin((Math.PI * t) / 3.0);
+    x[i] = (Math.sin(TAU * 110 * t) * 0.4 + Math.sin(TAU * 164.8 * t) * 0.3 + Math.sin(TAU * 220.5 * t) * 0.15) * e * e;
+  }
+  for (let k = 0; k < 8; k++) mix(x, tone(880 + rnd() * 900, 0.5, { attack: 0.05, decay: 0.2, harmonics: [1] }), 0.4 + rnd() * 2.0, 0.08);
+  return finish(lowpass(x, 2500), 0.5);
+})();
+
 fs.mkdirSync(OUT, { recursive: true });
 let total = 0;
 for (const [name, x] of Object.entries(S)) total += writeWav(name, x);

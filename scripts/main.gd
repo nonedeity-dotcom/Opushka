@@ -51,6 +51,16 @@ var _voice_gap := 0.0
 var _prof := {}
 var _prof_on := false
 var _prof_frames := 0
+## Атмосфера: когда следующий далёкий звук, когда можно снова «зов из глубины», стук сердца.
+var _amb_t := 6.0
+var _moan_gap := 0.0
+var _heart_t := 0.0
+## Удар с весом: мир на миг замирает (секунды настоящего времени).
+var _freeze := 0.0
+var _depth_level := -1
+## Затемнение: тень гиганта и мёртвая зона. Красные края — когда мало здоровья.
+var _dim: ColorRect
+var _low_hp: TextureRect
 
 
 func _ready() -> void:
@@ -73,6 +83,15 @@ func _ready() -> void:
 	fog = preload("res://scripts/view/fog.gd").new()
 	shade.add_child(fog)
 	shade.add_child(_vignette())
+	_dim = ColorRect.new()
+	_dim.color = Color(0.0, 0.02, 0.05, 0.0)
+	_dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	shade.add_child(_dim)
+	_low_hp = _vignette(Color(0.55, 0.02, 0.04, 0.75))
+	_low_hp.modulate.a = 0.0
+	shade.add_child(_low_hp)
+	backdrop.ghost_appeared.connect(_ghost_moan)
 
 	var layer := CanvasLayer.new()
 	layer.layer = 2
@@ -230,10 +249,10 @@ func _new_pond() -> void:
 		pond.spawn(s[0].trim_prefix("*"), pond.player.pos + s[1], gold)
 
 ## Затемнение по краям: глубина, и взгляд сам собирается к середине.
-func _vignette() -> TextureRect:
+func _vignette(edge := Color(0.0, 0.02, 0.04, 0.55)) -> TextureRect:
 	var g := Gradient.new()
 	g.set_color(0, Color(0, 0, 0, 0))
-	g.set_color(1, Color(0.0, 0.02, 0.04, 0.55))
+	g.set_color(1, edge)
 	g.add_point(0.55, Color(0, 0, 0, 0))
 	var tex := GradientTexture2D.new()
 	tex.gradient = g
@@ -273,7 +292,11 @@ func _process(delta: float) -> void:
 	var t0 := Time.get_ticks_usec()
 	evo.played += delta
 	var paused: bool = editor.visible or setup.visible or shop.visible
-	if not paused:
+	# Удар с весом: мир на миг замер (эффекты и камера живут дальше).
+	if _freeze > 0.0 and not paused:
+		_freeze -= delta
+		pond.events.clear()
+	elif not paused:
 		pond.view_radius = view.view_radius()
 		pond.step(minf(delta, 0.05), _steer(), _dash)
 		_prof_add("pond.step", Time.get_ticks_usec() - t0)
@@ -293,6 +316,7 @@ func _process(delta: float) -> void:
 	backdrop.player_r = pond.player.size_r
 	t0 = Time.get_ticks_usec()
 	_music(delta)
+	_atmosphere(delta, paused)
 	_voice_gap -= delta
 	_ach_t -= delta
 	if _ach_t <= 0.0:
@@ -360,6 +384,10 @@ func _handle(events: Array) -> void:
 					sound.play("hurt")
 					hud.hurt()
 					_buzz(30)
+					# Гигант или очень сильный удар — мир на миг замирает, экран вздрагивает.
+					if e.get("giant", false) or float(e.get("share", 0.0)) > 0.25:
+						_heavy(0.07, 0.7)
+						_buzz(70)
 				elif e.from_player:
 					sound.play("bite" if e.kind == "bite" else "hit", randf_range(0.9, 1.1))
 					_buzz(12)
@@ -369,8 +397,10 @@ func _handle(events: Array) -> void:
 				if e.by_player:
 					sound.play("kill")
 					_buzz(25)
+					if float(e.radius) >= pond.player.radius * 0.8:
+						_heavy(0.06, 0.4)
 				elif e.pos.distance_to(pond.player.pos) < near:
-					sound.play("kill", 1.3)
+					sound.play("kill", 1.3, _far(e.pos))
 			"drop":
 				sound.play("drop")
 				var name: String = Content.PARTS[e.part].name
@@ -419,6 +449,7 @@ func _handle(events: Array) -> void:
 					hud.toast("Отравлен! Яд жжёт ещё три секунды")
 			"death":
 				sound.play("death")
+				_heavy(0.12, 0.8)
 				_buzz(80)
 				_dirty = true
 				if e.get("lost", 0.0) > 0.5:
@@ -458,12 +489,12 @@ func _handle(events: Array) -> void:
 				if _voice_gap <= 0.0 and e.pos.distance_to(pond.player.pos) < near:
 					_voice_gap = 0.7
 					# Голос по размеру: крупные — ниже.
-					sound.play(e.kind, clampf(1.5 - float(e.size) / 70.0, 0.55, 1.5))
+					sound.play(e.kind, clampf(1.5 - float(e.size) / 70.0, 0.55, 1.5), _far(e.pos))
 			"shot":
 				if e.by_player or e.pos.distance_to(pond.player.pos) < near:
-					sound.play("spit", randf_range(0.9, 1.15) if e.kind == "spit" else randf_range(1.4, 1.6))
+					sound.play("spit", randf_range(0.9, 1.15) if e.kind == "spit" else randf_range(1.4, 1.6), 0.0 if e.by_player else _far(e.pos))
 			"split":
-				sound.play("split")
+				sound.play("split", 1.0, _far(e.pos))
 				if int(evo.stats.get("splits_seen", 0)) < 2:
 					evo.count("splits_seen")
 					hud.toast("Делитель распался на двоих — добивай по одному")
@@ -473,7 +504,7 @@ func _handle(events: Array) -> void:
 					_buzz(30)
 					hud.toast("Это была не водоросль — обманка! С двумя глазами их видно")
 			"roamer":
-				sound.play("whale" if e.species == "kit" else "boom")
+				sound.play("whale" if e.species == "kit" else "boom", 1.0, 0.5)
 				hud.announce(Content.SPECIES[e.species].name, "Бродячий гигант проплывает рядом. " + Content.SPECIES[e.species].hint)
 			"remora_on":
 				sound.play("place")
@@ -495,9 +526,10 @@ func _handle(events: Array) -> void:
 					sound.play("ability")
 					_buzz(20)
 				elif e.pos.distance_to(pond.player.pos) < near:
-					sound.play("ability", 0.8)
+					sound.play("ability", 0.8, _far(e.pos))
 			"giant_beaten":
 				sound.play("levelup")
+				_heavy(0.18, 1.0)
 				_buzz(80)
 				_dirty = true
 				hud.announce("Гигант побеждён!", "%s — забери награду" % Content.SPECIES[e.species].name)
@@ -521,6 +553,13 @@ func _handle(events: Array) -> void:
 				get_tree().create_timer(3.5).timeout.connect(_to_menu)
 			"ally_lost":
 				hud.toast("Потомок погиб. Новый подрастёт через некоторое время")
+			"world_event":
+				var ev: Dictionary = Content.EVENTS[e.id]
+				sound.play("swell")
+				_buzz(40)
+				hud.announce(ev.name, ev.hint)
+			"world_event_end":
+				hud.toast(Content.EVENTS[e.id].end)
 
 func _achieved(a: Dictionary) -> void:
 	sound.play("goal")
@@ -538,6 +577,61 @@ func _music(delta: float) -> void:
 				break
 	_danger_t = 0.0 if danger else _danger_t + delta
 	sound.set_music("fight" if _danger_t < 4.0 else "calm")
+
+## Насколько далеко точка: 0 — рядом, 1 — у края видимого. Для звуков.
+func _far(at: Vector2) -> float:
+	return clampf((at.distance_to(pond.player.pos) / maxf(pond.view_radius, 1.0) - 0.25) / 0.75, 0.0, 1.0)
+
+## Удар с весом: замереть на миг и тряхнуть камеру.
+func _heavy(sec: float, shake: float) -> void:
+	_freeze = maxf(_freeze, sec)
+	view.shake(shake)
+
+## Атмосфера: глубина в звуке, далёкие звуки, сердце при малом здоровье, тень гиганта,
+## вода в событиях.
+func _atmosphere(delta: float, paused: bool) -> void:
+	var p := pond.player
+	if evo.level() != _depth_level:
+		_depth_level = evo.level()
+		sound.set_depth(_depth_level)
+	# Далёкие звуки океана: пузырьки, скрип, изредка — зов из глубины.
+	_moan_gap -= delta
+	_amb_t -= delta
+	if _amb_t <= 0.0 and not paused:
+		_amb_t = randf_range(7.0, 16.0)
+		var pick: String = ["bubbles", "bubbles", "creak", "deep"][randi() % 4]
+		if pick == "deep" and _moan_gap > 0.0:
+			pick = "bubbles"
+		if pick == "deep":
+			_moan_gap = 30.0
+		sound.play(pick, randf_range(0.8, 1.15), randf_range(0.6, 1.0))
+	# Сердце: мало здоровья — стучит, края экрана краснеют в такт.
+	var low: bool = p.alive and p.hp < p.max_hp * 0.3 and not paused and pond.mode != "sandbox"
+	_heart_t -= delta
+	if low and _heart_t <= 0.0:
+		_heart_t = lerpf(0.65, 1.0, clampf(p.hp / (p.max_hp * 0.3), 0.0, 1.0))
+		sound.play("heart")
+		_low_hp.modulate.a = 1.0
+	_low_hp.modulate.a = maxf(0.0, _low_hp.modulate.a - delta * (1.6 if low else 3.0))
+	# Гигант рядом — его тень закрывает свет.
+	var giant := 0.0
+	for m in pond.mobs:
+		if Pond.is_giant(m):
+			var d := m.pos.distance_to(p.pos) - m.radius
+			giant = maxf(giant, clampf(1.0 - d / (pond.view_radius * 0.9), 0.0, 1.0))
+	backdrop.shade = giant
+	backdrop.event = pond.event_look
+	backdrop.event_k = pond.event_k
+	var dark := 0.3 * giant + (0.3 * pond.event_k if pond.event_look == "dead" else 0.0)
+	_dim.color.a = lerpf(_dim.color.a, dark, 1.0 - exp(-2.0 * delta))
+	hud.set_event(pond.event, pond.event_t)
+
+## Тень гиганта выплыла в глубине — изредка слышен её далёкий зов.
+func _ghost_moan(scale: float) -> void:
+	if pond == null or _moan_gap > 0.0 or editor.visible:
+		return
+	_moan_gap = 25.0
+	sound.play("deep", clampf(1.3 - scale * 0.12, 0.7, 1.1), 0.8)
 
 func _prof_add(name: String, us: int) -> void:
 	if not _prof_on:
@@ -836,6 +930,13 @@ func _run_script() -> void:
 					m.hp = m.max_hp * float(p[1])
 		"ability":
 			pond.use_ability()
+		"myhp":
+			pond.player.hp = pond.player.max_hp * float(p[1])
+		"event":
+			pond.start_event(p[1])
+			pond.event_k = 1.0
+			backdrop.event = p[1]
+			backdrop.event_k = 1.0
 		"kill":
 			# Все рядом погибают — посмотреть, какое остаётся мясо (для снимков).
 			for m in pond.mobs:

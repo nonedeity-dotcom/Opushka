@@ -37,6 +37,8 @@ func _init() -> void:
 				print("%5.1f мин: размер %d (смертей %d, побед %d, частей %d)" % [t / 60.0, e.level, evo.stats.get("deaths", 0), evo.stats.get("kills", 0), evo.unlocked.size()])
 			elif e.t == "pickup" and e.new:
 				print("%5.1f мин: новая часть %s" % [t / 60.0, e.part])
+			elif e.t == "world_event":
+				print("%5.1f мин: событие %s" % [t / 60.0, e.id])
 			elif e.t == "death":
 				var near: Array = pond.mobs.filter(func(m): return m.alive and m.pos.distance_to(e.pos) < m.radius + pond.player.radius + 120.0).map(func(m): return m.species)
 				print("%5.1f мин: погиб, рядом %s" % [t / 60.0, near])

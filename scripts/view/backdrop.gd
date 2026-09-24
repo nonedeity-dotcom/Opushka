@@ -20,12 +20,56 @@ var _rng := RandomNumberGenerator.new()
 const DEPTH := 0.3
 
 var _shadows: Control
+## Блики солнца сквозь рябь: два слоя одной сетки скользят навстречу (дёшево — только
+## две выборки из картинки на точку). Ярче всего у поверхности, к 7-му размеру гаснут.
+var _caustics: ColorRect
+## Событие в океане и насколько оно в силе: цветение зеленит воду, мёртвая зона — гасит.
+var event := ""
+var event_k := 0.0
+## Гигант рядом (0–1): его тень закрывает свет.
+var shade := 0.0
+var _shade := 0.0
+## Новая тень выплыла из-за края — main играет далёкий зов.
+signal ghost_appeared(scale: float)
+
+const CAUSTICS := """
+shader_type canvas_item;
+render_mode blend_add;
+uniform sampler2D web : repeat_enable, filter_linear;
+uniform vec2 area = vec2(1600.0, 720.0);
+uniform vec2 offset = vec2(0.0);
+uniform float tile = 420.0;
+uniform float t = 0.0;
+uniform float strength = 0.15;
+uniform vec4 tint : source_color = vec4(0.8, 0.97, 1.0, 1.0);
+void fragment() {
+	vec2 px = UV * area + offset;
+	float a = texture(web, px / tile + vec2(t * 0.011, t * 0.006)).r;
+	float b = texture(web, px / (tile * 1.31) + vec2(0.37 - t * 0.008, 0.21 + t * 0.010)).r;
+	// Светится только там, где сетки совпали: пятнышки и короткие дуги, а не вся сетка.
+	float c = a * b;
+	c = c * c * 3.0 + c * 0.6;
+	// Сверху (у поверхности) бликов больше.
+	c *= mix(1.0, 0.55, UV.y);
+	COLOR = vec4(tint.rgb, clamp(c * strength, 0.0, 1.0));
+}
+"""
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	# Тени — на своём слое, целиком окрашенном в тёмно-синий и полупрозрачном: так и
 	# части (шипы, челюсти) становятся тенью, а не яркими, как у настоящих.
+	_caustics = ColorRect.new()
+	_caustics.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_caustics.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var sh := Shader.new()
+	sh.code = CAUSTICS
+	var mat := ShaderMaterial.new()
+	mat.shader = sh
+	mat.set_shader_parameter("web", preload("res://art/caustics.png"))
+	_caustics.material = mat
+	add_child(_caustics)
 	_shadows = Shadows.new()
 	_shadows.back = self
 	_shadows.modulate = Color(0.05, 0.11, 0.15, 0.8)
@@ -38,6 +82,29 @@ func _process(delta: float) -> void:
 	_top = _top.lerp(Color(water[0]), k)
 	_bottom = _bottom.lerp(Color(water[1]), k)
 	_light = lerpf(_light, lerpf(1.0, 0.45, (level - 1) / 9.0), k)
+	_shade = lerpf(_shade, shade, 1.0 - exp(-2.0 * delta))
+	# События: цветение — вода зеленеет и светлеет, мёртвая зона — тускнеет.
+	if event == "bloom":
+		_top = _top.lerp(Color("#2e7a5a"), 0.5 * event_k * k * 3.0)
+		_bottom = _bottom.lerp(Color("#0c2a1c"), 0.5 * event_k * k * 3.0)
+	elif event == "dead":
+		_top = _top.lerp(Color("#15202a"), 0.7 * event_k * k * 3.0)
+		_bottom = _bottom.lerp(Color("#03060a"), 0.7 * event_k * k * 3.0)
+	# Блики: у поверхности сильнее, в глубине гаснут; тень гиганта и мёртвая зона их гасят.
+	var glint := clampf(1.0 - (level - 1) / 6.0, 0.0, 1.0) * 0.4
+	if event == "bloom":
+		glint = maxf(glint, 0.2 * event_k)
+	if event == "dead":
+		glint *= 1.0 - event_k
+	glint *= 1.0 - 0.8 * _shade
+	_caustics.visible = glint > 0.01
+	if _caustics.visible:
+		var mat: ShaderMaterial = _caustics.material
+		mat.set_shader_parameter("area", size)
+		mat.set_shader_parameter("offset", drift * zoom * 0.35)
+		mat.set_shader_parameter("t", t)
+		mat.set_shader_parameter("strength", glint)
+		mat.set_shader_parameter("tint", Color(0.75, 1.0, 0.8) if event == "bloom" else Color(0.8, 0.97, 1.0))
 	if level != _ghost_level:
 		_ghost_level = level
 		_ghosts.clear()
@@ -75,6 +142,7 @@ func _new_ghost(pool: Array, anywhere: bool) -> Dictionary:
 	var start := drift * DEPTH + Vector2(_rng.randf_range(-0.5, 0.5), _rng.randf_range(-0.5, 0.5)) * size
 	if not anywhere:
 		start = drift * DEPTH - Vector2.from_angle(dir) * (size.length() * 0.6)
+		ghost_appeared.emit(float(def.get("scale", 3.0)))
 	# Плывут заметно: экран пересекают за 10–20 секунд.
 	return {"id": id, "p": start, "dir": dir, "speed": _rng.randf_range(70.0, 120.0), "parts": parts,
 		"shape": Content.shape_preset(def.get("shape", "round")), "wobble": _rng.randf() * 10.0}
@@ -95,7 +163,7 @@ func _draw() -> void:
 	for i in 5:
 		var x := fmod(i * 0.27 * size.x + drift.x * 0.05 + sin(t * 0.07 + i) * 40.0, size.x * 1.4) - size.x * 0.2
 		var w := size.x * (0.08 + 0.05 * sin(i * 1.7))
-		var a := (0.035 + 0.025 * sin(t * 0.4 + i * 2.1)) * _light
+		var a := (0.035 + 0.025 * sin(t * 0.4 + i * 2.1)) * _light * (1.0 - 0.8 * _shade) * (1.0 - event_k if event == "dead" else 1.0)
 		var slant := size.y * 0.35
 		draw_colored_polygon(PackedVector2Array([Vector2(x, 0), Vector2(x + w, 0), Vector2(x + w - slant, size.y), Vector2(x - slant, size.y)]),
 			Color(0.75, 0.95, 1.0, maxf(0.0, a)))

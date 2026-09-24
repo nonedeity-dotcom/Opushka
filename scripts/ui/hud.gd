@@ -51,6 +51,8 @@ var minimap: Control
 ## Второе умение (чернила, щит, разряд, всасывание) — есть, только если есть такая часть.
 var ability_btn: Control
 var boss_bar: Control
+## Событие в океане: значок, название и сколько осталось.
+var event_pill: Control
 var arena_pill: Control
 
 var _settings: Settings
@@ -155,6 +157,9 @@ func _ready() -> void:
 	boss_bar = BossBar.new()
 	boss_bar.visible = false
 	add_child(boss_bar)
+	event_pill = EventPill.new()
+	event_pill.visible = false
+	add_child(event_pill)
 	arena_pill = ArenaPill.new()
 	arena_pill.visible = false
 	add_child(arena_pill)
@@ -238,6 +243,12 @@ func refresh(pond: Pond) -> void:
 func reveal_part(id: String, level_up := false) -> void:
 	reveal.start(id, level_up)
 
+## Идёт событие — показать плашку с остатком времени; кончилось — убрать.
+func set_event(id: String, left: float) -> void:
+	event_pill.visible = id != ""
+	if event_pill.visible:
+		event_pill.set_state(id, left)
+
 ## Прибавилось ДНК: число вспыхивает зелёным.
 func dna_gain() -> void:
 	status.flash_dna()
@@ -318,6 +329,8 @@ func _layout() -> void:
 	var scale: float = Settings.BUTTON_SCALE[_settings.buttons]
 
 	status.position = Vector2(left, top)
+	event_pill.position = Vector2(left, top + status.size.y + 10)
+	event_pill.size = Vector2(status.size.x, 46)
 	# Кнопки справа сверху — с подписями, чуть реже, чтобы подписи не слипались.
 	settings_btn.position = Vector2(right - 64 - 16, top)
 	atlas_btn.position = Vector2(right - 64 * 2 - 46, top)
@@ -469,6 +482,42 @@ class StatusCard:
 		if hk > 0.0:
 			draw_style_box(Kit.box(col, 6, Color(0, 0, 0, 0), 0), Rect2(bar.position, Vector2(maxf(10.0, bar.size.x * hk), bar.size.y)))
 		draw_string(font, Vector2(size.x - hw - 18, 70), htext, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Art.MUTED if hk >= 0.3 else Art.DANGER)
+
+## Плашка события: цветной значок, название, минуты:секунды до конца.
+class EventPill:
+	extends Control
+	var id := ""
+	var left := -1
+	var _t := 0.0
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func set_state(i: String, l: float) -> void:
+		var sec := ceili(l)
+		if i != id or sec != left:
+			id = i
+			left = sec
+			queue_redraw()
+
+	func _process(delta: float) -> void:
+		if visible:
+			_t += delta
+			queue_redraw()
+
+	func _draw() -> void:
+		if id == "":
+			return
+		var def: Dictionary = Content.EVENTS[id]
+		var col := Color(def.color)
+		var glow := 0.5 + 0.5 * sin(_t * 2.5)
+		draw_style_box(Kit.box(Color(0.04, 0.08, 0.11, 0.78), 23, Color(col, 0.35 + 0.35 * glow), 0), Rect2(Vector2.ZERO, size))
+		Icons.draw(self, def.icon, Rect2(14, 10, 26, 26), col)
+		var font := get_theme_default_font()
+		draw_string(font, Vector2(50, 31), def.name, HORIZONTAL_ALIGNMENT_LEFT, -1, 20, Art.TEXT)
+		var time := "%d:%02d" % [left / 60, left % 60]
+		var w := font.get_string_size(time, HORIZONTAL_ALIGNMENT_LEFT, -1, 18).x
+		draw_string(font, Vector2(size.x - w - 18, 30), time, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, col)
 
 ## Тонкая полоска хода задачи.
 class GoalBar:

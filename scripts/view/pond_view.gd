@@ -11,6 +11,10 @@ var _fx: Array = []  # {k: bit/ring/zap/text/bubble, ...}
 var _shake := 0.0
 var _trail := 0.0
 var _font: Font
+## Волны от рывков и ударов: {pos, t — сколько секунд идёт, power}. Расталкивают взвесь.
+var _waves: Array = []
+## Когда в поле зрения со дна поднимется новая стайка пузырьков.
+var _bubbles_t := 1.0
 
 
 func setup(p: Pond) -> void:
@@ -58,9 +62,32 @@ func _process(delta: float) -> void:
 			f.pos += f.vel * delta
 			f.vel *= 1.0 - 2.5 * delta
 		if f.k == "bubble":
-			f.pos.y -= 18.0 * delta
+			f.pos.y -= f.get("rise", 18.0) * delta
+			if f.has("wob"):
+				f.pos.x += sin(t * 3.0 + f.wob) * 6.0 * delta / camera.zoom.x
 	_fx = _fx.filter(func(f): return f.life > 0.0)
+	for w in _waves:
+		w.t += delta
+	_waves = _waves.filter(func(w): return w.t < 1.2)
+	# Со дна то тут, то там поднимаются цепочки пузырьков.
+	_bubbles_t -= delta
+	if _bubbles_t <= 0.0:
+		_bubbles_t = randf_range(0.8, 2.2)
+		var v := view_rect()
+		var at := v.position + Vector2(randf(), randf()) * v.size
+		var n := randi_range(3, 6)
+		for i in n:
+			_fx.append({"k": "bubble", "pos": at + Vector2(randf_range(-6, 6), i * 9.0) / z, "life": 1.6 + i * 0.15, "speed": 0.55,
+				"r": randf_range(1.2, 2.6) / z * 2.0, "rise": 26.0 / z, "wob": randf() * TAU})
 	queue_redraw()
+
+## Тряхнуть камеру (0–1).
+func shake(k: float) -> void:
+	_shake = minf(1.0, _shake + k)
+
+## Волна от точки: расталкивает взвесь в воде.
+func wave(at: Vector2, power := 1.0) -> void:
+	_waves.append({"pos": at, "t": 0.0, "power": power})
 
 
 # --- события → эффекты ----------------------------------------------------------------
@@ -88,6 +115,8 @@ func effects(events: Array) -> void:
 				for i in 8:
 					_fx.append({"k": "bubble", "pos": e.pos + Vector2(randf() - 0.5, randf() - 0.5) * e.radius, "life": 1.3, "r": randf_range(2.0, 5.0)})
 				_ring(e.pos, e.radius * 1.6, Color(1, 1, 1, 0.8), 0.5)
+				if e.radius >= pond.player.radius * 0.7:
+					wave(e.pos, 0.6)
 				if e.by_player and e.has("dna"):
 					_text(e.pos + Vector2(0, -e.radius), "+%s" % _num(e.dna), Art.GOLD)
 			"drop":
@@ -156,6 +185,7 @@ func effects(events: Array) -> void:
 			"wave":
 				_ring(pond.arena_center, pond.arena_radius, Art.GOLD, 1.2)
 			"dash":
+				wave(e.pos, 1.0)
 				for i in 5:
 					_fx.append({"k": "bubble", "pos": e.pos + Vector2(randf() - 0.5, randf() - 0.5) * 20.0, "life": 0.9, "r": randf_range(2.0, 4.0)})
 
@@ -281,6 +311,18 @@ func _water(view: Rect2) -> void:
 	# Пылинки воды: два слоя с разной глубиной. Каждый слой — одна команда рисования
 	# (короткие толстые штрихи вместо кружков): кружков были сотни, и на телефоне лагало.
 	var z := camera.zoom.x
+	var me := pond.player
+	var reach := me.radius * 4.5
+	var col := Color(0.75, 0.9, 1.0)
+	var glow := 1.0
+	# Цветение: взвесь — светящийся планктон; мёртвая зона — почти ничего.
+	if pond.event_look == "bloom":
+		col = col.lerp(Color(0.6, 1.0, 0.55), pond.event_k)
+		glow = 1.0 + 1.6 * pond.event_k
+	elif pond.event_look == "dead":
+		glow = 1.0 - 0.7 * pond.event_k
+	# Буря: взвесь несётся по ветру.
+	var storm := pond.storm_dir * pond.event_k if pond.event_look == "storm" else Vector2.ZERO
 	for layer in [[0.45, 110.0, 0.10, 1.2], [0.75, 150.0, 0.16, 1.8]]:
 		var k: float = layer[0]
 		var cell: float = layer[1] / z
@@ -291,17 +333,51 @@ func _water(view: Rect2) -> void:
 		var x1 := floori(area.end.x / cell)
 		var y1 := floori(area.end.y / cell)
 		var w := float(layer[3]) * 2.2 / z
+		var near := k > 0.5
 		var pts := PackedVector2Array()
 		for gy in range(y0, y1 + 1):
 			for gx in range(x0, x1 + 1):
 				var h := _hash(gx, gy, int(k * 100.0))
-				var p := Vector2(gx + (h & 255) / 255.0, gy + ((h >> 8) & 255) / 255.0) * cell + shift
-				var drift := Vector2(sin(t * 0.3 + h), cos(t * 0.25 + h * 0.5)) * 6.0 / z
+				var at := Vector2(gx + (h & 255) / 255.0, gy + ((h >> 8) & 255) / 255.0) * cell + shift
+				at += Vector2(sin(t * 0.3 + h), cos(t * 0.25 + h * 0.5)) * 6.0 / z
+				if storm != Vector2.ZERO:
+					at += storm * (fposmod(t * 90.0 * k / z + float(h % 997), cell) - cell * 0.5)
+				# Ближний слой живой: клетка расталкивает взвесь и закручивает её за собой,
+				# волна от рывка отбрасывает её кольцом.
+				if near:
+					at += _stir(at, me.pos, me.vel, reach)
 				var len := w * (1.0 + ((h >> 16) & 3) * 0.4)
-				pts.append(p + drift - Vector2(len * 0.5, 0))
-				pts.append(p + drift + Vector2(len * 0.5, 0))
+				var along := Vector2(1, 0)
+				if storm != Vector2.ZERO:
+					# В бурю пылинки вытягиваются чёрточками по ветру.
+					along = Vector2(1, 0).lerp(storm.normalized(), storm.length())
+					len *= 1.0 + 3.0 * storm.length()
+				pts.append(at - along * len * 0.5)
+				pts.append(at + along * len * 0.5)
 		if not pts.is_empty():
-			draw_multiline(pts, Color(0.75, 0.9, 1.0, float(layer[2])), w)
+			draw_multiline(pts, Color(col, minf(1.0, float(layer[2]) * glow)), w)
+
+## Насколько сдвинуть пылинку в точке at: клетка рядом и волны от рывков.
+func _stir(at: Vector2, center: Vector2, vel: Vector2, reach: float) -> Vector2:
+	var out := Vector2.ZERO
+	var d := at - center
+	var dist2 := d.length_squared()
+	if dist2 < reach * reach and dist2 > 1.0:
+		var dist := sqrt(dist2)
+		var f := 1.0 - dist / reach
+		var dir := d / dist
+		# Расступается перед клеткой и закручивается по бокам — в сторону хода.
+		out += dir * f * f * reach * 0.35
+		var side := signf(vel.cross(d))
+		out += dir.orthogonal() * side * f * minf(vel.length(), 240.0) * 0.18
+	for wv in _waves:
+		var r: float = wv.t * 520.0 / camera.zoom.x
+		var dd: Vector2 = at - wv.pos
+		var l := dd.length()
+		var band := 1.0 - absf(l - r) / (60.0 / camera.zoom.x)
+		if band > 0.0 and l > 1.0:
+			out += dd / l * band * (1.0 - wv.t / 1.2) * 26.0 * float(wv.power) / camera.zoom.x
+	return out
 
 static func _hash(x: int, y: int, s: int) -> int:
 	var h := (x * 374761393 + y * 668265263 + s * 2246822519) & 0x7FFFFFFF
@@ -315,7 +391,7 @@ func _draw_fx() -> void:
 			"bit":
 				draw_circle(f.pos, f.r, Color(f.col, a))
 			"bubble":
-				draw_arc(f.pos, f.r, 0, TAU, 10, Color(0.8, 0.95, 1.0, 0.5 * a), 1.0, true)
+				draw_arc(f.pos, f.r, 0, TAU, 8, Color(0.8, 0.95, 1.0, 0.5 * a), maxf(1.0, 1.2 / camera.zoom.x), true)
 			"ring":
 				draw_arc(f.pos, f.r * (1.0 - a * 0.7), 0, TAU, 40, Color(f.col, a * 0.8), 3.0, true)
 			"zap":
@@ -359,6 +435,7 @@ func _currents(view: Rect2) -> void:
 	# Все штрихи течений — одной командой: по отдельности их сотни, и телефон лагал.
 	var z := camera.zoom.x
 	var cell := 70.0 / z
+	var storm_k := pond.event_k if pond.event_look == "storm" else 0.0
 	var x0 := floori(view.position.x / cell)
 	var y0 := floori(view.position.y / cell)
 	var pts := PackedVector2Array()
@@ -374,8 +451,8 @@ func _currents(view: Rect2) -> void:
 			var k := fposmod(t * sp / cell + float(_hash(gx, gy, 3) % 100) / 100.0, 1.0)
 			var a := p + dir * (k - 0.5) * cell
 			pts.append(a)
-			pts.append(a + dir * cell * 0.35)
-			cols.append(Color(0.8, 0.95, 1.0, 0.18 * minf(1.0, sp / 60.0) * sin(PI * k)))
+			pts.append(a + dir * cell * (0.35 + 0.3 * storm_k))
+			cols.append(Color(0.8, 0.95, 1.0, (0.18 + 0.12 * storm_k) * minf(1.0, sp / 60.0) * sin(PI * k)))
 	if not pts.is_empty():
 		draw_multiline_colors(pts, cols, 2.0 / z)
 
