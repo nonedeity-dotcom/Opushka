@@ -101,3 +101,68 @@ static func bounce(node: Control, k := 1.15) -> void:
 	var tw := node.create_tween()
 	tw.tween_property(node, "scale", Vector2(k, k), 0.09)
 	tw.tween_property(node, "scale", Vector2.ONE, 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+## Кнопка «проседает» под пальцем и пружинит обратно — видно, что нажал.
+static func press_fx(b: BaseButton) -> void:
+	b.button_down.connect(func():
+		b.pivot_offset = b.size / 2.0
+		var tw := b.create_tween()
+		tw.tween_property(b, "scale", Vector2(0.94, 0.94), 0.06))
+	b.button_up.connect(func():
+		var tw := b.create_tween()
+		tw.tween_property(b, "scale", Vector2.ONE, 0.2).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT))
+
+## Переключатель из нескольких вариантов в одной общей плашке: выбранный — зелёный.
+## items — [[id, подпись], ...]; on_pick(id) зовётся при нажатии на невыбранный.
+static func segmented(items: Array, current: String, on_pick: Callable, font := 22, h := 52.0, disabled: Array = []) -> PanelContainer:
+	var row := hbox(4)
+	for it in items:
+		var id: String = it[0]
+		var b := Button.new()
+		b.text = it[1]
+		b.focus_mode = Control.FOCUS_NONE
+		b.custom_minimum_size = Vector2(0, h - 8)
+		b.add_theme_font_size_override("font_size", font)
+		var on := id == current
+		for st in ["normal", "hover", "pressed", "hover_pressed", "disabled"]:
+			b.add_theme_stylebox_override(st, box(Art.GREEN if on else Color(0, 0, 0, 0), int(h / 2.0), Color(0, 0, 0, 0), 16))
+		var fg := Art.BG if on else Art.TEXT
+		for c in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color"]:
+			b.add_theme_color_override(c, fg)
+		b.add_theme_color_override("font_disabled_color", Color(Art.MUTED, 0.6))
+		b.disabled = disabled.has(id)
+		if not on:
+			b.pressed.connect(func(): on_pick.call(id))
+		press_fx(b)
+		row.add_child(b)
+	var p := PanelContainer.new()
+	p.add_theme_stylebox_override("panel", box(Art.CARD, int(h / 2.0), Color(0, 0, 0, 0), 4))
+	p.add_child(row)
+	return p
+
+## Тихая плашка-сведение (не кнопка): значок и текст, без фона-кнопки.
+static func info_chip(icon: String, text: String, col := Art.TEXT) -> Control:
+	var c := InfoChip.new()
+	c.icon = icon
+	c.text = text
+	c.col = col
+	return c
+
+class InfoChip:
+	extends Control
+	var icon := ""
+	var text := ""
+	var col := Art.TEXT
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_PASS
+		var w := get_theme_default_font().get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 21).x
+		custom_minimum_size = Vector2(w + (60 if icon != "" else 28), 44)
+
+	func _draw() -> void:
+		draw_style_box(Kit.box(Color(1, 1, 1, 0.05), 22, Color(1, 1, 1, 0.08), 0), Rect2(Vector2.ZERO, size))
+		var x := 14.0
+		if icon != "":
+			Icons.draw(self, icon, Rect2(12, (size.y - 26) / 2.0, 26, 26), col)
+			x = 46.0
+		draw_string(get_theme_default_font(), Vector2(x, size.y / 2.0 + 8), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 21, col)

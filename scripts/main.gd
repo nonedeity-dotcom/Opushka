@@ -143,7 +143,7 @@ func _ready() -> void:
 		sound.play("levelup", 1.2)
 		_buzz(40)
 		pond.player.sync_player(evo)
-		Kit.bounce(hud.dna_pill, 1.2)
+		hud.dna_gain()
 		_dirty = true)
 
 	menu = MenuPanel.new()
@@ -365,7 +365,7 @@ func _handle(events: Array) -> void:
 					_buzz(12)
 			"kill":
 				if e.by_player and e.get("dna", 0.0) >= 5.0:
-					Kit.bounce(hud.dna_pill, 1.15)
+					hud.dna_gain()
 				if e.by_player:
 					sound.play("kill")
 					_buzz(25)

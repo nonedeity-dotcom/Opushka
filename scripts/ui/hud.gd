@@ -26,12 +26,17 @@ var editor_btn: Button
 var atlas_btn: Button
 var settings_btn: Button
 var shop_btn: Button
+## Размер, рост, ДНК и здоровье — одной карточкой слева сверху. Старые имена оставлены:
+## size_pill, dna_pill и hp_bar — это она же.
+var status: Control
 var size_pill: Control
 var dna_pill: Control
 var hp_bar: Control
 var goal_card: PanelContainer
 var goal_title: Label
+var goal_count: Label
 var goal_hint: Label
+var goal_bar: Control
 var toast_box: PanelContainer
 var toast_label: Label
 var banner: VBoxContainer
@@ -67,12 +72,11 @@ func _ready() -> void:
 	indicators = Indicators.new()
 	add_child(indicators)
 
-	size_pill = SizePill.new()
-	add_child(size_pill)
-	dna_pill = DnaPill.new()
-	add_child(dna_pill)
-	hp_bar = HpBar.new()
-	add_child(hp_bar)
+	status = StatusCard.new()
+	add_child(status)
+	size_pill = status
+	dna_pill = status
+	hp_bar = status
 
 	settings_btn = _round("settings", "Настройки", 64)
 	settings_btn.pressed.connect(func(): settings_pressed.emit())
@@ -80,21 +84,36 @@ func _ready() -> void:
 	atlas_btn.pressed.connect(func(): atlas_pressed.emit())
 	shop_btn = _round("shop", "Магазин", 64)
 	shop_btn.pressed.connect(func(): shop_pressed.emit())
+	for b in [settings_btn, atlas_btn, shop_btn]:
+		b.caption = b.tooltip_text
 
-	goal_title = Kit.label("", 22, Art.TEXT, true)
-	goal_hint = Kit.label("", 18, Art.MUTED)
-	goal_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	var goal_text := Kit.vbox(0)
+	# Задача: заголовок, номер, подсказка в одну строку и полоска, если есть что считать.
+	goal_title = Kit.label("", 21, Art.TEXT, true)
+	goal_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	goal_title.clip_text = true
+	goal_title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	goal_count = Kit.label("", 17, Art.MUTED)
+	goal_hint = Kit.label("", 17, Art.MUTED)
+	goal_hint.clip_text = true
+	goal_hint.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	goal_bar = GoalBar.new()
+	goal_bar.custom_minimum_size = Vector2(0, 6)
+	var top_row := Kit.hbox(10)
+	top_row.add_child(goal_title)
+	top_row.add_child(goal_count)
+	var goal_text := Kit.vbox(3)
 	goal_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	goal_text.add_child(goal_title)
+	goal_text.add_child(top_row)
 	goal_text.add_child(goal_hint)
+	goal_text.add_child(goal_bar)
 	var goal_row := Kit.hbox(12)
 	var flag := IconBox.new()
 	flag.icon = "flag"
-	flag.custom_minimum_size = Vector2(34, 34)
+	flag.custom_minimum_size = Vector2(38, 38)
+	flag.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	goal_row.add_child(flag)
 	goal_row.add_child(goal_text)
-	goal_card = Kit.card(goal_row, Color(0.06, 0.1, 0.13, 0.82), 18, 14)
+	goal_card = Kit.card(goal_row, Color(0.04, 0.08, 0.11, 0.78), 20, 14)
 	goal_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(goal_card)
 
@@ -141,6 +160,7 @@ func _ready() -> void:
 	add_child(arena_pill)
 	editor_btn = _round("heart", "Позвать пару", 92)
 	editor_btn.accent = true
+	editor_btn.caption = "Пара"
 	editor_btn.pressed.connect(func(): editor_pressed.emit())
 
 	minimap = MiniMap.new()
@@ -176,9 +196,7 @@ func apply_settings(s: Settings, landscape: bool) -> void:
 ## Показать то, что сейчас в океане.
 func refresh(pond: Pond) -> void:
 	var evo := pond.evo
-	size_pill.set_state(evo.level(), evo.growth())
-	dna_pill.set_value(evo.dna_free())
-	hp_bar.set_state(pond.player.hp, pond.player.max_hp, pond.player.poison_t > 0.0)
+	status.set_state(evo.level(), evo.growth(), evo.dna_free(), pond.player.hp, pond.player.max_hp, pond.player.poison_t > 0.0)
 	dash.visible = pond.player.can_dash
 	dash.set_cooldown(pond.player.dash_cd / (Pond.DASH_CD * pond.player.dash_k))
 	var ab := pond.player.ability
@@ -204,9 +222,15 @@ func refresh(pond: Pond) -> void:
 	editor_btn.visible = pond.mode != "arena"
 	if goal_card.visible:
 		var n := Content.GOALS.find(goal) + 1
-		goal_title.text = "%s  ·  %d/%d" % [goal.title, n, Content.GOALS.size()]
-		goal_hint.text = goal.hint
-		goal_hint.visible = not _landscape
+		var count := "%d/%d" % [n, Content.GOALS.size()]
+		if goal_title.text != goal.title or goal_count.text != count:
+			goal_title.text = goal.title
+			goal_count.text = count
+			goal_hint.text = goal.hint
+			_layout_goal()
+		var pr := evo.goal_progress(goal.id)
+		goal_bar.visible = int(pr[1]) > 1
+		goal_bar.set_k(float(pr[0]) / maxf(1.0, float(pr[1])))
 	hurt_flash.color.a = maxf(0.0, hurt_flash.color.a - get_process_delta_time() * 0.8)
 
 
@@ -214,9 +238,13 @@ func refresh(pond: Pond) -> void:
 func reveal_part(id: String, level_up := false) -> void:
 	reveal.start(id, level_up)
 
-## Вырос: плашка размера подпрыгивает, экран на миг теплеет.
+## Прибавилось ДНК: число вспыхивает зелёным.
+func dna_gain() -> void:
+	status.flash_dna()
+
+## Вырос: кружок размера подпрыгивает, экран на миг теплеет.
 func grew() -> void:
-	Kit.bounce(size_pill, 1.25)
+	status.pop_level()
 	hurt_flash.color = Color(0.5, 0.95, 0.6, 0.22)
 	var tw := create_tween()
 	tw.tween_property(hurt_flash, "color", Color(0.8, 0.1, 0.1, 0.0), 0.8)
@@ -289,22 +317,15 @@ func _layout() -> void:
 	var bottom := minf(safe.end.y, size.y) - m
 	var scale: float = Settings.BUTTON_SCALE[_settings.buttons]
 
-	size_pill.position = Vector2(left, top)
-	dna_pill.position = Vector2(left + size_pill.size.x + 10, top)
-	hp_bar.position = Vector2(left, top + 74)
-	hp_bar.size = Vector2(size_pill.size.x + 10 + dna_pill.size.x, 26)
-	settings_btn.position = Vector2(right - 64, top)
-	atlas_btn.position = Vector2(right - 64 * 2 - 10, top)
-	shop_btn.position = Vector2(right - 64 * 3 - 20, top)
+	status.position = Vector2(left, top)
+	# Кнопки справа сверху — с подписями, чуть реже, чтобы подписи не слипались.
+	settings_btn.position = Vector2(right - 64 - 16, top)
+	atlas_btn.position = Vector2(right - 64 * 2 - 46, top)
+	shop_btn.position = Vector2(right - 64 * 3 - 76, top)
 	var mm := 150.0 * scale
 	minimap.size = Vector2(mm, mm)
-	minimap.position = Vector2(right - mm, top + 76)
-	if _landscape:
-		goal_card.position = Vector2(dna_pill.position.x + dna_pill.size.x + 14, top)
-		goal_card.size = Vector2(minf(560.0, shop_btn.position.x - goal_card.position.x - 14), 64)
-	else:
-		goal_card.position = Vector2(left, top + 112)
-		goal_card.size = Vector2(right - left, 0)
+	minimap.position = Vector2(right - mm, top + 104)
+	_layout_goal()
 
 	var pad_d := (250.0 if _landscape else 270.0) * scale
 	var dash_d := 150.0 * scale
@@ -324,7 +345,7 @@ func _layout() -> void:
 	ability_btn.position = Vector2(dash.position.x + (dash_d - ab_d) / 2.0 + toward_center * dash_d * 0.35, dash.position.y - ab_d - 44)
 	var bw := minf(520.0, size.x * 0.4)
 	boss_bar.size = Vector2(bw, 58)
-	boss_bar.position = Vector2((size.x - bw) / 2.0, top + (76 if _landscape else 190))
+	boss_bar.position = Vector2((size.x - bw) / 2.0, bottom - 150.0 if _landscape else top + 190)
 	arena_pill.size = Vector2(300, 64)
 	arena_pill.position = Vector2((size.x - 300) / 2.0, top)
 	indicators.position = Vector2.ZERO
@@ -335,12 +356,29 @@ func _layout() -> void:
 	_layout_toast()
 	_layout_banner()
 
+## Задача — рядом с карточкой состояния, шириной по тексту, но не до кнопок.
+func _layout_goal() -> void:
+	if status == null or shop_btn == null:
+		return
+	var x := status.position.x + status.size.x + 14
+	var room := shop_btn.position.x - x - 24
+	var font := get_theme_default_font()
+	var need := maxf(font.get_string_size(goal_title.text, HORIZONTAL_ALIGNMENT_LEFT, -1, 21).x + 60,
+		font.get_string_size(goal_hint.text, HORIZONTAL_ALIGNMENT_LEFT, -1, 17).x) + 90
+	goal_card.position = Vector2(x, status.position.y)
+	goal_card.size = Vector2(clampf(need, 260.0, minf(room, 620.0)), 0)
+	goal_card.reset_size()
+	goal_card.size.x = clampf(need, 260.0, minf(room, 620.0))
+
 func _layout_toast() -> void:
-	var w := minf(size.x - 60, 600.0)
+	var w := minf(size.x - 60, 620.0)
 	toast_label.custom_minimum_size.x = w - 32
 	toast_box.reset_size()
-	var above := dash.position.y - 30.0 if dash else size.y - 300.0
-	toast_box.position = Vector2((size.x - w) / 2.0, above - toast_box.size.y - 16)
+	# Лёжа — внизу посередине, между джойстиком и кнопками: не заслоняет клетку.
+	var y := size.y - toast_box.size.y - 22.0
+	if not _landscape:
+		y = (dash.position.y - 30.0 if dash else size.y - 300.0) - toast_box.size.y - 16
+	toast_box.position = Vector2((size.x - w) / 2.0, y)
 
 func _layout_banner() -> void:
 	var w := minf(size.x - 40, 680.0)
@@ -353,77 +391,103 @@ func _layout_banner() -> void:
 
 # --- части ----------------------------------------------------------------------------
 
-## «Размер 3» и полоска роста до следующего.
-class SizePill:
+## Карточка состояния: кружок размера с кольцом роста, ДНК, здоровье с числами.
+class StatusCard:
 	extends Control
 	var level := 0
 	var growth := -1.0
-
-	func _ready() -> void:
-		mouse_filter = Control.MOUSE_FILTER_IGNORE
-		size = Vector2(210, 64)
-
-	func set_state(l: int, g: float) -> void:
-		if l == level and absf(g - growth) < 0.004:
-			return
-		level = l
-		growth = g
-		queue_redraw()
-
-	func _draw() -> void:
-		draw_style_box(Kit.box(Color(0.05, 0.1, 0.13, 0.72), 32), Rect2(Vector2.ZERO, size))
-		var font := get_theme_default_font()
-		draw_string(font, Vector2(22, 34), "Размер %d" % level, HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Art.TEXT)
-		var bar := Rect2(22, 44, size.x - 44, 8)
-		draw_style_box(Kit.box(Color(1, 1, 1, 0.1), 4, Color(0, 0, 0, 0), 0), bar)
-		if growth > 0.0:
-			draw_style_box(Kit.box(Art.GREEN, 4, Color(0, 0, 0, 0), 0), Rect2(bar.position, Vector2(maxf(8.0, bar.size.x * growth), bar.size.y)))
-
-## Свободная ДНК.
-class DnaPill:
-	extends Control
-	var value := -99999
-
-	func _ready() -> void:
-		mouse_filter = Control.MOUSE_FILTER_IGNORE
-		size = Vector2(150, 64)
-
-	func set_value(v: int) -> void:
-		if v != value:
-			value = v
-			queue_redraw()
-
-	func _draw() -> void:
-		draw_style_box(Kit.box(Color(0.05, 0.1, 0.13, 0.72), 32), Rect2(Vector2.ZERO, size))
-		Icons.draw(self, "dna", Rect2(16, 14, 36, 36), Art.GREEN)
-		draw_string(get_theme_default_font(), Vector2(62, 42), str(value), HORIZONTAL_ALIGNMENT_LEFT, -1, 28, Art.TEXT)
-
-## Здоровье: сердечко и полоса. Отравлен — полоса зеленеет.
-class HpBar:
-	extends Control
+	var dna := -99999
 	var hp := -1.0
 	var max_hp := 1.0
 	var poisoned := false
+	var _flash := 0.0
+	var _pop := 0.0
+	var _t := 0.0
 
 	func _ready() -> void:
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		size = Vector2(360, 88)
 
-	func set_state(h: float, m: float, p: bool) -> void:
-		if absf(h - hp) < 0.05 and m == max_hp and p == poisoned:
+	func set_state(l: int, g: float, d: int, h: float, m: float, p: bool) -> void:
+		if l == level and absf(g - growth) < 0.004 and d == dna and absf(h - hp) < 0.05 and m == max_hp and p == poisoned:
 			return
+		level = l
+		growth = g
+		dna = d
 		hp = h
 		max_hp = m
 		poisoned = p
 		queue_redraw()
 
+	func flash_dna() -> void:
+		_flash = 1.0
+
+	func pop_level() -> void:
+		_pop = 1.0
+
+	func _process(delta: float) -> void:
+		var low := max_hp > 0.0 and hp / max_hp < 0.3
+		if _flash > 0.0 or _pop > 0.0 or low:
+			_flash = maxf(0.0, _flash - delta * 2.0)
+			_pop = maxf(0.0, _pop - delta * 1.5)
+			_t += delta
+			queue_redraw()
+
 	func _draw() -> void:
-		Icons.draw(self, "heart", Rect2(0, 0, 26, 26), Art.DANGER)
-		var bar := Rect2(34, 7, size.x - 34, 12)
+		var font := get_theme_default_font()
+		draw_style_box(Kit.box(Color(0.04, 0.08, 0.11, 0.78), 26, Color(1, 1, 1, 0.07), 0), Rect2(Vector2.ZERO, size))
+		# Размер: число в круге, по кругу — сколько осталось до следующего.
+		var c := Vector2(44, size.y / 2.0)
+		var k := 1.0 + 0.25 * sin(PI * _pop) * _pop
+		var r := 32.0 * k
+		draw_circle(c, r, Color(Art.GREEN, 0.12 + 0.3 * _pop))
+		draw_arc(c, r - 3, 0, TAU, 48, Color(1, 1, 1, 0.12), 5, true)
+		if growth > 0.0:
+			draw_arc(c, r - 3, -PI / 2.0, -PI / 2.0 + TAU * growth, 48, Art.GREEN, 5, true)
+		var num := str(level)
+		var fs := int(30 * k)
+		var nw := font.get_string_size(num, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+		draw_string(font, c + Vector2(-nw / 2.0, fs * 0.36), num, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Art.TEXT)
+		# ДНК: значок и число; прибавилось — вспыхивает.
+		var x := 92.0
+		Icons.draw(self, "dna", Rect2(x, 10, 30, 30), Art.GREEN)
+		var dcol := Art.TEXT.lerp(Color("#b8ffd8"), _flash)
+		draw_string(font, Vector2(x + 38, 36), str(dna), HORIZONTAL_ALIGNMENT_LEFT, -1, 27 + int(4 * _flash), dcol)
+		var gtext := "рост %d%%" % int(growth * 100.0) if growth >= 0.0 else "вершина"
+		var gw := font.get_string_size(gtext, HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x
+		draw_string(font, Vector2(size.x - gw - 18, 33), gtext, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Art.MUTED)
+		# Здоровье: сердце, полоса и числа. Мало — сердце бьётся. Отравлен — полоса зеленеет.
+		var hk := clampf(hp / max_hp, 0.0, 1.0) if max_hp > 0.0 else 0.0
+		var beat := 1.0 + (0.18 * maxf(0.0, sin(_t * 9.0)) if hk < 0.3 else 0.0)
+		var hs := 24.0 * beat
+		Icons.draw(self, "heart", Rect2(x + 3 + (24 - hs) / 2.0, 52 + (24 - hs) / 2.0, hs, hs), Art.DANGER)
+		var htext := "%d/%d" % [mini(ceili(hp), roundi(max_hp)), roundi(max_hp)]
+		var hw := font.get_string_size(htext, HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x
+		var bar := Rect2(x + 36, 58, size.x - x - 36 - hw - 30, 12)
 		draw_style_box(Kit.box(Color(0, 0, 0, 0.45), 6, Color(0, 0, 0, 0), 0), bar)
-		var k := clampf(hp / max_hp, 0.0, 1.0)
-		var col := Color("#8fe070") if poisoned else (Art.DANGER if k < 0.3 else Color("#e8a0a0"))
+		var col := Color("#8fe070") if poisoned else (Art.DANGER if hk < 0.3 else Color("#e8a0a0"))
+		if hk > 0.0:
+			draw_style_box(Kit.box(col, 6, Color(0, 0, 0, 0), 0), Rect2(bar.position, Vector2(maxf(10.0, bar.size.x * hk), bar.size.y)))
+		draw_string(font, Vector2(size.x - hw - 18, 70), htext, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Art.MUTED if hk >= 0.3 else Art.DANGER)
+
+## Тонкая полоска хода задачи.
+class GoalBar:
+	extends Control
+	var k := 0.0
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func set_k(v: float) -> void:
+		v = clampf(v, 0.0, 1.0)
+		if absf(v - k) > 0.005:
+			k = v
+			queue_redraw()
+
+	func _draw() -> void:
+		draw_style_box(Kit.box(Color(1, 1, 1, 0.1), 3, Color(0, 0, 0, 0), 0), Rect2(Vector2.ZERO, size))
 		if k > 0.0:
-			draw_style_box(Kit.box(col, 6, Color(0, 0, 0, 0), 0), Rect2(bar.position, Vector2(maxf(10.0, bar.size.x * k), bar.size.y)))
+			draw_style_box(Kit.box(Art.GOLD, 3, Color(0, 0, 0, 0), 0), Rect2(Vector2.ZERO, Vector2(maxf(6.0, size.x * k), size.y)))
 
 class IconBox:
 	extends Control

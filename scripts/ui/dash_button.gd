@@ -59,8 +59,8 @@ func _draw() -> void:
 	Icons.draw(self, icon, Rect2(c - Vector2(r, r) * 0.5, Vector2(r, r)), Art.TEXT if ready else Art.MUTED)
 	var font := get_theme_default_font()
 	var text := caption
-	var w := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 22).x
-	var pos := Vector2(c.x - w / 2.0, d + 28)
+	var w := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 18).x
+	var pos := Vector2(c.x - w / 2.0, d + 26)
 	if floating:
-		draw_string_outline(font, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 22, 6, Color(0, 0, 0, 0.7))
-	draw_string(font, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Art.TEXT)
+		draw_string_outline(font, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, 5, Color(0, 0, 0, 0.6))
+	draw_string(font, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color(Art.TEXT, 0.85))

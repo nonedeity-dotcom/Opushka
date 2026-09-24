@@ -133,6 +133,7 @@ func _card(id: String) -> Control:
 	for c in ["font_color", "font_hover_color", "font_pressed_color", "font_disabled_color"]:
 		b.add_theme_color_override(c, fg)
 	b.pressed.connect(func(): _buy(id))
+	Kit.press_fx(b)
 	row.add_child(b)
 	var card := Kit.card(row, Art.CARD, 20, 14)
 	card.mouse_filter = Control.MOUSE_FILTER_PASS

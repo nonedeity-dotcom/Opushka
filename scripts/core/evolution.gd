@@ -333,6 +333,21 @@ func _goal_met(id: String) -> bool:
 			return level() >= Content.LEVELS.size()
 	return false
 
+## Сколько сделано из нужного для задачи: [есть, надо]. Где считать нечего — [0, 1].
+func goal_progress(id: String) -> Array:
+	match id:
+		"eat":
+			return [mini(stats.get("plants", 0) + stats.get("meat", 0), 10), 10]
+		"grow":
+			return [mini(int(dna_total), 40), 40]
+		"size5":
+			return [mini(level(), 5), 5]
+		"parts8":
+			return [mini(unlocked.size(), 8), 8]
+		"size10":
+			return [level(), Content.LEVELS.size()]
+	return [0, 1]
+
 ## Отметить выполненные. Возвращает только что выполненные задачи.
 func check_goals() -> Array:
 	var fresh: Array = []
