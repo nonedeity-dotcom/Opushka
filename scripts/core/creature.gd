@@ -10,9 +10,16 @@ static var _next_uid := 1
 var uid := 0
 var species := ""  # "" — это ты
 var is_player := false
+## radius — настоящий радиус круга в драке и столкновениях; size_r — «рост» клетки, от
+## него сила и здоровье. Они различаются формой: вытянутое тело чуть крупнее круглого.
 var radius := 16.0
+var size_r := 16.0
+var shape: Array = []
 var color := Color.WHITE
-var parts: Array = []  # [{id, a — радианы, lvl}]
+var parts: Array = []  # [{id, a — радианы, d — глубина: 1 край, 0 середина, lvl}]
+## Сияющая особь: редкая, пугливая, крепче, и что-нибудь из неё выпадает всегда.
+var golden := false
+var announced := false
 
 var pos := Vector2.ZERO
 var vel := Vector2.ZERO
@@ -26,6 +33,8 @@ var turn := 3.0
 var max_hp := 10.0
 var sight := 190.0
 var eyes := 0.0
+## Сколько видно вокруг (для тумана): без глаз — только рядом.
+var vision := 120.0
 var mouth := {}  # {id, a, arc, bite, diet, eat_plant, eat_meat}
 var spikes: Array = []  # [{a, arc, dmg}]
 var shells: Array = []  # [{a, arc, armor}]
@@ -75,13 +84,21 @@ static func of_species(id: String) -> Creature:
 	var def: Dictionary = Content.SPECIES[id]
 	var c := Creature.new()
 	c.species = id
-	c.radius = def.radius
+	c.size_r = def.radius
+	c.shape = Content.shape_preset(def.get("shape", "round"))
+	c.radius = c.size_r * Content.shape_scale(c.shape)
 	c.color = Color(def.color)
 	for p in def.parts:
-		c.parts.append({"id": p[0], "a": deg_to_rad(p[1]), "lvl": p[2]})
+		c.parts.append({"id": p[0], "a": deg_to_rad(p[1]), "d": 1.0, "lvl": p[2]})
 	c.rebuild()
 	c.hp = c.max_hp
 	return c
+
+func make_golden() -> void:
+	golden = true
+	color = color.lerp(Color("#ffd86a"), 0.75)
+	rebuild()
+	hp = max_hp
 
 static func of_player(evo: Evolution) -> Creature:
 	var c := Creature.new()
@@ -93,17 +110,21 @@ static func of_player(evo: Evolution) -> Creature:
 ## Тело игрока поменялось (редактор, рост) — перестроить, сохранив долю здоровья.
 func sync_player(evo: Evolution) -> void:
 	var share := hp / max_hp if max_hp > 0.0 else 1.0
-	radius = evo.radius()
+	size_r = evo.radius()
+	shape = evo.shape.duplicate()
+	radius = size_r * Content.shape_scale(shape)
 	color = Color(Content.COLORS[evo.color])
 	parts = evo.body_parts()
 	rebuild()
 	hp = clampf(max_hp * share, 1.0, max_hp)
 
 func behavior() -> String:
-	return "player" if is_player else Content.SPECIES[species].behavior
+	if is_player:
+		return "player"
+	return "skittish" if golden else Content.SPECIES[species].behavior
 
 func size_k() -> float:
-	return radius / 16.0
+	return size_r / 16.0
 
 ## Посчитать, что умеет тело.
 func rebuild() -> void:
@@ -153,6 +174,10 @@ func rebuild() -> void:
 	if not is_player and behavior() == "skittish":
 		sight *= 1.35
 	dash_power = 260.0 * pow(k, 0.3)
+	vision = (95.0 + size_r * 1.6) * (1.0 + 0.45 * minf(eyes, 4.0))
+	if golden:
+		speed *= 1.15
+		max_hp *= 1.5
 	zap_targets = mini(zap_targets + 1, 3) if zap_targets > 0 else 0
 
 func eats(kind: String) -> bool:

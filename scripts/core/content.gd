@@ -10,9 +10,17 @@ const START_DNA := 10
 ## Уровень части растёт от повторных находок: +20% силы за уровень, до пятого.
 const PART_MAX_LEVEL := 5
 const PART_LEVEL_BONUS := 0.2
-## Части на теле стоят не теснее этого (градусы), и углы — по сетке через столько же.
-const PART_SPACING := 25
+## Углы частей — по сетке через столько градусов, глубина внутрь тела — через столько
+## долей радиуса. Части стоят не теснее PART_GAP (в радиусах тела).
 const ANGLE_STEP := 15
+const DEPTH_STEP := 0.1
+const PART_GAP := 0.42
+## Форма тела: радиус в SHAPE_POINTS направлениях (0 — нос), от SHAPE_MIN до SHAPE_MAX.
+const SHAPE_POINTS := 16
+const SHAPE_MIN := 0.6
+const SHAPE_MAX := 1.6
+## Сияющая особь: редкая, пугливая, крепче обычной, и часть из неё выпадает всегда.
+const GOLDEN_CHANCE := 0.03
 
 ## Размеры клетки: сколько ДНК нужно накопить за всё время и какой становится радиус.
 const LEVELS := [
@@ -60,16 +68,16 @@ const PARTS := {
 		"hint": "Больше здоровья"},
 	"poison": {"name": "Ядовитая железа", "kind": "weapon", "cost": 35, "poison": 2.0, "arc": 70,
 		"hint": "Кто коснулся — отравлен на 3 секунды"},
-	"electro": {"name": "Электроклетка", "kind": "special", "cost": 60, "zap": 5.0,
+	"electro": {"name": "Электроклетка", "kind": "special", "cost": 60, "zap": 5.0, "inner": true,
 		"hint": "Бьёт током двоих ближайших врагов"},
-	"eye": {"name": "Глазок", "kind": "sense", "cost": 12, "eyes": 1.0,
-		"hint": "Видишь дальше и замечаешь хищников заранее"},
-	"chloroplast": {"name": "Хлоропласт", "kind": "special", "cost": 28, "regen": 0.6, "dna_rate": 0.08,
+	"eye": {"name": "Глазок", "kind": "sense", "cost": 12, "eyes": 1.0, "inner": true,
+		"hint": "Раздвигает туман: без глаз видно только то, что рядом"},
+	"chloroplast": {"name": "Хлоропласт", "kind": "special", "cost": 28, "regen": 0.6, "dna_rate": 0.08, "inner": true,
 		"hint": "Питается светом: лечит и понемногу даёт ДНК"},
 }
 
 ## С чего начинает каждая новая клетка.
-const START_PARTS := [{"id": "filter", "a": 0}, {"id": "cilia", "a": 180}]
+const START_PARTS := [{"id": "filter", "a": 0, "d": 1.0}, {"id": "cilia", "a": 180, "d": 1.0}]
 const START_UNLOCKED := {"filter": 1, "cilia": 1}
 
 ## Виды клеток. behavior: grazer — мирный, ест водоросли, убегает от опасных; skittish —
@@ -86,11 +94,11 @@ const SPECIES := {
 		"parts": [["filter", 0, 1], ["cilia", 180, 1], ["membrane", 120, 1]], "levels": [1, 5], "weight": 5.0,
 		"drops": [["membrane", 0.2], ["cilia", 0.25], ["filter", 0.2]],
 		"hint": "Мирная травоядная клетка. Лёгкая добыча"},
-	"zhivchik": {"name": "Живчик", "behavior": "skittish", "radius": 10.0, "color": "#6fb0d8", "tier": 1,
+	"zhivchik": {"name": "Живчик", "behavior": "skittish", "radius": 10.0, "color": "#6fb0d8", "shape": "oval", "tier": 1,
 		"parts": [["filter", 0, 1], ["flagellum", 180, 1]], "levels": [1, 6], "weight": 3.0,
 		"drops": [["flagellum", 0.3]],
 		"hint": "Быстрый и пугливый: уплывает, едва заметит"},
-	"kolyuchka": {"name": "Колючка", "behavior": "drifter", "radius": 15.0, "color": "#c9a24a", "tier": 2,
+	"kolyuchka": {"name": "Колючка", "behavior": "drifter", "radius": 15.0, "color": "#c9a24a", "shape": "star", "tier": 2,
 		"parts": [["spike", 0, 1], ["spike", 180, 1], ["filter", 90, 1]], "levels": [1, 6], "weight": 3.0,
 		"drops": [["spike", 0.3]],
 		"hint": "Медленная, с шипами спереди и сзади. Толкай сбоку"},
@@ -98,19 +106,19 @@ const SPECIES := {
 		"parts": [["jaws", 0, 1], ["cilia", 150, 1], ["cilia", -150, 1]], "levels": [2, 7], "weight": 3.0,
 		"drops": [["jaws", 0.3], ["cilia", 0.2]],
 		"hint": "Хищник: гоняется за теми, кто меньше"},
-	"glazun": {"name": "Глазун", "behavior": "skittish", "radius": 14.0, "color": "#e0c070", "tier": 2,
+	"glazun": {"name": "Глазун", "behavior": "skittish", "radius": 14.0, "color": "#e0c070", "shape": "wide", "tier": 2,
 		"parts": [["eye", -40, 1], ["eye", 40, 1], ["filter", 0, 1], ["flagellum", 180, 1]], "levels": [2, 8], "weight": 2.0,
 		"drops": [["eye", 0.35], ["flagellum", 0.15]],
 		"hint": "Видит издалека и сразу удирает"},
-	"pantsirnik": {"name": "Панцирник", "behavior": "grazer", "radius": 19.0, "color": "#8f7fbf", "tier": 3,
+	"pantsirnik": {"name": "Панцирник", "behavior": "grazer", "radius": 19.0, "color": "#8f7fbf", "shape": "bean", "tier": 3,
 		"parts": [["filter", 0, 1], ["shell", 120, 1], ["shell", -120, 1], ["cilia", 180, 1]], "levels": [3, 8], "weight": 2.5,
 		"drops": [["shell", 0.3]],
 		"hint": "Сзади прикрыт панцирем. Бей спереди"},
-	"hobotnik": {"name": "Хоботник", "behavior": "hunter", "radius": 20.0, "color": "#d88aa8", "tier": 3,
+	"hobotnik": {"name": "Хоботник", "behavior": "hunter", "radius": 20.0, "color": "#d88aa8", "shape": "bean", "tier": 3,
 		"parts": [["proboscis", 0, 1], ["cilia", 180, 1], ["membrane", 90, 1]], "levels": [3, 8], "weight": 2.0,
 		"drops": [["proboscis", 0.3], ["membrane", 0.2]],
 		"hint": "Всеядный: ест и водоросли, и мелких"},
-	"yadovik": {"name": "Ядовик", "behavior": "drifter", "radius": 22.0, "color": "#9a6ad0", "tier": 3,
+	"yadovik": {"name": "Ядовик", "behavior": "drifter", "radius": 22.0, "color": "#9a6ad0", "shape": "blob", "tier": 3,
 		"parts": [["poison", 0, 1], ["poison", 180, 1], ["filter", 90, 1], ["cilia", -90, 1]], "levels": [4, 9], "weight": 2.0,
 		"drops": [["poison", 0.25]],
 		"hint": "Не нападает, но касаться его — яд"},
@@ -118,7 +126,7 @@ const SPECIES := {
 		"parts": [["chloroplast", 90, 1], ["chloroplast", -90, 1], ["filter", 0, 1], ["cilia", 180, 1]], "levels": [4, 9], "weight": 2.0,
 		"drops": [["chloroplast", 0.3]],
 		"hint": "Питается светом. Мирный"},
-	"klykach": {"name": "Клыкач", "behavior": "hunter", "radius": 26.0, "color": "#b8504a", "tier": 4,
+	"klykach": {"name": "Клыкач", "behavior": "hunter", "radius": 26.0, "color": "#b8504a", "shape": "drop", "tier": 4,
 		"parts": [["fangs", 0, 1], ["flagellum", 180, 1], ["cilia", 120, 1]], "levels": [5, 10], "weight": 2.0,
 		"drops": [["fangs", 0.2], ["flagellum", 0.2]],
 		"hint": "Опасный хищник с клыками"},
@@ -126,15 +134,15 @@ const SPECIES := {
 		"parts": [["electro", 0, 1], ["electro", 180, 1], ["filter", 90, 1], ["cilia", -90, 1]], "levels": [6, 10], "weight": 1.5,
 		"drops": [["electro", 0.2]],
 		"hint": "Бьёт током всех, кто рядом"},
-	"strizh": {"name": "Стриж", "behavior": "hunter", "radius": 22.0, "color": "#5a8ad8", "tier": 4,
+	"strizh": {"name": "Стриж", "behavior": "hunter", "radius": 22.0, "color": "#5a8ad8", "shape": "drop", "tier": 4,
 		"parts": [["jaws", 0, 2], ["flagellum2", 180, 1]], "levels": [6, 10], "weight": 1.5,
 		"drops": [["flagellum2", 0.25], ["jaws", 0.2]],
 		"hint": "Очень быстрый хищник"},
-	"velikan": {"name": "Шипастый великан", "behavior": "boss", "radius": 44.0, "color": "#a08a50", "tier": 6,
+	"velikan": {"name": "Шипастый великан", "behavior": "boss", "radius": 44.0, "color": "#a08a50", "shape": "star", "tier": 6,
 		"parts": [["spike2", 0, 1], ["spike2", 120, 1], ["spike2", -120, 1], ["shell", 60, 1], ["shell", -60, 1], ["shell", 180, 1]],
 		"levels": [6, 10], "weight": 0.6, "drops": [["spike2", 0.3], ["shell", 0.3]],
 		"hint": "Огромный и колючий. Ищи щель между шипами"},
-	"leviafan": {"name": "Левиафан", "behavior": "boss", "radius": 60.0, "color": "#4a5a8a", "tier": 8, "hunts": true,
+	"leviafan": {"name": "Левиафан", "behavior": "boss", "radius": 60.0, "color": "#4a5a8a", "shape": "oval", "tier": 8, "hunts": true,
 		"parts": [["fangs", 0, 2], ["flagellum", 180, 1], ["spike2", 90, 1], ["spike2", -90, 1], ["eye", 30, 1], ["eye", -30, 1], ["membrane", 150, 2], ["membrane", -150, 2]],
 		"levels": [8, 10], "weight": 0.4, "drops": [["fangs", 0.5], ["spike2", 0.3], ["eye", 0.3], ["membrane", 0.3]],
 		"hint": "Гроза первичного океана"},
@@ -192,4 +200,51 @@ static func sources(part: String) -> Array:
 ## делается только первая буква, чтобы подсказку можно было вставить в середину фразы.
 static func lc_first(text: String) -> String:
 	return text.left(1).to_lower() + text.substr(1)
+
+## Форма по названию — для видов и для кнопок редактора. 1.0 — круг.
+static func shape_preset(name: String) -> Array:
+	var out: Array = []
+	for i in SHAPE_POINTS:
+		var a := TAU * i / SHAPE_POINTS  # 0 — нос
+		var v := 1.0
+		match name:
+			"oval":
+				v = 0.78 + 0.42 * cos(a) * cos(a)
+			"wide":
+				v = 0.78 + 0.42 * sin(a) * sin(a)
+			"drop":
+				# Тупой нос, хвост вытянут назад.
+				v = 1.0 - 0.18 * cos(a) + 0.2 * maxf(0.0, -cos(a)) * maxf(0.0, -cos(a))
+			"star":
+				v = 1.0 + 0.22 * cos(4.0 * a)
+			"bean":
+				v = 1.0 + 0.16 * cos(2.0 * a) - 0.12 * sin(a)
+			"blob":
+				v = 1.0 + 0.1 * sin(3.0 * a + 0.7) + 0.07 * cos(5.0 * a)
+		out.append(clampf(v, SHAPE_MIN, SHAPE_MAX))
+	return out
+
+## Радиус формы в направлении a (радианы от носа): плавно между опорными точками.
+static func shape_at(shape: Array, a: float) -> float:
+	if shape.is_empty():
+		return 1.0
+	var n := shape.size()
+	var x := fposmod(a / TAU * n, n)
+	var i := int(floor(x))
+	var t := x - i
+	var p0: float = shape[(i - 1 + n) % n]
+	var p1: float = shape[i % n]
+	var p2: float = shape[(i + 1) % n]
+	var p3: float = shape[(i + 2) % n]
+	# Катмулл — Ром: кривая проходит через все точки и не ломается на стыках.
+	return 0.5 * ((2.0 * p1) + (-p0 + p2) * t + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t * t + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t * t * t)
+
+## Во сколько раз тело этой формы «весит» против круга: от средней величины, в пределах.
+static func shape_scale(shape: Array) -> float:
+	if shape.is_empty():
+		return 1.0
+	var sum := 0.0
+	for v in shape:
+		sum += v
+	return clampf(sum / shape.size(), 0.8, 1.25)
 

@@ -22,7 +22,8 @@ var editor: Control
 var setup: Control
 var sound: Node
 var backdrop: Control
-var landscape := false
+var fog: ColorRect
+var landscape := true
 
 var _seed := 0
 var _dash := false
@@ -56,6 +57,8 @@ func _ready() -> void:
 	var shade := CanvasLayer.new()
 	shade.layer = 1
 	add_child(shade)
+	fog = preload("res://scripts/view/fog.gd").new()
+	shade.add_child(fog)
 	shade.add_child(_vignette())
 
 	var layer := CanvasLayer.new()
@@ -72,9 +75,6 @@ func _ready() -> void:
 	hud.dash_pressed.connect(func(): _dash = true)
 	hud.editor_pressed.connect(_open_editor)
 	hud.settings_pressed.connect(_open_settings)
-	hud.rotate_pressed.connect(func():
-		settings.landscape = not landscape
-		_settings_changed(settings))
 
 	editor = EditorPanel.new()
 	editor.visible = false
@@ -104,7 +104,7 @@ func _ready() -> void:
 	get_viewport().size_changed.connect(_on_resize)
 	_on_resize()
 	if fresh:
-		hud.toast("Ты — крошечная клетка. Плыви к зелёным крупинкам: это еда")
+		hud.toast("Ты — крошечная клетка без глаз: видно только то, что рядом. Плыви к зелёным крупинкам — это еда")
 
 func _new_pond() -> void:
 	pond = Pond.new(evo, _seed)
@@ -112,7 +112,8 @@ func _new_pond() -> void:
 	pond.view_radius = view.view_radius()
 	pond.fill()
 	for s in _spawns:
-		pond.spawn(s[0], pond.player.pos + s[1])
+		var gold: bool = s[0].begins_with("*")
+		pond.spawn(s[0].trim_prefix("*"), pond.player.pos + s[1], gold)
 
 ## Затемнение по краям: глубина, и взгляд сам собирается к середине.
 func _vignette() -> TextureRect:
@@ -148,6 +149,8 @@ func _process(delta: float) -> void:
 		_handle(pond.events)
 	hud.refresh(pond)
 	backdrop.drift = pond.player.pos
+	var xf: Transform2D = view.get_canvas_transform()
+	fog.update(xf * pond.player.pos, pond.player.vision * view.camera.zoom.x, delta)
 	_update_arrows()
 	if _save_in > 0.0:
 		_save_in -= delta
@@ -264,6 +267,9 @@ func _handle(events: Array) -> void:
 			"seen":
 				_dirty = true
 				hud.toast("Новый вид: %s. Он теперь в «Атласе»" % Content.SPECIES[e.species].name)
+			"golden":
+				sound.play("drop", 0.8)
+				hud.toast("Сияющая особь — %s! Из неё обязательно что-то выпадет. Она пугливая" % Content.SPECIES[e.species].name.to_lower())
 
 func _buzz(ms: int) -> void:
 	if settings.vibration:
@@ -317,8 +323,9 @@ func _start_over() -> void:
 
 # --- экран ----------------------------------------------------------------------------
 
+## Игра всегда лёжа — и так, и эдак перевёрнутый телефон подходит.
 func _orient() -> void:
-	DisplayServer.screen_set_orientation(DisplayServer.SCREEN_SENSOR_LANDSCAPE if settings.landscape else DisplayServer.SCREEN_PORTRAIT)
+	DisplayServer.screen_set_orientation(DisplayServer.SCREEN_SENSOR_LANDSCAPE)
 
 func _on_resize() -> void:
 	var s := get_viewport().get_visible_rect().size
@@ -381,7 +388,7 @@ func _apply_debug_args() -> void:
 		for item in args.body.split(","):
 			var p: PackedStringArray = item.split("@")
 			evo.unlocked[p[0]] = evo.unlocked.get(p[0], 1)
-			evo.body.append({"id": p[0], "a": int(p[1])})
+			evo.body.append({"id": p[0], "a": int(p[1]), "d": float(p[2]) if p.size() > 2 else 1.0})
 	if args.has("color"):
 		evo.color = int(args.color)
 	if args.has("seen"):
@@ -433,15 +440,45 @@ func _run_script() -> void:
 			editor.selected = p[1]
 			editor.rebuild()
 		"placeat":
-			editor.place_at(float(p[1]))
+			var ad := p[1].split(",")
+			editor.place_at(float(ad[0]), float(ad[1]) if ad.size() > 1 else 1.0)
 		"pick":
 			editor.pick(int(p[1]))
 		"ghost":
-			editor._preview.ghost = float(p[1])
+			var ad := p[1].split(",")
+			editor._preview.ghost = {"a": float(ad[0]), "d": float(ad[1]) if ad.size() > 1 else 1.0}
+		"mode":
+			editor.mode = p[1]
+			editor.rebuild()
+		"pull":
+			var ad := p[1].split(",")
+			editor.evo.reshape(float(ad[0]), float(ad[1]), editor.mirror)
+			editor.shape_done()
+		"shape":
+			evo.set_shape(p[1])
+			pond.player.sync_player(evo)
 		"close":
 			editor.visible = false
 			setup.visible = false
 			pond.player.sync_player(evo)
+		"swipe":
+			# Провести пальцем: x,y — откуда, dy — насколько вверх/вниз (точки экрана).
+			var q := p[1].split(",")
+			var from := Vector2(float(q[0]), float(q[1]))
+			var down := InputEventScreenTouch.new()
+			down.position = from
+			down.pressed = true
+			Input.parse_input_event(down)
+			for i in range(1, 9):
+				var mv := InputEventScreenDrag.new()
+				mv.position = from + Vector2(0, float(q[2]) * i / 8.0)
+				mv.relative = Vector2(0, float(q[2]) / 8.0)
+				mv.velocity = Vector2(0, float(q[2]) * 4.0)
+				Input.parse_input_event(mv)
+			var up := InputEventScreenTouch.new()
+			up.position = from + Vector2(0, float(q[2]))
+			up.pressed = false
+			Input.parse_input_event(up)
 		"banner":
 			hud.announce("Размер 3", "Места на теле больше: 5. Вокруг появятся новые клетки")
 		"print":

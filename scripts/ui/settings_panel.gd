@@ -78,9 +78,7 @@ func rebuild() -> void:
 	head.add_child(close)
 	_body.add_child(head)
 
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	var scroll := preload("res://scripts/ui/drag_scroll.gd").new()
 	_body.add_child(scroll)
 	var col := Kit.vbox(10)
 	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -108,7 +106,6 @@ func rebuild() -> void:
 	_toggle(col, "Вибрация", "Отклик на укусы, победы и находки", "vibration")
 
 	_section(col, "Экран")
-	_choice(col, "Как держать телефон", "landscape", [[false, "Вертикально"], [true, "Горизонтально"]])
 	_toggle(col, "Показывать задачу", "Строка с подсказкой, что делать дальше", "show_goal")
 	_toggle(col, "Стрелки к находкам", "У края экрана — куда уплыла выпавшая часть; с глазками — откуда плывёт хищник", "arrows")
 

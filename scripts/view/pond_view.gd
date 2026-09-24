@@ -27,7 +27,7 @@ func setup(p: Pond) -> void:
 ## Глазки отодвигают ещё немного.
 func target_zoom() -> float:
 	var p := pond.player
-	return 2.3 * pow(16.0 / p.radius, 0.85) / (1.0 + 0.1 * minf(p.eyes, 4.0))
+	return 2.3 * pow(16.0 / p.size_r, 0.85) / (1.0 + 0.06 * minf(p.eyes, 4.0))
 
 func view_rect() -> Rect2:
 	var size := get_viewport_rect().size / camera.zoom
@@ -80,6 +80,9 @@ func effects(events: Array) -> void:
 					_shake = minf(1.0, _shake + 0.5)
 			"kill":
 				_bits(e.pos, e.color, 14, 120.0)
+				if e.get("golden", false):
+					_bits(e.pos, Art.GOLD, 24, 160.0)
+					_ring(e.pos, e.radius * 3.0, Art.GOLD, 1.0)
 				for i in 8:
 					_fx.append({"k": "bubble", "pos": e.pos + Vector2(randf() - 0.5, randf() - 0.5) * e.radius, "life": 1.3, "r": randf_range(2.0, 5.0)})
 				_ring(e.pos, e.radius * 1.6, Color(1, 1, 1, 0.8), 0.5)
@@ -146,8 +149,9 @@ func _draw() -> void:
 	_draw_fx()
 
 func _creature(c: Creature) -> void:
-	CellArt.creature(self, c.pos, c.radius, c.heading, c.color, c.parts, c.phase, {
+	CellArt.creature(self, c.pos, c.size_r, c.heading, c.color, c.parts, c.phase, {
 		"flash": c.flash, "bite": c.bite_anim, "poisoned": c.poison_t > 0.0, "wobble": c.wobble,
+		"shape": c.shape, "golden": c.golden,
 	})
 	if not c.is_player and c.hp < c.max_hp - 0.01:
 		var w := maxf(c.radius * 1.6, 18.0)

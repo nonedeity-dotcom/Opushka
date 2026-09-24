@@ -1,8 +1,12 @@
 ## «Эволюция»: редактор твоей клетки и атлас видов.
 ##
-## Тело: выбираешь часть внизу, ведёшь пальцем по краю клетки — видно, куда она встанет, —
-## отпускаешь. Нажал на часть на клетке — её можно убрать, ДНК вернётся. Цвет, зеркальная
-## установка, имя вида.
+## Два режима тела:
+## «Части» — выбираешь часть справа, ведёшь пальцем по клетке — видно, куда она встанет, —
+## отпускаешь. Шипы, рты, жгутики встают на край; глаз, хлоропласт и электроклетку можно
+## поставить куда угодно внутрь, хоть в самую середину. Нажал на часть на клетке — её можно
+## убрать, ДНК вернётся.
+## «Форма» — ведёшь пальцем по клетке: тянешь наружу — край вытягивается, внутрь —
+## втягивается. Готовые формы, сглаживание, цвет.
 ## Атлас: кого встречал, кто чем опасен и что роняет — с шансами.
 extends Control
 
@@ -10,27 +14,32 @@ signal closed
 signal changed
 
 const RoundButton := preload("res://scripts/ui/round_button.gd")
+const DragScroll := preload("res://scripts/ui/drag_scroll.gd")
+
+const PRESETS := [["round", "Круг"], ["oval", "Овал"], ["drop", "Капля"], ["wide", "Широкий"], ["star", "Звезда"], ["bean", "Боб"], ["blob", "Клякса"]]
 
 var evo: Evolution
-var landscape := false
+var landscape := true
 var tab := "body"
+var mode := "parts"
 var selected := ""
 var picked := -1
-var mirror := false
+var mirror := true
 var _sheet: PanelContainer
 var _root: VBoxContainer
 var _info: Label
 var _info_row: HBoxContainer
 var _preview: Preview
+var _palette_scroll: ScrollContainer
 
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	_sheet = PanelContainer.new()
-	_sheet.add_theme_stylebox_override("panel", Kit.box(Art.BG, 0, Color(0, 0, 0, 0), 20))
+	_sheet.add_theme_stylebox_override("panel", Kit.box(Art.BG, 0, Color(0, 0, 0, 0), 18))
 	add_child(_sheet)
-	_root = Kit.vbox(12)
+	_root = Kit.vbox(10)
 	_sheet.add_child(_root)
 	resized.connect(_place)
 
@@ -50,39 +59,33 @@ func _place() -> void:
 func rebuild() -> void:
 	if evo == null:
 		return
+	var keep_scroll := _palette_scroll.scroll_vertical if is_instance_valid(_palette_scroll) else 0
 	for c in _root.get_children():
 		_root.remove_child(c)
 		c.queue_free()
+	_palette_scroll = null
 	_place()
 	_root.add_child(_header())
-	var tabs := Kit.hbox(10)
-	tabs.add_child(_tab("Тело", "body"))
-	tabs.add_child(_tab("Атлас", "atlas"))
-	var chips := Kit.hbox(8)
-	chips.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	chips.alignment = BoxContainer.ALIGNMENT_END
-	chips.add_child(_chip("ДНК %d" % evo.dna_free(), Art.GREEN))
-	chips.add_child(_chip("Части %d/%d" % [evo.body.size(), evo.slots()], Art.TEXT))
-	tabs.add_child(chips)
-	_root.add_child(tabs)
 	if tab == "body":
 		_body_tab()
+		if _palette_scroll:
+			_palette_scroll.set_deferred("scroll_vertical", keep_scroll)
 	else:
 		_atlas_tab()
 
 
 func _header() -> HBoxContainer:
-	var head := Kit.hbox(12)
+	var head := Kit.hbox(10)
 	var icon := IconBox.new()
 	icon.icon = "dna"
-	icon.custom_minimum_size = Vector2(48, 48)
+	icon.custom_minimum_size = Vector2(46, 46)
 	head.add_child(icon)
-	var title := Kit.label("Эволюция", 32, Art.TEXT, true)
-	head.add_child(title)
+	head.add_child(Kit.label("Эволюция", 30, Art.TEXT, true))
 	# Имя вида — прямо в заголовке, нажал и пишешь.
 	var name_edit := LineEdit.new()
 	name_edit.text = evo.name
 	name_edit.max_length = 18
+	name_edit.custom_minimum_size = Vector2(200, 0)
 	name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_edit.add_theme_font_size_override("font_size", 22)
 	name_edit.add_theme_color_override("font_color", Art.MUTED)
@@ -91,78 +94,96 @@ func _header() -> HBoxContainer:
 	name_edit.tooltip_text = "Имя твоего вида"
 	name_edit.text_changed.connect(func(t):
 		if t.strip_edges() != "":
-			evo.name = t.strip_edges()
-			changed.emit())
+			evo.name = t.strip_edges())
+	name_edit.focus_exited.connect(func(): changed.emit())
 	head.add_child(name_edit)
+	head.add_child(_toggle("Тело", tab == "body", func():
+		tab = "body"
+		rebuild()))
+	head.add_child(_toggle("Атлас", tab == "atlas", func():
+		tab = "atlas"
+		selected = ""
+		picked = -1
+		rebuild()))
+	head.add_child(_chip("ДНК %d" % evo.dna_free(), Art.GREEN))
+	head.add_child(_chip("Части %d/%d" % [evo.body.size(), evo.slots()], Art.TEXT))
 	var done := RoundButton.new()
-	done.setup("check", "Готово", 64)
+	done.setup("check", "Готово", 60)
 	done.accent = true
 	done.pressed.connect(func(): closed.emit())
 	head.add_child(done)
 	return head
 
-func _tab(text: String, id: String) -> Button:
+func _toggle(text: String, on: bool, action: Callable, h := 52.0) -> Button:
 	var b := Button.new()
 	b.text = text
 	b.toggle_mode = true
-	b.button_pressed = tab == id
+	b.button_pressed = on
 	b.focus_mode = Control.FOCUS_NONE
-	b.custom_minimum_size = Vector2(140, 54)
-	b.add_theme_stylebox_override("normal", Kit.box(Art.CARD, 27))
-	b.add_theme_stylebox_override("hover", Kit.box(Art.CARD, 27))
-	b.add_theme_stylebox_override("pressed", Kit.box(Art.GREEN, 27))
-	b.add_theme_stylebox_override("hover_pressed", Kit.box(Art.GREEN, 27))
+	b.custom_minimum_size = Vector2(0, h)
+	b.add_theme_font_size_override("font_size", 22)
+	for st in ["normal", "hover"]:
+		b.add_theme_stylebox_override(st, Kit.box(Art.CARD, 26, Color(0, 0, 0, 0), 18))
+	for st in ["pressed", "hover_pressed"]:
+		b.add_theme_stylebox_override(st, Kit.box(Art.GREEN, 26, Color(0, 0, 0, 0), 18))
 	b.add_theme_color_override("font_pressed_color", Art.BG)
 	b.add_theme_color_override("font_hover_pressed_color", Art.BG)
-	b.pressed.connect(func():
-		tab = id
-		selected = ""
-		picked = -1
-		rebuild())
+	b.pressed.connect(action)
 	return b
 
 func _chip(text: String, col: Color) -> PanelContainer:
-	return Kit.card(Kit.label(text, 20, col, true), Art.CARD, 16, 10)
+	var c := Kit.card(Kit.label(text, 20, col, true), Art.CARD, 16, 10)
+	c.mouse_filter = Control.MOUSE_FILTER_PASS
+	return c
 
 
 # --- тело -----------------------------------------------------------------------------
 
 func _body_tab() -> void:
+	var cols := Kit.hbox(16)
+	cols.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_root.add_child(cols)
+
+	var left := Kit.vbox(8)
+	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left.size_flags_stretch_ratio = 0.85
 	_preview = Preview.new()
 	_preview.editor = self
 	_preview.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_preview.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left.add_child(_preview)
+	left.add_child(_stats())
+	cols.add_child(left)
+
+	var right := Kit.vbox(10)
+	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var modes := Kit.hbox(8)
+	modes.add_child(_toggle("Части", mode == "parts", func():
+		mode = "parts"
+		rebuild()))
+	modes.add_child(_toggle("Форма и цвет", mode == "shape", func():
+		mode = "shape"
+		selected = ""
+		picked = -1
+		rebuild()))
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	modes.add_child(spacer)
+	var mir := _toggle("Зеркально", mirror, func(): pass)
+	mir.tooltip_text = "Ставить части и тянуть форму сразу с двух сторон"
+	mir.toggled.connect(func(on): mirror = on)
+	modes.add_child(mir)
+	right.add_child(modes)
 	_info = Kit.muted("", 20)
 	_info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_info_row = Kit.hbox(10)
 	_info_row.add_child(_info)
-	var palette := _palette()
-	var tools := _tools()
-	var stats := _stats()
-	if landscape:
-		var cols := Kit.hbox(16)
-		cols.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		var left := Kit.vbox(10)
-		left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		left.size_flags_stretch_ratio = 0.9
-		left.add_child(_preview)
-		left.add_child(stats)
-		var right := Kit.vbox(10)
-		right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		right.add_child(_info_row)
-		right.add_child(tools)
-		right.add_child(palette)
-		cols.add_child(left)
-		cols.add_child(right)
-		_root.add_child(cols)
+	right.add_child(_info_row)
+	if mode == "parts":
+		right.add_child(_palette())
 	else:
-		_preview.custom_minimum_size = Vector2(0, size.y * 0.3)
-		_preview.size_flags_vertical = Control.SIZE_FILL
-		_root.add_child(_preview)
-		_root.add_child(stats)
-		_root.add_child(_info_row)
-		_root.add_child(tools)
-		_root.add_child(palette)
+		right.add_child(_shape_tools())
+	cols.add_child(right)
 	_update_info()
 
 ## Что умеет тело сейчас — в цифрах, чтобы было видно, что даёт каждая часть.
@@ -189,46 +210,14 @@ func _stats() -> HFlowContainer:
 		flow.add_child(_chip("Яд", Color("#8fe070")))
 	if c.zap > 0.0:
 		flow.add_child(_chip("Ток", Color("#f2e05a")))
-	if c.eyes > 0.0:
-		flow.add_child(_chip("Зрение +%d%%" % int(minf(c.eyes, 4.0) * 30.0), Art.TEXT))
+	flow.add_child(_chip("Обзор %d" % int(c.vision), Art.TEXT if c.eyes > 0.0 else Art.MUTED))
 	if c.regen > 0.0:
 		flow.add_child(_chip("Свет", Color("#8ad07a")))
 	return flow
 
-func _tools() -> HBoxContainer:
-	var row := Kit.hbox(10)
-	var mir := Button.new()
-	mir.toggle_mode = true
-	mir.button_pressed = mirror
-	mir.focus_mode = Control.FOCUS_NONE
-	mir.text = "Зеркально"
-	mir.custom_minimum_size = Vector2(0, 52)
-	mir.add_theme_font_size_override("font_size", 20)
-	mir.add_theme_stylebox_override("normal", Kit.box(Art.CARD, 26))
-	mir.add_theme_stylebox_override("hover", Kit.box(Art.CARD, 26))
-	mir.add_theme_stylebox_override("pressed", Kit.box(Art.GREEN_DARK, 26))
-	mir.add_theme_stylebox_override("hover_pressed", Kit.box(Art.GREEN_DARK, 26))
-	mir.tooltip_text = "Ставить часть сразу с двух сторон"
-	mir.toggled.connect(func(on): mirror = on)
-	row.add_child(mir)
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(spacer)
-	for i in Content.COLORS.size():
-		var sw := Swatch.new()
-		sw.color = Color(Content.COLORS[i])
-		sw.on = evo.color == i
-		sw.pressed.connect(func():
-			evo.color = i
-			changed.emit()
-			rebuild())
-		row.add_child(sw)
-	return row
-
 func _palette() -> ScrollContainer:
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	var scroll := DragScroll.new()
+	_palette_scroll = scroll
 	var grid := GridContainer.new()
 	grid.columns = 4
 	grid.add_theme_constant_override("h_separation", 10)
@@ -257,6 +246,47 @@ func _palette() -> ScrollContainer:
 		grid.add_child(tile)
 	return scroll
 
+func _shape_tools() -> ScrollContainer:
+	var scroll := DragScroll.new()
+	var col := Kit.vbox(12)
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(col)
+	col.add_child(Kit.label("Готовые формы", 22, Art.TEXT, true))
+	var flow := HFlowContainer.new()
+	flow.add_theme_constant_override("h_separation", 8)
+	flow.add_theme_constant_override("v_separation", 8)
+	for pr in PRESETS:
+		var id: String = pr[0]
+		var b := _toggle(pr[1], false, func():
+			evo.set_shape(id)
+			changed.emit()
+			rebuild(), 56)
+		b.toggle_mode = false
+		b.icon = null
+		flow.add_child(b)
+	var smooth := _toggle("Сгладить", false, func():
+		evo.smooth_shape()
+		changed.emit()
+		rebuild(), 56)
+	smooth.toggle_mode = false
+	flow.add_child(smooth)
+	col.add_child(flow)
+	col.add_child(Kit.label("Цвет", 22, Art.TEXT, true))
+	var colors := HFlowContainer.new()
+	colors.add_theme_constant_override("h_separation", 6)
+	for i in Content.COLORS.size():
+		var sw := Swatch.new()
+		sw.color = Color(Content.COLORS[i])
+		sw.on = evo.color == i
+		sw.pressed.connect(func():
+			evo.color = i
+			changed.emit()
+			rebuild())
+		colors.add_child(sw)
+	col.add_child(colors)
+	col.add_child(Kit.muted("Форма — для вида, а не для силы: драка идёт по кругу того же размера. Вытянутое тело чуть крупнее круглого.", 18))
+	return scroll
+
 func _update_info() -> void:
 	if _info == null:
 		return
@@ -265,6 +295,9 @@ func _update_info() -> void:
 			_info_row.remove_child(c)
 			c.queue_free()
 	_info.add_theme_color_override("font_color", Art.MUTED)
+	if mode == "shape":
+		_info.text = "Веди пальцем по клетке: наружу — край вытягивается, внутрь — втягивается. «Зеркально» — сразу с двух сторон."
+		return
 	if picked >= 0 and picked < evo.body.size():
 		var id: String = evo.body[picked].id
 		var def: Dictionary = Content.PARTS[id]
@@ -288,11 +321,12 @@ func _update_info() -> void:
 		if evo.unlocked.has(selected):
 			var lvl: int = evo.unlocked[selected]
 			var up := "" if lvl >= Content.PART_MAX_LEVEL else ", копий к следующему %d/%d" % [evo.shards.get(selected, 0), Evolution.copies_for(lvl)]
-			_info.text = "%s (ур. %d%s) · %d ДНК — %s. Веди пальцем по краю клетки и отпусти." % [def.name, lvl, up, def.cost, Content.lc_first(def.hint)]
+			var where := "куда угодно на клетке, хоть в середину" if def.get("inner", false) else "на край клетки"
+			_info.text = "%s (ур. %d%s) · %d ДНК — %s. Веди пальцем %s и отпусти." % [def.name, lvl, up, def.cost, Content.lc_first(def.hint), where]
 		else:
 			_info.text = "%s — ещё не найдена. %s" % [def.name, where_to_get(selected)]
 	else:
-		_info.text = "Выбери часть внизу и веди пальцем по краю клетки. Нажми на часть на клетке — её можно убрать."
+		_info.text = "Выбери часть и веди пальцем по клетке. Нажми на часть на клетке — её можно убрать."
 
 ## «Выпадает из: Колючка (30%)» — только из тех, кого уже встречал.
 func where_to_get(id: String) -> String:
@@ -312,11 +346,11 @@ func _say(text: String) -> void:
 		_info.text = text
 		_info.add_theme_color_override("font_color", Art.TEXT)
 
-## Нажали на край клетки в редакторе (угол от носа, градусы).
-func place_at(angle: float) -> void:
+## Отпустили палец на клетке: поставить выбранную часть (угол от носа — градусы).
+func place_at(angle: float, depth := 1.0) -> void:
 	if selected == "" or not evo.unlocked.has(selected):
 		return
-	var out := evo.place(selected, int(round(angle)), mirror)
+	var out := evo.place(selected, int(round(angle)), mirror, depth)
 	if out.ok:
 		changed.emit()
 		rebuild()
@@ -331,16 +365,21 @@ func pick(index: int) -> void:
 	if _preview:
 		_preview.queue_redraw()
 
+func shape_done() -> void:
+	changed.emit()
+	rebuild()
+
 
 # --- атлас ----------------------------------------------------------------------------
 
 func _atlas_tab() -> void:
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	var col := Kit.vbox(10)
-	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(col)
+	var scroll := DragScroll.new()
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 10)
+	grid.add_theme_constant_override("v_separation", 10)
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(grid)
 	_root.add_child(scroll)
 	var ids: Array = Content.SPECIES.keys()
 	ids.sort_custom(func(a, b): return Content.SPECIES[a].levels[0] * 100 + Content.SPECIES[a].radius < Content.SPECIES[b].levels[0] * 100 + Content.SPECIES[b].radius)
@@ -349,12 +388,14 @@ func _atlas_tab() -> void:
 		if not evo.seen.has(id):
 			hidden += 1
 			continue
-		col.add_child(_species_card(id))
+		grid.add_child(_species_card(id))
 	var total := Content.SPECIES.size()
-	var line := "Встречено видов: %d из %d." % [total - hidden, total]
+	var line := "Встречено видов: %d из %d. Сияющих побеждено: %d." % [total - hidden, total, evo.stats.get("golden", 0)]
 	if hidden > 0:
 		line += " Остальные живут глубже — подрасти, и они появятся."
-	col.add_child(Kit.muted(line, 20))
+	var note := Kit.muted(line, 20)
+	note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_root.add_child(note)
 
 func _species_card(id: String) -> PanelContainer:
 	var def: Dictionary = Content.SPECIES[id]
@@ -366,9 +407,9 @@ func _species_card(id: String) -> PanelContainer:
 	var text := Kit.vbox(4)
 	text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var kind: String = {"grazer": "мирный", "skittish": "пугливый", "drifter": "дрейфует", "hunter": "хищник", "boss": "великан"}[def.behavior]
-	text.add_child(Kit.label("%s · %s" % [def.name, kind], 24, Art.DANGER if def.behavior == "hunter" or def.get("hunts", false) else Art.TEXT, true))
-	text.add_child(Kit.muted(def.hint, 18))
-	text.add_child(Kit.muted("Размеры %d–%d · побед: %d" % [def.levels[0], def.levels[1], evo.kills_by.get(id, 0)], 18))
+	text.add_child(Kit.label("%s · %s" % [def.name, kind], 22, Art.DANGER if def.behavior == "hunter" or def.get("hunts", false) else Art.TEXT, true))
+	text.add_child(Kit.muted(def.hint, 17))
+	text.add_child(Kit.muted("Размеры %d–%d · побед: %d" % [def.levels[0], def.levels[1], evo.kills_by.get(id, 0)], 17))
 	var drops := HFlowContainer.new()
 	drops.add_theme_constant_override("h_separation", 8)
 	drops.add_theme_constant_override("v_separation", 6)
@@ -380,17 +421,22 @@ func _species_card(id: String) -> PanelContainer:
 		drops.add_child(chip)
 	text.add_child(drops)
 	row.add_child(text)
-	return Kit.card(row, Art.CARD, 20, 12)
+	var card := Kit.card(row, Art.CARD, 20, 12)
+	card.mouse_filter = Control.MOUSE_FILTER_PASS
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	return card
 
 
 # --- мелкие части ---------------------------------------------------------------------
 
-## Клетка крупно. Касание края — поставить выбранную часть; касание части — выбрать её.
+## Клетка крупно. «Части»: касание — примерка выбранной части, отпустил — поставил;
+## без выбора касание части выделяет её. «Форма»: палец тянет край тела.
 class Preview:
 	extends Control
 	var editor
 	var t := 0.0
-	var ghost := INF  # угол, куда встанет часть, пока палец на экране
+	var ghost := {}  # {a — градусы, d} — куда встанет часть, пока палец на экране
+	var shaping := false
 
 	func _ready() -> void:
 		mouse_filter = Control.MOUSE_FILTER_STOP
@@ -400,35 +446,63 @@ class Preview:
 		queue_redraw()
 
 	func _radius() -> float:
-		return minf(size.x, size.y) * 0.27
+		return minf(size.x, size.y) * 0.25
 
-	func _angle_at(p: Vector2) -> float:
-		# Нос клетки смотрит вверх: угол от носа = угол точки + 90°.
-		return rad_to_deg(wrapf((p - size / 2.0).angle() + PI / 2.0, -PI, PI))
+	## Угол от носа (градусы) и расстояние от середины для точки на экране.
+	func _polar(p: Vector2) -> Vector2:
+		var v := p - size / 2.0
+		return Vector2(rad_to_deg(wrapf(v.angle() + PI / 2.0, -PI, PI)), v.length())
+
+	func _ghost_at(p: Vector2) -> Dictionary:
+		var pol := _polar(p)
+		var edge := _radius() * Content.shape_at(editor.evo.shape, deg_to_rad(pol.x))
+		var d := 1.0
+		if pol.y < edge * 0.8:
+			d = minf(pol.y / (edge * 0.72), 0.9)
+		return {"a": pol.x, "d": d}
 
 	func _gui_input(e: InputEvent) -> void:
+		var evo: Evolution = editor.evo
 		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
 			if e.pressed:
-				if editor.selected != "":
-					ghost = _angle_at(e.position)
+				if editor.mode == "shape":
+					shaping = true
+					_pull(e.position)
+				elif editor.selected != "":
+					ghost = _ghost_at(e.position)
 				else:
 					editor.pick(_part_at(e.position))
-			elif ghost != INF:
-				var a := ghost
-				ghost = INF
-				editor.place_at(a)
+			else:
+				if shaping:
+					shaping = false
+					editor.shape_done()
+				elif not ghost.is_empty():
+					var g := ghost
+					ghost = {}
+					editor.place_at(g.a, g.d)
 			accept_event()
-		elif e is InputEventMouseMotion and ghost != INF:
-			ghost = _angle_at(e.position)
-			accept_event()
+		elif e is InputEventMouseMotion:
+			if shaping:
+				_pull(e.position)
+				accept_event()
+			elif not ghost.is_empty():
+				ghost = _ghost_at(e.position)
+				accept_event()
+
+	## Потянуть край туда, где палец.
+	func _pull(p: Vector2) -> void:
+		var pol := _polar(p)
+		editor.evo.reshape(pol.x, pol.y / _radius(), editor.mirror)
 
 	func _part_at(p: Vector2) -> int:
+		var evo: Evolution = editor.evo
 		var r := _radius()
 		var best := -1
-		var best_d := r * 0.5
-		for i in editor.evo.body.size():
-			var a := deg_to_rad(editor.evo.body[i].a) - PI / 2.0
-			var d := p.distance_to(size / 2.0 + Vector2.from_angle(a) * r)
+		var best_d := r * 0.4
+		var parts := evo.body_parts()
+		for i in parts.size():
+			var at := CellArt.part_anchor(parts[i], size / 2.0, r, -PI / 2.0, evo.shape)
+			var d := p.distance_to(at)
 			if d < best_d:
 				best_d = d
 				best = i
@@ -438,22 +512,27 @@ class Preview:
 		var evo: Evolution = editor.evo
 		var c := size / 2.0
 		var r := _radius()
-		draw_circle(c, r * 1.9, Color(0.07, 0.13, 0.17))
-		if editor.selected != "":
-			for i in 24:
-				var a := TAU * i / 24.0
-				draw_circle(c + Vector2.from_angle(a) * r * 1.02, 2.0, Color(1, 1, 1, 0.25))
+		draw_circle(c, minf(size.x, size.y) * 0.49, Color(0.07, 0.13, 0.17))
+		# Пределы формы — едва заметными кольцами.
+		if editor.mode == "shape":
+			draw_arc(c, r * Content.SHAPE_MIN, 0, TAU, 48, Color(1, 1, 1, 0.08), 1.5, true)
+			draw_arc(c, r * Content.SHAPE_MAX, 0, TAU, 64, Color(1, 1, 1, 0.08), 1.5, true)
 		var col := Color(Content.COLORS[evo.color])
-		CellArt.creature(self, c, r, -PI / 2.0, col, evo.body_parts(), t, {"pick": editor.picked, "shadow": false})
+		CellArt.creature(self, c, r, -PI / 2.0, col, evo.body_parts(), t, {"pick": editor.picked, "shadow": false, "shape": evo.shape})
 		# Нос — маленькая стрелка сверху, чтобы было видно, где перёд.
-		draw_colored_polygon(PackedVector2Array([c + Vector2(0, -r * 1.75), c + Vector2(-9, -r * 1.55), c + Vector2(9, -r * 1.55)]), Color(1, 1, 1, 0.35))
-		if ghost != INF and editor.selected != "":
-			var snapped := Evolution.snap(ghost)
-			var ok: bool = evo.can_place(editor.selected, snapped).ok
+		var nose := c + Vector2(0, -r * Content.shape_at(evo.shape, 0.0) - r * 0.55)
+		draw_colored_polygon(PackedVector2Array([nose, nose + Vector2(-9, 16), nose + Vector2(9, 16)]), Color(1, 1, 1, 0.35))
+		if not ghost.is_empty() and editor.selected != "":
+			var snapped := Evolution.snap(ghost.a)
+			var depth := Evolution.snap_depth(editor.selected, ghost.d)
+			if depth == 0.0:
+				snapped = 0
+			var ok: bool = evo.can_place(editor.selected, snapped, depth).ok
 			var tint := Color("#8fe0a0") if ok else Color("#e07070")
-			CellArt.creature(self, c, r, -PI / 2.0, Color(tint, 0.0), [{"id": editor.selected, "a": deg_to_rad(snapped), "lvl": evo.unlocked.get(editor.selected, 1)}], t, {"ghost": 0.75, "shadow": false})
-			var at := c + Vector2.from_angle(deg_to_rad(snapped) - PI / 2.0) * r * 1.35
-			draw_circle(at, 8, tint)
+			var part := {"id": editor.selected, "a": deg_to_rad(snapped), "d": depth, "lvl": evo.unlocked.get(editor.selected, 1)}
+			CellArt.part_alone(self, part, c, r, -PI / 2.0, col, t, 0.8, evo.shape)
+			var at := CellArt.part_anchor(part, c, r, -PI / 2.0, evo.shape)
+			draw_arc(at, r * 0.28, 0, TAU, 32, tint, 3.0, true)
 
 ## Плитка части в палитре: значок, имя, цена, уровень.
 class PartTile:
@@ -468,32 +547,33 @@ class PartTile:
 	func _ready() -> void:
 		flat = true
 		focus_mode = Control.FOCUS_NONE
-		custom_minimum_size = Vector2(150, 156)
+		mouse_filter = Control.MOUSE_FILTER_PASS
+		custom_minimum_size = Vector2(140, 150)
 
 	func _draw() -> void:
 		var r := Rect2(Vector2.ZERO, size)
 		var have := level > 0
 		draw_style_box(Kit.box(Art.CARD if have else Color(0.08, 0.1, 0.12), 20, Art.GOLD if picked else Color(0, 0, 0, 0)), r)
-		var icon := Rect2(size.x / 2.0 - 40, 8, 80, 80)
+		var icon := Rect2(size.x / 2.0 - 38, 6, 76, 76)
 		CellArt.part_icon(self, id, icon, color if have else Color("#3a4450"), 0.0, 1.0 if have else 0.35)
 		var font := get_theme_default_font()
 		var def: Dictionary = Content.PARTS[id]
 		var name: String = def.name
 		var fs := 18 if name.length() < 12 else 15
 		var w := font.get_string_size(name, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
-		draw_string(font, Vector2((size.x - w) / 2.0, 108), name, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Art.TEXT if have else Art.MUTED)
+		draw_string(font, Vector2((size.x - w) / 2.0, 102), name, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Art.TEXT if have else Art.MUTED)
 		if have:
 			var cost := "%d ДНК" % def.cost
 			var cw := font.get_string_size(cost, HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x
-			draw_string(font, Vector2((size.x - cw) / 2.0, 130), cost, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Art.GREEN if cheap else Art.ACCENT)
+			draw_string(font, Vector2((size.x - cw) / 2.0, 124), cost, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Art.GREEN if cheap else Art.ACCENT)
 			for i in Content.PART_MAX_LEVEL:
 				var x := size.x / 2.0 + (i - 2) * 13.0
-				draw_circle(Vector2(x, 144), 4, Art.GOLD if i < level else Color(1, 1, 1, 0.15))
+				draw_circle(Vector2(x, 138), 4, Art.GOLD if i < level else Color(1, 1, 1, 0.15))
 				# Следующая точка заполняется по мере того, как копятся копии.
 				if i == level and progress > 0.0:
-					draw_circle(Vector2(x, 144), 4.0 * progress, Color(Art.GOLD, 0.7))
+					draw_circle(Vector2(x, 138), 4.0 * progress, Color(Art.GOLD, 0.7))
 		else:
-			Icons.draw(self, "lock", Rect2(size.x / 2.0 - 11, 120, 22, 22), Art.MUTED)
+			Icons.draw(self, "lock", Rect2(size.x / 2.0 - 11, 114, 22, 22), Art.MUTED)
 
 class Swatch:
 	extends Button
@@ -503,13 +583,14 @@ class Swatch:
 	func _ready() -> void:
 		flat = true
 		focus_mode = Control.FOCUS_NONE
-		custom_minimum_size = Vector2(44, 52)
+		mouse_filter = Control.MOUSE_FILTER_PASS
+		custom_minimum_size = Vector2(56, 56)
 
 	func _draw() -> void:
 		var c := size / 2.0
-		draw_circle(c, 17, color)
+		draw_circle(c, 20, color)
 		if on:
-			draw_arc(c, 21, 0, TAU, 32, Art.GOLD, 3, true)
+			draw_arc(c, 25, 0, TAU, 32, Art.GOLD, 3, true)
 
 class IconBox:
 	extends Control
@@ -525,6 +606,9 @@ class Mini:
 	var species := ""
 	var t := 0.0
 
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_PASS
+
 	func _process(delta: float) -> void:
 		t += delta
 		queue_redraw()
@@ -533,10 +617,10 @@ class Mini:
 		var def: Dictionary = Content.SPECIES[species]
 		var parts: Array = []
 		for p in def.parts:
-			parts.append({"id": p[0], "a": deg_to_rad(p[1]), "lvl": p[2]})
+			parts.append({"id": p[0], "a": deg_to_rad(p[1]), "d": 1.0, "lvl": p[2]})
 		draw_circle(size / 2.0, size.x / 2.0, Color(0.07, 0.13, 0.17))
-		var r := size.x * 0.24
-		CellArt.creature(self, size / 2.0 + Vector2(r * 0.25, 0), r, PI, Color(def.color), parts, t, {"shadow": false})
+		var r := size.x * 0.22
+		CellArt.creature(self, size / 2.0 + Vector2(r * 0.25, 0), r, PI, Color(def.color), parts, t, {"shadow": false, "shape": Content.shape_preset(def.get("shape", "round"))})
 
 ## «шип 30%» — часть, которую роняет вид, и шанс.
 class DropChip:
@@ -549,6 +633,7 @@ class DropChip:
 		return "%s %d%%" % [Content.PARTS[part].name, int(round(chance * 100.0))]
 
 	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_PASS
 		var w := get_theme_default_font().get_string_size(_text(), HORIZONTAL_ALIGNMENT_LEFT, -1, 18).x
 		custom_minimum_size = Vector2(56 + w, 40)
 

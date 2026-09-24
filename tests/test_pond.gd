@@ -214,3 +214,26 @@ func test_океан_наполняется(c) -> void:
 	c.ok("в начале хищников нет", not p.mobs.any(func(m): return p._hunts(m)))
 	var lvl := p.evo.level()
 	c.ok("только виды своего размера", p.mobs.all(func(m): return lvl >= Content.SPECIES[m.species].levels[0] and lvl <= Content.SPECIES[m.species].levels[1]))
+
+func test_туман_и_глаза(c) -> void:
+	var blind := _pond()
+	var eyed := _pond(_evo_with([["filter", 0], ["eye", 0, 1]], 40.0))
+	eyed.evo.body[-1].d = 0.0
+	eyed.player.sync_player(eyed.evo)
+	c.ok("с глазом видно дальше", eyed.player.vision > blind.player.vision * 1.3)
+	c.ok("без глаз — только рядом", blind.player.vision < 200.0)
+
+func test_сияющая_особь(c) -> void:
+	var p := _pond()
+	var plain := Creature.of_species("kolyuchka")
+	var g := p.spawn("kolyuchka", Vector2(3000, 0), true)
+	c.ok("крепче обычной", g.max_hp > plain.max_hp)
+	c.eq("пугливая", g.behavior(), "skittish")
+	var drops := 0
+	for i in 30:
+		var m := p.spawn("kolyuchka", Vector2(5000, 0), true)
+		m.player_hit_t = 0.0
+		m.alive = false
+		p._deaths()
+		drops += p.events.filter(func(e): return e.t == "drop").size()
+	c.ok("из сияющей выпадает всегда", drops >= 30)

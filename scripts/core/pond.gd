@@ -361,18 +361,26 @@ func _deaths() -> void:
 			var off := Vector2.from_angle(rng.randf() * TAU) * rng.randf() * m.radius * 0.8
 			food.append({"pos": m.pos + off, "kind": "meat", "value": 1, "r": 5.0, "t": 0.0, "v": rng.randi() % 256, "eaten": false})
 		var by_player := m.player_hit_t < KILL_CREDIT
-		events.append({"t": "kill", "pos": m.pos, "species": m.species, "by_player": by_player, "radius": m.radius, "color": m.color})
+		events.append({"t": "kill", "pos": m.pos, "species": m.species, "by_player": by_player, "radius": m.radius, "color": m.color, "golden": m.golden})
 		if by_player:
 			evo.count("kills")
 			evo.kills_by[m.species] = evo.kills_by.get(m.species, 0) + 1
-			var bonus: float = 1.0 + 1.5 * def.tier
+			if m.golden:
+				evo.count("golden")
+			var bonus: float = (1.0 + 1.5 * def.tier) * (3.0 if m.golden else 1.0)
 			events[-1].dna = bonus
 			_gain(bonus)
+			var dropped: Array = []
 			for d in def.drops:
 				if rng.randf() < d[1]:
-					var at: Vector2 = m.pos + Vector2.from_angle(rng.randf() * TAU) * m.radius * 0.5
-					capsules.append({"pos": at, "part": d[0], "t": 0.0})
-					events.append({"t": "drop", "part": d[0], "pos": at})
+					dropped.append(d[0])
+			# Из сияющей что-нибудь выпадает всегда.
+			if m.golden and dropped.is_empty() and not def.drops.is_empty():
+				dropped.append(def.drops[rng.randi() % def.drops.size()][0])
+			for part in dropped:
+				var at: Vector2 = m.pos + Vector2.from_angle(rng.randf() * TAU) * m.radius * 0.5
+				capsules.append({"pos": at, "part": part, "t": 0.0})
+				events.append({"t": "drop", "part": part, "pos": at})
 	if not dead.is_empty():
 		mobs = mobs.filter(func(m): return m.alive)
 	if not player.alive:
@@ -565,11 +573,14 @@ func _spawn_mob(anywhere := false) -> Creature:
 			break
 	var inner := view_radius + 60.0
 	var r := rng.randf_range(inner, inner + (900.0 if anywhere else 600.0))
-	return spawn(pick, player.pos + Vector2.from_angle(rng.randf() * TAU) * r)
+	var golden: bool = Content.SPECIES[pick].behavior != "boss" and rng.randf() < Content.GOLDEN_CHANCE
+	return spawn(pick, player.pos + Vector2.from_angle(rng.randf() * TAU) * r, golden)
 
 ## Поставить клетку вида id в точку — и для проверок тоже.
-func spawn(id: String, at: Vector2) -> Creature:
+func spawn(id: String, at: Vector2, golden := false) -> Creature:
 	var m := Creature.of_species(id)
+	if golden:
+		m.make_golden()
 	m.pos = at
 	m.heading = rng.randf() * TAU - PI
 	m.ai_t = rng.randf() * 0.2
@@ -589,6 +600,10 @@ func _manage() -> void:
 	for i in mini(_mob_target() - mobs.size(), 3):
 		_spawn_mob()
 	for m in mobs:
-		if not evo.seen.has(m.species) and m.pos.distance_to(player.pos) < view_radius * 0.9:
+		var near := m.pos.distance_to(player.pos) < player.vision + m.radius
+		if near and not evo.seen.has(m.species):
 			evo.seen[m.species] = true
 			events.append({"t": "seen", "species": m.species})
+		if near and m.golden and not m.announced:
+			m.announced = true
+			events.append({"t": "golden", "species": m.species, "pos": m.pos})

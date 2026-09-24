@@ -12,12 +12,10 @@ const Indicators := preload("res://scripts/ui/indicators.gd")
 signal dash_pressed
 signal editor_pressed
 signal settings_pressed
-signal rotate_pressed
 
 var pad: Control
 var dash: Control
 var editor_btn: Button
-var rotate_btn: Button
 var settings_btn: Button
 var size_pill: Control
 var dna_pill: Control
@@ -59,8 +57,6 @@ func _ready() -> void:
 	hp_bar = HpBar.new()
 	add_child(hp_bar)
 
-	rotate_btn = _round("rotate", "Повернуть экран", 64)
-	rotate_btn.pressed.connect(func(): rotate_pressed.emit())
 	settings_btn = _round("settings", "Настройки", 64)
 	settings_btn.pressed.connect(func(): settings_pressed.emit())
 
@@ -129,7 +125,7 @@ func apply_settings(s: Settings, landscape: bool) -> void:
 	pad.visible = s.control == "stick"
 	if not pad.visible:
 		pad.release()
-	for n in [pad, dash, editor_btn, rotate_btn, settings_btn]:
+	for n in [pad, dash, editor_btn, settings_btn]:
 		n.floating = true
 	indicators.enabled = s.arrows
 	pad.queue_redraw()
@@ -158,7 +154,7 @@ func hurt() -> void:
 
 ## Пришлось ли касание на что-то из интерфейса.
 func covers(p: Vector2) -> bool:
-	for n in [pad, dash, editor_btn, rotate_btn, settings_btn, size_pill, dna_pill, hp_bar, goal_card]:
+	for n in [pad, dash, editor_btn, settings_btn, size_pill, dna_pill, hp_bar, goal_card]:
 		if n.visible and n.get_global_rect().grow(10).has_point(p):
 			return true
 	return false
@@ -220,10 +216,9 @@ func _layout() -> void:
 	hp_bar.position = Vector2(left, top + 74)
 	hp_bar.size = Vector2(size_pill.size.x + 10 + dna_pill.size.x, 26)
 	settings_btn.position = Vector2(right - 64, top)
-	rotate_btn.position = Vector2(right - 64 * 2 - 10, top)
 	if _landscape:
 		goal_card.position = Vector2(dna_pill.position.x + dna_pill.size.x + 14, top)
-		goal_card.size = Vector2(minf(560.0, rotate_btn.position.x - goal_card.position.x - 14), 64)
+		goal_card.size = Vector2(minf(560.0, settings_btn.position.x - goal_card.position.x - 14), 64)
 	else:
 		goal_card.position = Vector2(left, top + 112)
 		goal_card.size = Vector2(right - left, 0)

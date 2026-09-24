@@ -11,81 +11,122 @@ extends RefCounted
 const OUTSIDE := ["proboscis", "cilia", "flagellum", "flagellum2", "spike", "spike2"]
 
 
-## Клетка целиком. opts: flash, bite, poisoned, wobble, ghost (прозрачность 0–1),
-## pick (номер выделенной части), shadow.
+## Клетка целиком. r — «рост» клетки; opts: shape (форма тела), flash, bite, poisoned,
+## wobble, ghost (прозрачность 0–1), pick (номер выделенной части), shadow, golden.
 static func creature(ci: CanvasItem, at: Vector2, r: float, heading: float, color: Color, parts: Array, t: float, opts := {}) -> void:
 	var w: float = opts.get("wobble", 0.0)
 	var alpha: float = opts.get("ghost", 1.0)
 	var bite: float = opts.get("bite", 0.0)
 	var pick: int = opts.get("pick", -1)
-	if opts.get("shadow", true):
-		Art.ellipse(ci, at + Vector2(r * 0.12, r * 0.18), r * 1.02, r * 0.98, Color(0, 0, 0, 0.22 * alpha))
-	for i in parts.size():
-		if parts[i].id in OUTSIDE:
-			_part(ci, parts[i], at, r, heading, color, t + w, bite, alpha, i == pick)
-	# Тело — живая капля: край чуть колышется.
+	var shape: Array = opts.get("shape", [])
+	# Тело — живая капля своей формы: край чуть колышется.
 	var body := PackedVector2Array()
-	var n := 30
+	var n := 40
 	for i in n:
 		var th := TAU * i / n
 		var k := 1.0 + 0.025 * sin(3.0 * th + t * 2.0 + w) + 0.018 * sin(5.0 * th - t * 1.4 + w * 2.0)
-		body.append(at + Vector2.from_angle(th) * r * k)
-	var fill := Color(color, alpha)
-	ci.draw_colored_polygon(body, fill)
+		body.append(at + Vector2.from_angle(heading + th) * r * Content.shape_at(shape, th) * k)
+	if opts.get("golden", false):
+		var glow := 0.5 + 0.5 * sin(t * 3.0 + w)
+		for g in 3:
+			ci.draw_circle(at, r * (1.5 + g * 0.25 + glow * 0.1), Color(1.0, 0.85, 0.35, 0.07))
+	if opts.get("shadow", true):
+		var shadow := PackedVector2Array()
+		for q in body:
+			shadow.append(q + Vector2(r * 0.12, r * 0.18))
+		ci.draw_colored_polygon(shadow, Color(0, 0, 0, 0.22 * alpha))
+	for i in parts.size():
+		if parts[i].id in OUTSIDE:
+			_part(ci, parts[i], at, r, heading, color, t + w, bite, alpha, i == pick, shape)
+	ci.draw_colored_polygon(body, Color(color, alpha))
 	var edge := body.duplicate()
 	edge.append(body[0])
 	ci.draw_polyline(edge, Color(color.darkened(0.45), alpha), maxf(1.5, r * 0.09), true)
 	var fwd := Vector2.from_angle(heading)
 	Art.ellipse(ci, at + fwd * r * 0.18 + fwd.orthogonal() * r * 0.2, r * 0.55, r * 0.42, Color(1, 1, 1, 0.13 * alpha), heading)
 	# Ядро — ближе к хвосту, органоиды вокруг.
-	var nucleus := at - fwd * r * 0.22
+	var nucleus := at - fwd * r * 0.22 * Content.shape_at(shape, PI)
 	ci.draw_circle(nucleus, r * 0.3, Color(color.darkened(0.3), alpha))
 	ci.draw_circle(nucleus + fwd.orthogonal() * r * 0.08, r * 0.1, Color(color.darkened(0.55), alpha))
 	for i in 3:
-		var a := heading + 1.3 + i * 1.9 + w
-		ci.draw_circle(at + Vector2.from_angle(a) * r * 0.55, r * 0.07, Color(color.lightened(0.35), 0.8 * alpha))
+		var a := 1.3 + i * 1.9 + w
+		ci.draw_circle(at + Vector2.from_angle(heading + a) * r * 0.55 * Content.shape_at(shape, a), r * 0.07, Color(color.lightened(0.35), 0.8 * alpha))
 	for i in parts.size():
 		if not parts[i].id in OUTSIDE:
-			_part(ci, parts[i], at, r, heading, color, t + w, bite, alpha, i == pick)
+			_part(ci, parts[i], at, r, heading, color, t + w, bite, alpha, i == pick, shape)
 	var flash: float = opts.get("flash", 0.0)
 	if flash > 0.0:
 		ci.draw_colored_polygon(body, Color(1, 0.85, 0.8, 0.55 * flash))
 	if opts.get("poisoned", false):
 		ci.draw_colored_polygon(body, Color(0.5, 0.95, 0.3, 0.18 + 0.08 * sin(t * 8.0)))
+	if opts.get("golden", false):
+		ci.draw_polyline(edge, Color(1.0, 0.9, 0.5, 0.6 + 0.3 * sin(t * 4.0)), maxf(1.5, r * 0.08), true)
+		# Искорки кружат вокруг и мерцают.
+		for i in 5:
+			var a := t * 0.9 + TAU * i / 5.0
+			var at2 := at + Vector2.from_angle(a) * r * (1.45 + 0.12 * sin(t * 2.0 + i))
+			var tw := 0.5 + 0.5 * sin(t * 6.0 + i * 1.7)
+			var len := r * 0.18 * (0.5 + tw)
+			ci.draw_line(at2 - Vector2(len, 0), at2 + Vector2(len, 0), Color(1, 0.95, 0.6, tw), maxf(1.0, r * 0.05), true)
+			ci.draw_line(at2 - Vector2(0, len), at2 + Vector2(0, len), Color(1, 0.95, 0.6, tw), maxf(1.0, r * 0.05), true)
 
-static func _part(ci: CanvasItem, p: Dictionary, at: Vector2, r: float, heading: float, color: Color, t: float, bite: float, alpha: float, picked: bool) -> void:
+## Где у тела часть: точка и поворот. На краю — по форме тела; внутри — ближе к середине.
+static func part_anchor(p: Dictionary, at: Vector2, r: float, heading: float, shape: Array) -> Vector2:
+	var d: float = p.get("d", 1.0)
+	var edge := r * Content.shape_at(shape, p.a)
+	var k := 0.93 if d >= 0.999 else d * 0.72
+	return at + Vector2.from_angle(heading + p.a) * edge * k
+
+## Внутренняя часть в своей системе нарисована не с нуля: сдвиг до её середины.
+const INNER_CENTER := {"eye": Vector2(-2.5, 0), "chloroplast": Vector2(-6.0, 0), "electro": Vector2(-1.5, 0)}
+
+## Одна часть. Годится и для «примерки» в редакторе.
+static func _part(ci: CanvasItem, p: Dictionary, at: Vector2, r: float, heading: float, color: Color, t: float, bite: float, alpha: float, picked: bool, shape: Array) -> void:
 	var ang: float = heading + p.a
 	var s := r / 20.0 * (1.0 + 0.08 * (int(p.get("lvl", 1)) - 1))
-	var dir := Vector2.from_angle(ang)
+	var pos := part_anchor(p, at, r, heading, shape)
+	var d: float = p.get("d", 1.0)
 	if p.id == "shell" or p.id == "membrane":
-		_rim_part(ci, p.id, at, r, ang, alpha)
+		_rim_part(ci, p.id, at, r, heading, p.a, alpha, shape)
+	elif d < 0.999:
+		# Внутри тела часть смотрит вперёд — так глаз посередине глядит по ходу.
+		var rot := heading if d < 0.05 else ang
+		var off: Vector2 = INNER_CENTER.get(p.id, Vector2.ZERO)
+		ci.draw_set_transform(pos - off.rotated(rot) * s, rot, Vector2(s, s))
+		part_shape(ci, p.id, color, t, bite, alpha)
+		ci.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	else:
-		ci.draw_set_transform(at + dir * r * 0.93, ang, Vector2(s, s))
+		ci.draw_set_transform(pos, ang, Vector2(s, s))
 		part_shape(ci, p.id, color, t, bite, alpha)
 		ci.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	if picked:
-		ci.draw_arc(at + dir * r * 1.05, r * 0.32, 0, TAU, 24, Color(Art.GOLD, 0.9), maxf(2.0, r * 0.06), true)
+		ci.draw_arc(pos, r * 0.3, 0, TAU, 24, Color(Art.GOLD, 0.9), maxf(2.0, r * 0.06), true)
 
-## Панцирь и мембрана лежат по краю тела дугой.
-static func _rim_part(ci: CanvasItem, id: String, at: Vector2, r: float, ang: float, alpha: float) -> void:
+## Одна часть отдельно — «примерка» в редакторе.
+static func part_alone(ci: CanvasItem, p: Dictionary, at: Vector2, r: float, heading: float, color: Color, t: float, alpha: float, shape: Array) -> void:
+	_part(ci, p, at, r, heading, color, t, 0.3, alpha, false, shape)
+
+## Панцирь и мембрана лежат по краю тела дугой — по его форме.
+static func _rim_part(ci: CanvasItem, id: String, at: Vector2, r: float, heading: float, a: float, alpha: float, shape: Array) -> void:
 	var half := deg_to_rad(Content.PARTS[id].get("arc", 35) * 0.8 if id == "shell" else 32.0)
-	var inner := r * (0.84 if id == "shell" else 0.9)
-	var outer := r * (1.12 if id == "shell" else 1.06)
-	var pts := PackedVector2Array()
+	var inner := 0.84 if id == "shell" else 0.9
+	var outer := 1.12 if id == "shell" else 1.06
 	var n := 10
+	var out_pts := PackedVector2Array()
+	var in_pts := PackedVector2Array()
 	for i in n + 1:
-		pts.append(at + Vector2.from_angle(ang - half + 2.0 * half * i / n) * outer)
-	for i in n + 1:
-		pts.append(at + Vector2.from_angle(ang + half - 2.0 * half * i / n) * inner)
+		var q := a - half + 2.0 * half * i / n
+		var edge := r * Content.shape_at(shape, q)
+		out_pts.append(at + Vector2.from_angle(heading + q) * edge * outer)
+		in_pts.append(at + Vector2.from_angle(heading + q) * edge * inner)
+	var pts := out_pts.duplicate()
+	for i in range(n, -1, -1):
+		pts.append(in_pts[i])
 	if id == "shell":
 		ci.draw_colored_polygon(pts, Color("#b9a784", alpha))
-		for i in range(1, 4):
-			var a := ang - half + 2.0 * half * i / 4.0
-			ci.draw_line(at + Vector2.from_angle(a) * inner, at + Vector2.from_angle(a) * outer, Color("#8a7a5a", alpha), maxf(1.0, r * 0.05), true)
-		var rim := PackedVector2Array()
-		for i in n + 1:
-			rim.append(at + Vector2.from_angle(ang - half + 2.0 * half * i / n) * outer)
-		ci.draw_polyline(rim, Color("#e0d2b0", alpha), maxf(1.0, r * 0.05), true)
+		for i in [3, 5, 7]:
+			ci.draw_line(in_pts[i], out_pts[i], Color("#8a7a5a", alpha), maxf(1.0, r * 0.05), true)
+		ci.draw_polyline(out_pts, Color("#e0d2b0", alpha), maxf(1.0, r * 0.05), true)
 	else:
 		ci.draw_colored_polygon(pts, Color(1, 1, 1, 0.22 * alpha))
 
@@ -183,7 +224,7 @@ static func part_icon(ci: CanvasItem, id: String, rect: Rect2, color: Color, t :
 		origin.x -= rect.size.x * 0.12
 	ci.draw_circle(origin + Vector2(-18.0 * s, 0), 18.0 * s, Color(color, 0.9 * alpha))
 	if id == "shell" or id == "membrane":
-		_rim_part(ci, id, origin + Vector2(-18.0 * s, 0), 18.0 * s, 0.0, alpha)
+		_rim_part(ci, id, origin + Vector2(-18.0 * s, 0), 18.0 * s, 0.0, 0.0, alpha, [])
 		return
 	ci.draw_set_transform(origin + Vector2(-18.0 * s + 18.0 * s * 0.93, 0), 0.0, Vector2(s * 0.9, s * 0.9))
 	part_shape(ci, id, color, t, 0.3, alpha)

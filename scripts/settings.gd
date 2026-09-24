@@ -12,7 +12,6 @@ var sound := true
 var volume := "normal"
 var ambience := true
 var vibration := true
-var landscape := false
 var show_goal := true
 ## Стрелки у края экрана: к выпавшим частям, а с глазками — и к хищникам.
 var arrows := true
@@ -27,7 +26,7 @@ const CHOICES := {
 	"buttons": ["small", "normal", "large"],
 	"volume": ["quiet", "normal", "loud"],
 }
-const FLAGS := ["sound", "ambience", "vibration", "landscape", "show_goal", "arrows"]
+const FLAGS := ["sound", "ambience", "vibration", "show_goal", "arrows"]
 
 func to_dict() -> Dictionary:
 	var d := {}

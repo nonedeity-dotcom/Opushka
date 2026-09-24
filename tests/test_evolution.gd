@@ -76,7 +76,9 @@ func test_находки(c) -> void:
 	c.ok("вторая — третий уровень", e.collect("spike").up and e.unlocked.spike == 3)
 	var copies := 1  # та, что открыла часть
 	copies += 1 + 2
-	while e.unlocked.spike < Content.PART_MAX_LEVEL:
+	for i in 50:
+		if e.unlocked.spike >= Content.PART_MAX_LEVEL:
+			break
 		e.collect("spike")
 		copies += 1
 	c.eq("до пятого — десять копий после первой", copies - 1, 1 + 2 + 3 + 4)
@@ -121,3 +123,32 @@ func test_справочник(c) -> void:
 			found[d[0]] = true
 	var missing := Content.PARTS.keys().filter(func(p): return not found.has(p) and not Content.START_UNLOCKED.has(p))
 	c.eq("каждую часть можно где-то добыть", missing, [])
+
+func test_части_внутри(c) -> void:
+	var e := Evolution.create()
+	e.unlocked.eye = 1
+	e.add_dna(200)
+	var mid := e.place("eye", 45, false, 0.05)
+	c.ok("глаз ставится в середину", mid.ok and e.body[-1].d == 0.0 and e.body[-1].a == 0)
+	c.ok("второй глаз вплотную к нему — тесно", e.can_place("eye", 90, 0.2).reason.begins_with("Тесно"))
+	c.ok("а поодаль — можно", e.can_place("eye", 90, 0.6).ok)
+	e.unlocked.spike = 1
+	var rim := e.place("spike", 90, false, 0.3)
+	c.ok("шип внутрь не уходит — только на край", rim.ok and e.body[-1].d == 1.0)
+
+func test_форма(c) -> void:
+	var e := Evolution.create()
+	c.ok("сначала круг", e.shape.all(func(v): return is_equal_approx(v, 1.0)))
+	e.reshape(0, 1.5)
+	c.ok("нос вытянут", e.shape[0] > 1.45)
+	c.ok("соседи — плавно", e.shape[1] > 1.0 and e.shape[1] < e.shape[0])
+	c.ok("хвост не тронут", is_equal_approx(e.shape[8], 1.0))
+	e.reshape(90, 0.7, true)
+	c.ok("зеркально — оба бока", e.shape[4] < 0.8 and e.shape[12] < 0.8)
+	e.reshape(180, 9.0)
+	c.ok("не больше предела", e.shape[8] <= Content.SHAPE_MAX)
+	e.set_shape("oval")
+	c.ok("овал: нос длиннее боков", e.shape[0] > e.shape[4])
+	var copy := Evolution.from_dict(JSON.parse_string(JSON.stringify(e.to_dict())))
+	c.eq("форма сохраняется", copy.shape, e.shape)
+	c.ok("форма между точками — плавная", absf(Content.shape_at(e.shape, 0.1) - e.shape[0]) < 0.05)

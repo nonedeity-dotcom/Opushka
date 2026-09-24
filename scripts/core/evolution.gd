@@ -7,10 +7,14 @@
 class_name Evolution
 extends RefCounted
 
-const VERSION := 1
+const VERSION := 2
 
 var dna_total := 0.0
-var body: Array = []  # [{id, a — угол в градусах}]
+## Части: id, a — угол в градусах от носа, d — глубина: 1 — на краю, 0 — в середине.
+## Внутрь ставятся только «внутренние» части (глаз, хлоропласт, электроклетка).
+var body: Array = []
+## Форма тела: радиус в Content.SHAPE_POINTS направлениях, 1 — круг.
+var shape: Array = []
 var color := 0
 var name := "Клеточка"
 var unlocked := {}  # часть → уровень 1–5
@@ -25,6 +29,7 @@ static func create() -> Evolution:
 	var e := Evolution.new()
 	e.body = Content.START_PARTS.duplicate(true)
 	e.unlocked = Content.START_UNLOCKED.duplicate()
+	e.shape = Content.shape_preset("round")
 	return e
 
 
@@ -86,8 +91,20 @@ static func snap(angle: float) -> int:
 static func angle_gap(a: float, b: float) -> float:
 	return absf(wrapf(a - b, -180.0, 180.0))
 
-## Можно ли поставить часть на этот угол. {ok, reason}. Рот ставится вместо старого.
-func can_place(id: String, angle: int) -> Dictionary:
+## Глубина по сетке; у самой середины — ровно середина. Краевые части — всегда на краю.
+static func snap_depth(id: String, depth: float) -> float:
+	if not Content.PARTS[id].get("inner", false):
+		return 1.0
+	if depth < 0.2:
+		return 0.0
+	return clampf(round(depth / Content.DEPTH_STEP) * Content.DEPTH_STEP, 0.0, 1.0)
+
+## Где часть сидит на теле — в радиусах тела, без учёта формы.
+static func anchor(a: float, d: float) -> Vector2:
+	return Vector2.from_angle(deg_to_rad(a)) * d
+
+## Можно ли поставить часть на этот угол и глубину. {ok, reason}. Рот ставится вместо старого.
+func can_place(id: String, angle: int, depth := 1.0) -> Dictionary:
 	if not unlocked.has(id):
 		return {"ok": false, "reason": "Эта часть ещё не найдена"}
 	var cost: int = Content.PARTS[id].cost
@@ -101,17 +118,21 @@ func can_place(id: String, angle: int) -> Dictionary:
 		return {"ok": false, "reason": "Нет места: подрасти, чтобы поместилось больше частей"}
 	if cost > free:
 		return {"ok": false, "reason": "Не хватает ДНК: нужно %d, свободно %d" % [cost, free]}
+	var here := anchor(angle, snap_depth(id, depth))
 	for p in body:
 		if p.id == old_mouth:
 			continue
-		if angle_gap(p.a, angle) < Content.PART_SPACING:
+		if anchor(p.a, p.get("d", 1.0)).distance_to(here) < Content.PART_GAP - 0.001:
 			return {"ok": false, "reason": "Тесно: рядом уже есть часть"}
 	return {"ok": true, "reason": ""}
 
 ## Поставить часть. mirror — заодно и с другой стороны, если место и ДНК позволяют.
-func place(id: String, angle: int, mirror := false) -> Dictionary:
+func place(id: String, angle: int, mirror := false, depth := 1.0) -> Dictionary:
 	angle = snap(angle)
-	var check := can_place(id, angle)
+	depth = snap_depth(id, depth)
+	if depth == 0.0:
+		angle = 0
+	var check := can_place(id, angle, depth)
 	if not check.ok:
 		return {"ok": false, "message": check.reason}
 	if Content.is_mouth(id):
@@ -119,12 +140,12 @@ func place(id: String, angle: int, mirror := false) -> Dictionary:
 			if Content.is_mouth(body[i].id):
 				body.remove_at(i)
 				break
-	body.append({"id": id, "a": angle})
+	body.append({"id": id, "a": angle, "d": depth})
 	stats.edits = stats.get("edits", 0) + 1
 	var twin := false
-	if mirror and not Content.is_mouth(id) and angle != 0 and absi(angle) != 180:
-		if can_place(id, -angle).ok:
-			body.append({"id": id, "a": -angle})
+	if mirror and not Content.is_mouth(id) and angle != 0 and absi(angle) != 180 and depth > 0.0:
+		if can_place(id, -angle, depth).ok:
+			body.append({"id": id, "a": -angle, "d": depth})
 			twin = true
 	var name_: String = Content.PARTS[id].name
 	return {"ok": true, "message": ("Поставлено: %s ×2" if twin else "Поставлено: %s") % name_.to_lower()}
@@ -142,8 +163,34 @@ func remove(index: int) -> Dictionary:
 func body_parts() -> Array:
 	var out: Array = []
 	for p in body:
-		out.append({"id": p.id, "a": deg_to_rad(p.a), "lvl": unlocked.get(p.id, 1)})
+		out.append({"id": p.id, "a": deg_to_rad(p.a), "d": float(p.get("d", 1.0)), "lvl": unlocked.get(p.id, 1)})
 	return out
+
+
+# --- форма ----------------------------------------------------------------------------
+
+## Потянуть край тела в направлении angle (градусы от носа) до value радиусов. Соседние
+## точки подтягиваются мягче — край получается плавным, без зубцов.
+func reshape(angle: float, value: float, mirror := false) -> void:
+	value = clampf(value, Content.SHAPE_MIN, Content.SHAPE_MAX)
+	var n := shape.size()
+	for i in n:
+		var ai := 360.0 * i / n
+		for a in ([angle, -angle] if mirror else [angle]):
+			var w := maxf(0.0, 1.0 - angle_gap(ai, a) / 40.0)
+			if w > 0.0:
+				shape[i] = lerpf(shape[i], value, w * w)
+
+func set_shape(preset: String) -> void:
+	shape = Content.shape_preset(preset)
+
+## Сгладить: каждая точка — к среднему соседей.
+func smooth_shape() -> void:
+	var n := shape.size()
+	var out: Array = []
+	for i in n:
+		out.append((shape[(i - 1 + n) % n] + shape[i] * 2.0 + shape[(i + 1) % n]) / 4.0)
+	shape = out
 
 
 # --- находки --------------------------------------------------------------------------
@@ -226,6 +273,7 @@ func to_dict() -> Dictionary:
 		"version": VERSION,
 		"dna_total": dna_total,
 		"body": body.duplicate(true),
+		"shape": shape.duplicate(),
 		"color": color,
 		"name": name,
 		"unlocked": unlocked.duplicate(),
@@ -254,10 +302,13 @@ static func from_dict(d: Variant) -> Evolution:
 		e.body = []
 		for p in d.body:
 			if p is Dictionary and e.unlocked.has(str(p.get("id", ""))) and (p.get("a") is int or p.get("a") is float):
-				e.body.append({"id": str(p.id), "a": snap(float(p.a))})
+				var dep = p.get("d", 1.0)
+				e.body.append({"id": str(p.id), "a": snap(float(p.a)), "d": snap_depth(str(p.id), float(dep) if (dep is int or dep is float) else 1.0)})
 		# Сломанное или слишком дорогое тело — назад к стартовому, лишь бы клетка жила.
 		if e.body.size() > e.slots() or e.dna_free() < 0:
 			e.body = Content.START_PARTS.duplicate(true)
+	if d.get("shape") is Array and d.shape.size() == Content.SHAPE_POINTS and d.shape.all(func(v): return v is int or v is float):
+		e.shape = d.shape.map(func(v): return clampf(float(v), Content.SHAPE_MIN, Content.SHAPE_MAX))
 	var c = d.get("color")
 	if (c is int or c is float) and int(c) >= 0 and int(c) < Content.COLORS.size():
 		e.color = int(c)
