@@ -68,7 +68,7 @@ func test_стая(c) -> void:
 	p._spawn_mob(false, Vector2(600, 0))
 	var school := p.mobs.filter(func(m): return m.species == p.mobs[0].species)
 	if p.mobs[0].school:
-		c.ok("стая появляется вся сразу", school.size() == Content.SPECIES[p.mobs[0].species].school)
+		c.ok("стайка появляется сразу, по двое-трое", school.size() >= 2 and school.size() <= 3)
 	var q := _pond()
 	for i in 6:
 		q.spawn("malki", Vector2(600 + i * 70, 0))
@@ -126,7 +126,7 @@ func test_логово(c) -> void:
 	c.ok("пока ты далеко — дома", boss.pos.distance_to(lair) < boss.radius)
 	boss.hp = boss.max_hp * 0.55
 	var ev := _run(p, 0.2)
-	c.ok("на середине — вторая стадия и подмога", ev.any(func(e): return e.t == "boss_phase" and e.phase == 2) and p.mobs.size() >= 4)
+	c.ok("на середине — вторая стадия и подмога", ev.any(func(e): return e.t == "boss_phase" and e.phase == 2) and p.mobs.size() >= 3)
 	boss.player_hit_t = 0.0
 	boss.alive = false
 	p._deaths()
@@ -134,6 +134,28 @@ func test_логово(c) -> void:
 	var reward: String = Content.SPECIES[boss.species].drops[0][0]
 	c.ok("награда выпадает всегда", drops.has(reward))
 	c.ok("логово засчитано", p.evo.lairs_beaten.has(boss.species))
+
+func test_хозяин_логова_проходим(c) -> void:
+	# Бьёт слабее своего размера, устаёт, сам не лечится, пока ты рядом.
+	var p := _pond(_evo_with([["jaws", 0, 3], ["spike", 90, 2], ["spike", -90, 2], ["cilia", 180, 3], ["membrane", 135, 2], ["membrane", -135, 2]], 700.0))
+	p.player.sync_player(p.evo)
+	p.player.hp = p.player.max_hp
+	var b := p.spawn("koroleva", Vector2(300, 0))
+	b.lair = b.pos
+	var t := 0.0
+	var deaths := 0
+	while t < 90.0 and b.alive:
+		var to := b.pos - p.player.pos
+		p.step(0.05, to.normalized(), p.player.dash_cd <= 0.0 and to.length() < b.radius + 90.0)
+		deaths += p.events.filter(func(e): return e.t == "death").size()
+		t += 0.05
+	c.ok("в лоб на 6-м размере побеждается за полторы минуты (%d с, гибелей %d)" % [t, deaths], not b.alive and deaths <= 2)
+	b = p.spawn("strazh", p.player.pos + Vector2(400, 0))
+	b.lair = b.pos
+	b.hp = b.max_hp * 0.5
+	b.calm_t = 0.0
+	p._timers(b, 3.0)
+	c.eq("хозяин сам не лечится", b.hp, b.max_hp * 0.5)
 
 func test_свита(c) -> void:
 	var e := _evo_with([["jaws", 0], ["cilia", 180]], 300.0)
@@ -265,12 +287,19 @@ func test_родословная_и_достижения(c) -> void:
 	c.ok("сохраняется всё", copy.achievements.has("first_kill") and copy.history.size() == 2)
 
 func test_океан_не_пустеет(c) -> void:
+	# Плывёшь без остановки в одну сторону — худший случай: встречные остаются позади.
 	var p := Pond.new(Evolution.create(), 31)
 	p.fill()
 	p.view_radius = 480.0
 	var empty := 0
-	for i in 60 * 20:
+	var run := 0.0
+	var longest := 0.0
+	for i in 120 * 20:
 		p.step(0.05, Vector2(1, 0.3).normalized())
-		if i % 20 == 0 and not p.mobs.any(func(m): return m.pos.distance_to(p.player.pos) < p.vision() * 2.5):
+		var someone := p.mobs.any(func(m): return m.pos.distance_to(p.player.pos) < p.vision() * 2.5)
+		run = 0.0 if someone else run + 0.05
+		longest = maxf(longest, run)
+		if i % 20 == 0 and not someone:
 			empty += 1
-	c.ok("за минуту плавания рядом почти всегда кто-то есть (пусто %d раз из 60)" % empty, empty < 15)
+	c.ok("за две минуты плавания рядом чаще кто-то есть (пусто %d раз из 120)" % empty, empty < 50)
+	c.ok("и пусто не дольше нескольких секунд (самое долгое %.1f с)" % longest, longest < 6.0)

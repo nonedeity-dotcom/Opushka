@@ -24,7 +24,7 @@ const KILL_CREDIT := 3.0
 const REGEN_DELAY := 4.0
 ## Хищник гонится за теми, кто не больше него во столько раз.
 const PREY_RATIO := 1.3
-const MEAT_DNA := 0.8
+const MEAT_DNA := 1.3
 ## Хищник гонится не дольше стольких секунд, потом отдыхает — от него можно оторваться.
 const CHASE_TIME := 5.0
 const REST_TIME := 4.0
@@ -65,7 +65,7 @@ var lairs_done := {}
 ## Хозяин логова, который сейчас бьётся с тобой, — для полоски здоровья наверху.
 var boss_active: Creature = null
 var biome := ""
-var _director_t := 20.0
+var _director_t := 2.5
 var _kills_recent: Array = []
 ## Сколько секунд место съеденного пустует.
 const KILL_QUIET := 20.0
@@ -234,6 +234,9 @@ func _timers(c: Creature, dt: float) -> void:
 	if c.poison_t > 0.0:
 		c.poison_t -= dt
 		_hurt(c, c.poison_dps * dt, c.poison_from, "poison", true)
+	# Хозяин логова сам по себе не лечится — только дома, когда тебя давно нет.
+	if c.lair != Vector2.INF:
+		return
 	var heal := c.regen
 	if c.calm_t > REGEN_DELAY:
 		heal += 0.3 * c.size_k()
@@ -338,10 +341,12 @@ func _hurt(y: Creature, dmg: float, from: Creature, kind: String, silent := fals
 	dmg *= mult
 	if y.is_player:
 		dmg *= float(evo.diff().hurt)
+	if from != null and from.lair != Vector2.INF and kind != "wave":
+		dmg *= LAIR_DAMAGE
 	y.hp -= dmg
-	# Шипастая броня: обидчику возвращается часть удара.
+	# Шипастая броня: обидчику возвращается часть удара (у хозяина логова — вдвое меньше).
 	if y.thorns > 0.0 and from != null and from != y and kind in ["bite", "spike", "grab", "ram", "drain"]:
-		from.hp -= dmg * y.thorns
+		from.hp -= dmg * y.thorns * (0.5 if y.lair != Vector2.INF else 1.0)
 		from.flash = 1.0
 		if from.hp <= 0.0:
 			from.hp = 0.0
@@ -507,7 +512,7 @@ func _deaths() -> void:
 			evo.kills_by[m.species] = evo.kills_by.get(m.species, 0) + 1
 			if m.golden:
 				evo.count("golden")
-			var bonus: float = (0.5 + 0.75 * def.tier) * (3.0 if m.golden else 1.0)
+			var bonus: float = (0.8 + 1.1 * def.tier) * (3.0 if m.golden else 1.0)
 			events[-1].dna = bonus
 			_gain(bonus)
 			var dropped: Array = []
@@ -549,9 +554,19 @@ func _reborn() -> void:
 		events.append({"t": "permadeath", "pos": player.pos})
 		return
 	evo.count("deaths")
+	# Паразиты остаются там, где тебя съели, — не едут за новой клеткой.
+	for m in mobs:
+		if m.host == player:
+			m.host = null
 	var lost := evo.death_loss()
 	events.append({"t": "death", "pos": player.pos, "lost": lost})
+	# Новая клетка — поодаль и не у чужого логова.
 	var away := Vector2.from_angle(rng.randf() * TAU) * (view_radius * 2.0 + 400.0)
+	for i in 8:
+		var at := player.pos + away
+		if lairs_near_point(at, 1100.0).is_empty():
+			break
+		away = away.rotated(TAU / 8.0)
 	player.pos += away
 	player.vel = Vector2.ZERO
 	player.alive = true
@@ -707,7 +722,7 @@ func _mob_target() -> int:
 	# Кого ты только что съел, того место пустует ещё какое-то время: иначе хищник
 	# ел бы без передышки, а новые приплывали бы прямо под нос.
 	_kills_recent = _kills_recent.filter(func(t): return time - t < KILL_QUIET)
-	return maxi(6, mini(16 + evo.level(), 30) - _kills_recent.size())
+	return maxi(3, mini(6 + evo.level() / 3, 9) - _kills_recent.size())
 
 ## Водоросли гуще на «лугах» — пятнах плавного шума.
 func _spawn_plant(inner: float, outer: float, anywhere := false) -> void:
@@ -772,8 +787,9 @@ func _spawn_mob(anywhere := false, at := Vector2.INF) -> Creature:
 	var def: Dictionary = Content.SPECIES[pick]
 	var golden: bool = not def.behavior in ["boss", "giant", "lair"] and not def.has("school") and rng.randf() < Content.GOLDEN_CHANCE
 	var first := spawn(pick, at, golden)
-	# Стая появляется вся сразу, кучкой.
-	for i in int(def.get("school", 1)) - 1:
+	# Стайка появляется вся сразу, кучкой: двое или трое, не больше.
+	var group := rng.randi_range(2, mini(int(def.school), 3)) if def.has("school") else 1
+	for i in group - 1:
 		spawn(pick, at + Vector2.from_angle(rng.randf() * TAU) * rng.randf_range(10.0, 60.0))
 	return first
 
@@ -799,7 +815,9 @@ func _manage() -> void:
 		_spawn_plant(view_radius + 40.0, outer)
 	# Кто уплыл далеко — исчезает, а рядом появляются новые: так вокруг всегда кто-то есть.
 	var far := view_radius + 700.0
-	mobs = mobs.filter(func(m): return m.pos.distance_to(player.pos) < far or Content.SPECIES[m.species].behavior == "lair")
+	# Хозяева логов дома ждут дольше, но если уплыл совсем далеко — исчезают и они
+	# (вернёшься — логово снова занято, хозяин целый).
+	mobs = mobs.filter(func(m): return m.pos.distance_to(player.pos) < (far if m.lair == Vector2.INF else far + 2500.0))
 	capsules = capsules.filter(func(c): return c.pos.distance_to(player.pos) < far)
 	if mode != "arena":
 		for i in mini(_mob_target() - mobs.size(), 3):
@@ -990,7 +1008,8 @@ func current_at(p: Vector2) -> Vector2:
 ## Сколько видно: глаза, вода и сложность.
 func vision() -> float:
 	var v: float = player.vision * float(Content.BIOMES[biome if biome != "" else "shallows"].vision) * float(evo.diff().vision)
-	return v * (1.6 if mode == "arena" else 1.0)
+	# На арене видно весь круг — прятаться там не в чем.
+	return maxf(v * 1.6, arena_radius * 1.15) if mode == "arena" else v
 
 func _biome_effects(dt: float) -> void:
 	var b := biome_at(player.pos)
@@ -1061,6 +1080,9 @@ func _shake_off() -> void:
 # --- логова ---------------------------------------------------------------------------
 
 const LAIR_CELL := 2600.0
+## Сколько отдыхает хозяин логова после погони; бьёт он слабее своего размера.
+const LAIR_REST := 3.0
+const LAIR_DAMAGE := 0.35
 const LAIR_BOSS := {"deep": "koroleva", "hot": "strazh", "cold": "vikhr"}
 
 static func _lair_key(p: Vector2) -> Vector2i:
@@ -1086,10 +1108,22 @@ func lairs_near(within: float) -> Array:
 				out.append({"pos": p, "species": LAIR_BOSS[biome_at(p)], "done": lairs_done.has(cell)})
 	return out
 
+## Есть ли логово рядом с точкой (живое, не побеждённое).
+func lairs_near_point(at: Vector2, within: float) -> Array:
+	var out: Array = []
+	var c := _lair_key(at)
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var cell := c + Vector2i(dx, dy)
+			var p := lair_at(cell)
+			if p != Vector2.INF and p.distance_to(at) < within and not lairs_done.has(cell):
+				out.append(p)
+	return out
+
 func _lairs_around() -> void:
 	for l in lairs_near(view_radius + 1400.0):
 		var cell := _lair_key(l.pos)
-		if l.done or lairs.has(cell) and is_instance_valid(lairs[cell]) and lairs[cell].alive:
+		if l.done or lairs.has(cell) and lairs[cell].alive and mobs.has(lairs[cell]):
 			continue
 		var def: Dictionary = Content.SPECIES[l.species]
 		if evo.level() < def.levels[0]:
@@ -1102,20 +1136,29 @@ func _lair_think(m: Creature) -> void:
 	var near := player.alive and player.pos.distance_to(m.lair) < 480.0 + m.radius and player.hidden_t <= 0.0
 	if near:
 		boss_active = m
+		# Хозяин тоже устаёт: погонялся — стоит и отдыхает. Это окно, чтобы бить самому.
+		if m.resting > 0.0 or m.stamina <= 0.0:
+			if m.ai_state == "chase":
+				m.resting = LAIR_REST
+			m.ai_state = "rest"
+			m.desire = (player.pos - m.pos).normalized() * 0.15
+			return
 		m.ai_state = "chase"
 		m.desire = (player.pos + player.vel * 0.3 - m.pos).normalized()
-		var close := m.pos.distance_to(player.pos) < (m.radius + player.radius) * 1.8
+		var close := m.pos.distance_to(player.pos) < (m.radius + player.radius) * 1.6
 		if close and m.dash_cd <= 0.0:
 			_lunge(m)
-			m.dash_cd = 1.6 if m.phase_n >= 3 else 3.0
+			m.dash_cd = 3.0 if m.phase_n >= 3 else 4.5
 	else:
 		if boss_active == m:
 			boss_active = null
 		m.ai_state = "home"
 		var to := m.lair - m.pos
 		m.desire = to.normalized() * 0.5 if to.length() > m.radius else Vector2.ZERO
-		# Дома — отдыхает и залечивается.
-		m.hp = minf(m.max_hp, m.hp + m.max_hp * 0.02)
+		# Дома залечивается — но медленно и только когда тебя давно нет рядом: отплыл
+		# подлечиться — вернулся, а бой не начинается заново.
+		if m.calm_t > 8.0:
+			m.hp = minf(m.max_hp, m.hp + m.max_hp * 0.004)
 
 ## Стадии боя хозяина логова: на 60% зовёт подмогу, на 30% — ярость.
 func _bosses(dt: float) -> void:
@@ -1126,22 +1169,27 @@ func _bosses(dt: float) -> void:
 		if m.phase_n == 1 and k < 0.6:
 			m.phase_n = 2
 			var def: Dictionary = Content.SPECIES[m.species]
-			for i in 3:
-				var mob := spawn(def.minions, m.pos + Vector2.from_angle(TAU * i / 3.0) * m.radius * 1.5)
+			for i in 2:
+				var mob := spawn(def.minions, m.pos + Vector2.from_angle(PI * i + PI / 2.0) * m.radius * 1.5)
 				mob.aggro = true
 			events.append({"t": "boss_phase", "phase": 2, "species": m.species, "pos": m.pos})
 		elif m.phase_n == 2 and k < 0.3:
 			m.phase_n = 3
-			m.speed *= 1.25
+			m.speed *= 1.1
+			m.zap_cd = 3.0
 			events.append({"t": "boss_phase", "phase": 3, "species": m.species, "pos": m.pos})
 		if m.phase_n >= 3:
-			# В ярости: удар волной раз в несколько секунд.
+			# В ярости: удар волной раз в несколько секунд. За секунду до удара — вспышка,
+			# чтобы успеть отплыть.
+			var before := m.zap_cd
 			m.zap_cd -= dt
+			if before > 1.0 and m.zap_cd <= 1.0:
+				events.append({"t": "boss_charge", "pos": m.pos, "r": m.radius * 2.2, "who": m})
 			if m.zap_cd <= 0.0:
-				m.zap_cd = 4.0
+				m.zap_cd = 5.5
 				events.append({"t": "boss_wave", "pos": m.pos, "r": m.radius * 2.2})
 				if player.pos.distance_to(m.pos) < m.radius * 2.2 + player.radius:
-					_hurt(player, 6.0 * pow(m.size_k(), 0.5), m, "bite")
+					_hurt(player, 3.5 * pow(m.size_k(), 0.5), m, "wave")
 					player.vel += (player.pos - m.pos).normalized() * 300.0
 
 
@@ -1267,14 +1315,18 @@ func _mob_ability(m: Creature) -> void:
 func _directing(dt: float) -> void:
 	if mode == "arena":
 		return
+	# Пока рядом кто-то есть — ждём; стало пусто — через пару секунд кто-нибудь покажется.
+	var seen_r := vision() * 2.5
+	if mobs.any(func(m): return m.pos.distance_to(player.pos) < seen_r):
+		_director_t = 2.5
+		return
 	_director_t -= dt
 	if _director_t > 0.0:
 		return
-	_director_t = rng.randf_range(6.0, 11.0)
-	var seen_r := vision() * 2.0
-	if mobs.any(func(m): return m.pos.distance_to(player.pos) < seen_r):
-		return
-	var at := player.pos + Vector2.from_angle(rng.randf() * TAU) * (vision() + 60.0)
+	_director_t = 2.5
+	# Впереди по ходу: сзади новенький не догнал бы.
+	var dir := player.vel.angle() + rng.randf_range(-0.8, 0.8) if player.vel.length() > 20.0 else rng.randf() * TAU
+	var at := player.pos + Vector2.from_angle(dir) * (vision() + 60.0)
 	var m := _spawn_mob(false, at)
 	if m != null:
 		m.ai_state = "wander"
@@ -1287,7 +1339,7 @@ func start_arena() -> void:
 	mode = "arena"
 	spawning = false
 	arena_center = player.pos
-	arena_radius = 560.0 * pow(player.size_k(), 0.6)
+	arena_radius = 370.0 * pow(player.size_k(), 0.6)
 	mobs.clear()
 	rocks.clear()
 	food.clear()
@@ -1317,7 +1369,8 @@ func _arena(dt: float) -> void:
 	wave += 1
 	_wave_t = 3.0
 	evo.arena_best = maxi(evo.arena_best, wave - 1)
-	var pool := _species_pool()
+	# Великаны и боссы — только в каждой пятой волне, первым.
+	var pool := _species_pool().filter(func(q): return not Content.SPECIES[q[0]].behavior in ["boss", "giant"])
 	var count := 1 + wave
 	for i in count:
 		var pick: String = pool[rng.randi() % pool.size()][0]

@@ -424,6 +424,9 @@ func _handle(events: Array) -> void:
 					hud.announce(bname, "Зовёт подмогу!")
 				else:
 					hud.announce(bname, "В ярости: быстрее и бьёт волной — отплывай!")
+			"boss_charge":
+				if e.pos.distance_to(pond.player.pos) < e.r + pond.player.radius + 40.0:
+					hud.toast("Сейчас ударит волной — отплыви!")
 			"boss_wave":
 				sound.play("boss", 1.3)
 			"lair_beaten":
@@ -489,9 +492,14 @@ func _update_arrows() -> void:
 			if pond._hunts(m) and m.radius >= p.radius * 0.8 and m.pos.distance_to(p.pos) < p.sight * 2.0:
 				list.append({"at": xf * m.pos, "kind": "danger"})
 	if pond.mode == "normal":
+		# Стрелка — только к ближайшему логову, чтобы не пестрило.
+		var best: Dictionary = {}
 		for l in pond.lairs_near(2200.0):
 			if not l.done and evo.level() >= int(Content.SPECIES[l.species].levels[0]):
-				list.append({"at": xf * l.pos, "kind": "lair"})
+				if best.is_empty() or l.pos.distance_to(p.pos) < best.pos.distance_to(p.pos):
+					best = l
+		if not best.is_empty():
+			list.append({"at": xf * best.pos, "kind": "lair"})
 	hud.indicators.targets = list
 
 
@@ -602,6 +610,8 @@ func _apply_debug_args() -> void:
 			var p: PackedStringArray = item.split("@")
 			evo.unlocked[p[0]] = evo.unlocked.get(p[0], 1)
 			evo.body.append({"id": p[0], "a": int(p[1]), "d": float(p[2]) if p.size() > 2 else 1.0})
+	if args.has("brood"):
+		evo.brood = int(args.brood)
 	if args.has("color"):
 		evo.color = int(args.color)
 	if args.has("seen"):

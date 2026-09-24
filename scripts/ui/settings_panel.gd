@@ -112,7 +112,7 @@ func rebuild() -> void:
 
 	_section(col, "Твой вид")
 	var stats := Kit.hbox(10)
-	for pair in [["Размер", str(evo.level())], ["Частей", "%d/%d" % [evo.unlocked.size(), Content.PARTS.size()]], ["Побед", str(evo.stats.get("kills", 0))], ["Задачи", "%d/%d" % [evo.goals_done.size(), Content.GOALS.size()]]]:
+	for pair in [["Размер", str(evo.level())], ["Частей", "%d/%d" % [evo.unlocked.size(), Content.PARTS.keys().filter(func(k): return Content.obtainable(k)).size()]], ["Побед", str(evo.stats.get("kills", 0))], ["Задачи", "%d/%d" % [evo.goals_done.size(), Content.GOALS.size()]]]:
 		var box := Kit.vbox(0)
 		box.alignment = BoxContainer.ALIGNMENT_CENTER
 		var v := Kit.label(pair[1], 30, Art.TEXT, true)

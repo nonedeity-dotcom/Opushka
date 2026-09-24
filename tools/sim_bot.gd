@@ -22,6 +22,7 @@ func _init() -> void:
 	var next_edit := 0.0
 	var report := 60.0
 	var levels := {}
+	var where := {}
 	while t < minutes * 60.0:
 		var dash := false
 		var steer := _steer()
@@ -30,6 +31,7 @@ func _init() -> void:
 			steer = steer.normalized()
 		pond.view_radius = 400.0 * pow(pond.player.radius / 16.0, 0.85) * 1.2
 		pond.step(dt, steer, dash)
+		where[pond.biome] = where.get(pond.biome, 0.0) + dt / 60.0
 		for e in pond.events:
 			if e.t == "levelup":
 				levels[e.level] = t
@@ -45,6 +47,7 @@ func _init() -> void:
 		if t >= report:
 			report += 300.0
 	print("Итог за %d мин: размер %d, ДНК %d, смертей %d, побед %d, частей %d/%d, уровни частей %s" % [minutes, evo.level(), evo.dna_total, evo.stats.get("deaths", 0), evo.stats.get("kills", 0), evo.unlocked.size(), Content.PARTS.size(), evo.unlocked])
+	print("минут в водах: %s" % where)
 	print("съедено водорослей %d, мяса %d; тело: %s" % [evo.stats.get("plants", 0), evo.stats.get("meat", 0), evo.body.map(func(p): return "%s@%d" % [p.id, p.a])])
 	quit()
 
@@ -93,7 +96,7 @@ func _edit() -> void:
 		want_mouth = "proboscis"
 	if evo.mouth() != want_mouth:
 		evo.place(want_mouth, 0)
-	var order := ["flagellum2", "flagellum", "spike2", "spike", "shell", "membrane", "electro", "poison", "chloroplast", "eye", "cilia"]
+	var order := ["flagellum2", "flagellum", "spike2", "spike", "shell", "membrane", "thermo", "fat", "electro", "poison", "chloroplast", "eye", "cilia"]
 	var angles := [180, 90, -90, 135, -135, 45, -45, 60, -60, 150, -150, 30, -30, 120, -120, 105, -105, 165, -165, 75, -75]
 	for id in order:
 		if not evo.unlocked.has(id):

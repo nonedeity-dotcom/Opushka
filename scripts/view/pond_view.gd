@@ -145,8 +145,12 @@ func effects(events: Array) -> void:
 			"boss_phase":
 				_ring(e.pos, 200.0, Color("#c080ff"), 1.0)
 				_shake = 1.0
+			"boss_charge":
+				# Предупреждение: круг удара наливается красным за секунду до волны.
+				_fx.append({"k": "charge", "who": e.who, "r": e.r, "life": 1.0, "speed": 1.0})
 			"boss_wave":
 				_ring(e.pos, e.r, Color("#ff9070"), 0.6)
+				_shake = minf(1.0, _shake + 0.5)
 			"wave":
 				_ring(pond.arena_center, pond.arena_radius, Art.GOLD, 1.2)
 			"dash":
@@ -274,6 +278,11 @@ func _draw_fx() -> void:
 				draw_arc(f.pos, f.r, 0, TAU, 10, Color(0.8, 0.95, 1.0, 0.5 * a), 1.0, true)
 			"ring":
 				draw_arc(f.pos, f.r * (1.0 - a * 0.7), 0, TAU, 40, Color(f.col, a * 0.8), 3.0, true)
+			"charge":
+				var boss: Creature = f.who
+				var k := 1.0 - a
+				draw_circle(boss.pos, f.r, Color(1.0, 0.35, 0.25, 0.08 + 0.14 * k))
+				draw_arc(boss.pos, f.r, 0, TAU, 64, Color(1.0, 0.45, 0.3, 0.4 + 0.5 * k), 3.0 + 3.0 * k, true)
 			"zap":
 				var pts := PackedVector2Array([f.from])
 				for i in range(1, 6):
