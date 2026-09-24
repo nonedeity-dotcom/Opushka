@@ -101,7 +101,8 @@ func rebuild() -> void:
 	_section(col, "Звук")
 	_toggle(col, "Звуки", "Еда, укусы, находки, рост", "sound")
 	_toggle(col, "Звуки воды", "Тихий гул глубины", "ambience")
-	if settings.sound or settings.ambience:
+	_toggle(col, "Музыка", "Спокойная, а когда за тобой гонятся — тревожнее", "music")
+	if settings.sound or settings.ambience or settings.music:
 		_choice(col, "Громкость", "volume", [["quiet", "Тихо"], ["normal", "Средне"], ["loud", "Громко"]])
 	_toggle(col, "Вибрация", "Отклик на укусы, победы и находки", "vibration")
 

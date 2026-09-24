@@ -9,7 +9,11 @@ const DashButton := preload("res://scripts/ui/dash_button.gd")
 const RoundButton := preload("res://scripts/ui/round_button.gd")
 const Indicators := preload("res://scripts/ui/indicators.gd")
 
+## Какой значок и подпись у кнопки умения.
+const ABILITY_LOOK := {"ink": ["ink", "Чернила"], "shield": ["shield", "Щит"], "pulse": ["pulse", "Разряд"], "suck": ["suck", "Втянуть"]}
+
 signal dash_pressed
+signal ability_pressed
 signal editor_pressed
 signal atlas_pressed
 signal settings_pressed
@@ -33,6 +37,11 @@ var banner_title: Label
 var banner_sub: Label
 var indicators: Control
 var hurt_flash: ColorRect
+## Второе умение (чернила, щит, разряд, всасывание) — есть, только если есть такая часть.
+var ability_btn: Control
+var biome_chip: Control
+var boss_bar: Control
+var arena_pill: Control
 
 var _settings: Settings
 var _landscape := false
@@ -110,6 +119,19 @@ func _ready() -> void:
 	dash = DashButton.new()
 	dash.pressed.connect(func(): dash_pressed.emit())
 	add_child(dash)
+	ability_btn = DashButton.new()
+	ability_btn.tint = Color(0.42, 0.34, 0.62, 0.95)
+	ability_btn.visible = false
+	ability_btn.pressed.connect(func(): ability_pressed.emit())
+	add_child(ability_btn)
+	biome_chip = BiomeChip.new()
+	add_child(biome_chip)
+	boss_bar = BossBar.new()
+	boss_bar.visible = false
+	add_child(boss_bar)
+	arena_pill = ArenaPill.new()
+	arena_pill.visible = false
+	add_child(arena_pill)
 	editor_btn = _round("heart", "Позвать пару", 92)
 	editor_btn.accent = true
 	editor_btn.pressed.connect(func(): editor_pressed.emit())
@@ -130,7 +152,7 @@ func apply_settings(s: Settings, landscape: bool) -> void:
 	pad.visible = s.control == "stick"
 	if not pad.visible:
 		pad.release()
-	for n in [pad, dash, editor_btn, settings_btn, atlas_btn]:
+	for n in [pad, dash, ability_btn, editor_btn, settings_btn, atlas_btn]:
 		n.floating = true
 	indicators.enabled = s.arrows
 	pad.queue_redraw()
@@ -143,9 +165,36 @@ func refresh(pond: Pond) -> void:
 	size_pill.set_state(evo.level(), evo.growth())
 	dna_pill.set_value(evo.dna_free())
 	hp_bar.set_state(pond.player.hp, pond.player.max_hp, pond.player.poison_t > 0.0)
-	dash.set_cooldown(pond.player.dash_cd / Pond.DASH_CD)
+	dash.set_cooldown(pond.player.dash_cd / (Pond.DASH_CD * pond.player.dash_k))
+	var ab := pond.player.ability
+	if ability_btn.visible != (ab != ""):
+		ability_btn.visible = ab != ""
+		_layout()
+	if ab != "":
+		var look: Array = ABILITY_LOOK.get(ab, ["dash", ab])
+		if ability_btn.icon != look[0]:
+			ability_btn.icon = look[0]
+			ability_btn.caption = look[1]
+			ability_btn.queue_redraw()
+		ability_btn.set_cooldown(pond.player.ability_t / maxf(pond.player.ability_cd, 0.1))
+	var b := pond.biome if pond.biome != "" else "shallows"
+	var warn := ""
+	if b == "hot" and not pond.player.heatproof:
+		warn = "жжёт!"
+	elif b == "cold" and not pond.player.coldproof:
+		warn = "холодно"
+	biome_chip.visible = pond.mode != "arena"
+	biome_chip.set_state(b, warn)
+	var boss := pond.boss_active
+	boss_bar.visible = boss != null and boss.alive
+	if boss_bar.visible:
+		boss_bar.set_state(Content.SPECIES[boss.species].name, boss.hp / boss.max_hp, boss.phase_n)
+	arena_pill.visible = pond.mode == "arena"
+	if arena_pill.visible:
+		arena_pill.set_state(pond.wave, pond.evo.arena_best)
 	var goal := evo.current_goal()
-	goal_card.visible = _settings != null and _settings.show_goal and not goal.is_empty()
+	goal_card.visible = _settings != null and _settings.show_goal and not goal.is_empty() and pond.mode == "normal"
+	editor_btn.visible = pond.mode != "arena"
 	if goal_card.visible:
 		var n := Content.GOALS.find(goal) + 1
 		goal_title.text = "%s  ·  %d/%d" % [goal.title, n, Content.GOALS.size()]
@@ -159,7 +208,7 @@ func hurt() -> void:
 
 ## Пришлось ли касание на что-то из интерфейса.
 func covers(p: Vector2) -> bool:
-	for n in [pad, dash, editor_btn, settings_btn, atlas_btn, size_pill, dna_pill, hp_bar, goal_card]:
+	for n in [pad, dash, ability_btn, editor_btn, settings_btn, atlas_btn, size_pill, dna_pill, hp_bar, goal_card]:
 		if n.visible and n.get_global_rect().grow(10).has_point(p):
 			return true
 	return false
@@ -220,6 +269,8 @@ func _layout() -> void:
 	dna_pill.position = Vector2(left + size_pill.size.x + 10, top)
 	hp_bar.position = Vector2(left, top + 74)
 	hp_bar.size = Vector2(size_pill.size.x + 10 + dna_pill.size.x, 26)
+	biome_chip.position = Vector2(left, top + 108)
+	biome_chip.size = Vector2(hp_bar.size.x, 30)
 	settings_btn.position = Vector2(right - 64, top)
 	atlas_btn.position = Vector2(right - 64 * 2 - 10, top)
 	if _landscape:
@@ -241,9 +292,20 @@ func _layout() -> void:
 	editor_btn.size = editor_btn.custom_minimum_size
 	var toward_center := 1.0 if dash.position.x < size.x / 2.0 else -1.0
 	editor_btn.position = Vector2(dash.position.x + (dash_d + 20 if toward_center > 0 else -e - 20), dash.position.y + dash_d - e)
+	# Умение — над рывком, чуть меньше его.
+	var ab_d := 112.0 * scale
+	ability_btn.size = Vector2(ab_d, ab_d)
+	ability_btn.position = Vector2(dash.position.x + (dash_d - ab_d) / 2.0 + toward_center * dash_d * 0.35, dash.position.y - ab_d - 44)
+	var bw := minf(520.0, size.x * 0.4)
+	boss_bar.size = Vector2(bw, 58)
+	boss_bar.position = Vector2((size.x - bw) / 2.0, top + (76 if _landscape else 190))
+	arena_pill.size = Vector2(300, 64)
+	arena_pill.position = Vector2((size.x - 300) / 2.0, top)
 	indicators.position = Vector2.ZERO
 	indicators.size = size
-	indicators.margin = Rect2(Vector2(left, top + 120), Vector2(right - left, bottom - top - 120 - pad_d))
+	# Лёжа джойстик и кнопки — по углам: стрелкам хватает низа посередине.
+	var low := 60.0 if _landscape else pad_d
+	indicators.margin = Rect2(Vector2(left, top + 120), Vector2(right - left, bottom - top - 120 - low))
 	_layout_toast()
 	_layout_banner()
 
@@ -344,3 +406,94 @@ class IconBox:
 	func _draw() -> void:
 		draw_circle(size / 2.0, size.x / 2.0, Color(0.56, 0.82, 0.7, 0.15))
 		Icons.draw(self, icon, Rect2(size * 0.22, size * 0.56), Art.GREEN)
+
+## Какая вода вокруг — и предупреждение, если в ней плохо.
+class BiomeChip:
+	extends Control
+	var biome := "shallows"
+	var warn := ""
+	var t := 0.0
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func set_state(b: String, w: String) -> void:
+		if w != "":
+			t += get_process_delta_time()
+			queue_redraw()
+		if b == biome and w == warn:
+			return
+		biome = b
+		warn = w
+		queue_redraw()
+
+	func _draw() -> void:
+		var def: Dictionary = Content.BIOMES[biome]
+		var font := get_theme_default_font()
+		var text: String = def.name
+		var col := Color(def.top).lightened(0.45)
+		draw_circle(Vector2(13, 15), 8, col)
+		var pos := Vector2(30, 23)
+		draw_string_outline(font, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 20, 5, Color(0, 0, 0, 0.6))
+		draw_string(font, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 20, Art.TEXT)
+		if warn != "":
+			var x := 30 + font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 20).x + 12
+			var wc := Color(Art.DANGER if biome == "hot" else Color("#9fd8ff"), 0.7 + 0.3 * sin(t * 6.0))
+			draw_string_outline(font, Vector2(x, 23), warn, HORIZONTAL_ALIGNMENT_LEFT, -1, 20, 5, Color(0, 0, 0, 0.6))
+			draw_string(font, Vector2(x, 23), warn, HORIZONTAL_ALIGNMENT_LEFT, -1, 20, wc)
+
+## Хозяин логова: имя, здоровье и стадия боя.
+class BossBar:
+	extends Control
+	var title := ""
+	var k := 1.0
+	var phase := 1
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func set_state(n: String, hp_k: float, ph: int) -> void:
+		if n == title and absf(hp_k - k) < 0.003 and ph == phase:
+			return
+		title = n
+		k = clampf(hp_k, 0.0, 1.0)
+		phase = ph
+		queue_redraw()
+
+	func _draw() -> void:
+		var font := get_theme_default_font()
+		Icons.draw(self, "skull", Rect2(0, 0, 26, 26), Color("#c9a0ff"))
+		var text := "%s  ·  стадия %d из 3" % [title, phase]
+		draw_string_outline(font, Vector2(34, 21), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 20, 5, Color(0, 0, 0, 0.6))
+		draw_string(font, Vector2(34, 21), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 20, Art.TEXT)
+		var bar := Rect2(0, 32, size.x, 16)
+		draw_style_box(Kit.box(Color(0, 0, 0, 0.55), 8, Color(1, 1, 1, 0.2), 2), bar)
+		var col := Color("#b07ae0") if phase < 3 else Art.DANGER
+		if k > 0.0:
+			draw_style_box(Kit.box(col, 8, Color(0, 0, 0, 0), 0), Rect2(bar.position, Vector2(maxf(12.0, bar.size.x * k), bar.size.y)))
+		for mark in [0.6, 0.3]:
+			var x: float = bar.size.x * mark
+			draw_line(Vector2(x, bar.position.y), Vector2(x, bar.end.y), Color(1, 1, 1, 0.45), 2)
+
+## Арена: какая волна и лучший результат.
+class ArenaPill:
+	extends Control
+	var wave := -1
+	var best := 0
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func set_state(w: int, b: int) -> void:
+		if w == wave and b == best:
+			return
+		wave = w
+		best = b
+		queue_redraw()
+
+	func _draw() -> void:
+		draw_style_box(Kit.box(Color(0.05, 0.1, 0.13, 0.78), 32), Rect2(Vector2.ZERO, size))
+		Icons.draw(self, "trophy", Rect2(16, 14, 36, 36), Art.GOLD)
+		var font := get_theme_default_font()
+		draw_string(font, Vector2(62, 32), "Волна %d" % maxi(wave, 1), HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Art.TEXT)
+		draw_string(font, Vector2(62, 54), "рекорд: %d" % best, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Art.MUTED)

@@ -24,6 +24,19 @@ var stats := {}  # plants, meat, kills, deaths, parts_found, edits, dashes
 var kills_by := {}  # вид → сколько
 var goals_done: Array = []
 var difficulty := "normal"
+## Второй цвет и узор тела.
+var color2 := 5
+var pattern := "none"
+## Родословная: каким было тело в каждом поколении.
+var history: Array = []
+## Свита: сколько потомков плавает с тобой (растёт с поколениями, до трёх).
+var brood := 0
+var arena_best := 0
+## Песочница: все части открыты, ДНК сколько угодно, пара не нужна.
+var sandbox := false
+var biomes_seen := {}
+var lairs_beaten := {}
+var achievements := {}
 ## Поколение: сколько раз находил пару и менял тело.
 var generation := 1
 ## Сколько секунд сыграно — для меню сохранений.
@@ -48,7 +61,7 @@ func radius() -> float:
 	return Content.radius_for(level())
 
 func slots() -> int:
-	return Content.slots_for(level())
+	return 12 if sandbox else Content.slots_for(level())
 
 ## Доля пути до следующего размера, 0–1. На последнем — 1.
 func growth() -> float:
@@ -72,7 +85,7 @@ func cost_used() -> int:
 	return sum
 
 func dna_free() -> int:
-	return int(floor(dna_total)) + Content.START_DNA - cost_used()
+	return int(floor(dna_total)) + Content.START_DNA + (100000 if sandbox else 0) - cost_used()
 
 
 # --- тело -----------------------------------------------------------------------------
@@ -254,6 +267,8 @@ func _goal_met(id: String) -> bool:
 			return unlocked.size() >= 8
 		"boss":
 			return kills_by.get("velikan", 0) + kills_by.get("leviafan", 0) > 0
+		"lair":
+			return not lairs_beaten.is_empty()
 		"size10":
 			return level() >= Content.LEVELS.size()
 	return false
@@ -293,6 +308,15 @@ func to_dict() -> Dictionary:
 		"difficulty": difficulty,
 		"generation": generation,
 		"played": played,
+		"color2": color2,
+		"pattern": pattern,
+		"history": history.duplicate(true),
+		"brood": brood,
+		"arena_best": arena_best,
+		"sandbox": sandbox,
+		"biomes_seen": biomes_seen.duplicate(),
+		"lairs_beaten": lairs_beaten.duplicate(),
+		"achievements": achievements.duplicate(),
 	}
 
 ## Прочитанное с диска. Непонятное выбрасывается по кусочку. null — сохранения нет.
@@ -341,6 +365,29 @@ static func from_dict(d: Variant) -> Evolution:
 	var gen = d.get("generation")
 	if gen is int or gen is float:
 		e.generation = maxi(1, int(gen))
+	var c2 = d.get("color2")
+	if (c2 is int or c2 is float) and int(c2) >= 0 and int(c2) < Content.COLORS.size():
+		e.color2 = int(c2)
+	if Content.PATTERNS.any(func(pp): return pp[0] == str(d.get("pattern", ""))):
+		e.pattern = str(d.pattern)
+	if d.get("history") is Array:
+		for h in d.history:
+			if h is Dictionary:
+				e.history.append(h)
+		e.history = e.history.slice(-60)
+	for key in ["brood", "arena_best"]:
+		var n = d.get(key)
+		if n is int or n is float:
+			e.set(key, clampi(int(n), 0, 3 if key == "brood" else 9999))
+	e.sandbox = d.get("sandbox", false) == true
+	for b in _dict(d.get("biomes_seen")):
+		if Content.BIOMES.has(b):
+			e.biomes_seen[b] = true
+	for b in _dict(d.get("lairs_beaten")):
+		if Content.SPECIES.has(b):
+			e.lairs_beaten[b] = true
+	for a in _dict(d.get("achievements")):
+		e.achievements[a] = true
 	var pl = d.get("played")
 	if pl is int or pl is float:
 		e.played = maxf(0.0, float(pl))
@@ -365,4 +412,66 @@ func death_loss() -> float:
 	var lost := (dna_total - floor_dna) * k
 	dna_total -= lost
 	return lost
+
+
+# --- песочница, родословная, достижения -----------------------------------------------
+
+static func create_sandbox() -> Evolution:
+	var e := Evolution.create("easy")
+	e.sandbox = true
+	e.name = "Песочница"
+	for id in Content.PARTS:
+		if Content.obtainable(id):
+			e.unlocked[id] = Content.PART_MAX_LEVEL
+	e.brood = 3
+	return e
+
+## Запомнить нынешнее тело в родословной (после встречи с парой и правки).
+func remember() -> void:
+	var snap := {"gen": generation, "level": level(), "body": body.duplicate(true), "shape": shape.duplicate(),
+		"color": color, "color2": color2, "pattern": pattern}
+	if not history.is_empty() and history[-1].gen == generation:
+		history[-1] = snap
+	else:
+		history.append(snap)
+	history = history.slice(-60)
+
+## Прогресс достижения: [сколько есть, сколько нужно].
+func achievement_progress(a: Dictionary) -> Array:
+	var need: int = a.need
+	var have := 0
+	match a.stat:
+		"@parts":
+			have = unlocked.size()
+			if need < 0:
+				need = Content.PARTS.keys().filter(func(p): return Content.obtainable(p)).size()
+		"@maxed":
+			have = unlocked.values().filter(func(l): return l >= Content.PART_MAX_LEVEL).size()
+		"@biomes":
+			have = biomes_seen.size()
+		"@lairs":
+			have = lairs_beaten.size()
+		"@generation":
+			have = generation
+		"@brood":
+			have = brood
+		"@level":
+			have = level()
+		"@arena":
+			have = arena_best
+		_:
+			have = int(stats.get(a.stat, 0))
+	return [mini(have, need), need]
+
+## Отметить полученные достижения. Возвращает только что полученные.
+func check_achievements() -> Array:
+	var fresh: Array = []
+	for a in Content.ACHIEVEMENTS:
+		if achievements.has(a.id):
+			continue
+		var pr := achievement_progress(a)
+		if pr[0] >= pr[1]:
+			achievements[a.id] = true
+			fresh.append(a)
+	return fresh
 

@@ -280,6 +280,95 @@ S.mate = (() => {
   return finish(x, 0.5);
 })();
 
+// --- добавлены позже: паразиты, умения, логова, арена, музыка --------------------------
+
+// Прицепился паразит: влажный присос.
+S.parasite = (() => {
+  const x = buf(0.4);
+  mix(x, bubble(260, 0.3, -1.5), 0, 0.8);
+  mix(x, burst(0.25, { attack: 0.02, decay: 0.08, lo: 150, hi: 1200 }), 0.02, 0.6);
+  return finish(lowpass(x, 2000), 0.55);
+})();
+
+// Умение: тёплый нарастающий «вжух» и звон.
+S.ability = (() => {
+  const x = buf(0.7);
+  mix(x, tone(330, 0.6, { attack: 0.08, decay: 0.2, harmonics: [1, 0.4, 0.2], glide: 0.9 }), 0, 0.6);
+  mix(x, burst(0.5, { attack: 0.1, decay: 0.12, lo: 400, hi: 3000 }), 0, 0.35);
+  mix(x, tone(990, 0.4, { attack: 0.005, decay: 0.12, harmonics: [1, 0.2] }), 0.15, 0.3);
+  return finish(x, 0.55);
+})();
+
+// Хозяин логова: низкий рык.
+S.boss = (() => {
+  const x = buf(1.2);
+  mix(x, tone(55, 1.1, { attack: 0.05, decay: 0.4, harmonics: [1, 0.8, 0.6, 0.4, 0.3], glide: -0.1 }), 0, 0.9);
+  const grit = burst(1.0, { attack: 0.05, decay: 0.3, lo: 60, hi: 500 });
+  mix(x, grit, 0, 0.8);
+  return finish(lowpass(x, 900), 0.7);
+})();
+
+// Новая волна на арене: гонг.
+S.wave = (() => {
+  const x = buf(1.6);
+  mix(x, tone(196, 1.5, { attack: 0.003, decay: 0.5, harmonics: [1, 0.6, 0.35, 0.25, 0.15] }), 0, 0.7);
+  mix(x, tone(293.66, 1.2, { attack: 0.003, decay: 0.35, harmonics: [1, 0.3] }), 0.02, 0.35);
+  return finish(x, 0.6);
+})();
+
+/** Петля без шва: всё, что звучит за концом, дописывается в начало. */
+function mixWrap(dst, src, at = 0, gain = 1) {
+  const o = Math.round(at * RATE);
+  for (let i = 0; i < src.length; i++) dst[(o + i) % dst.length] += src[i] * gain;
+  return dst;
+}
+function normalize(x, peak) {
+  let max = 0;
+  for (const v of x) max = Math.max(max, Math.abs(v));
+  for (let i = 0; i < x.length; i++) x[i] *= peak / max;
+  return x;
+}
+const midi = (n) => 440 * Math.pow(2, (n - 69) / 12);
+
+// Спокойная музыка: медленные аккорды-«подушки» и редкие капли-ноты сверху.
+S.music_calm = (() => {
+  const bar = 4; // секунды на аккорд
+  const chords = [[57, 60, 64], [53, 57, 60], [48, 52, 55], [55, 59, 62], [57, 60, 64], [50, 53, 57]];
+  const x = buf(bar * chords.length);
+  chords.forEach((ch, k) => {
+    ch.forEach((n) => mixWrap(x, tone(midi(n), bar + 1.5, { attack: 1.2, decay: 1.6, harmonics: [1, 0.25, 0.08] }), k * bar, 0.22));
+    mixWrap(x, tone(midi(ch[0] - 12), bar + 1, { attack: 0.6, decay: 1.4, harmonics: [1, 0.2] }), k * bar, 0.25);
+  });
+  const scale = [69, 72, 74, 76, 79, 81, 84];
+  for (let b = 0; b < chords.length * 4; b++) {
+    if (rnd() < 0.55) {
+      const n = scale[Math.floor(rnd() * scale.length)];
+      mixWrap(x, tone(midi(n), 1.6, { attack: 0.004, decay: 0.45, harmonics: [1, 0.12, 0.05] }), b * 1.0 + rnd() * 0.2, 0.12);
+    }
+  }
+  lowpass(x, 3000);
+  return normalize(x, 0.42);
+})();
+
+// Музыка боя: быстрый низкий пульс, тревожные ноты и мягкие удары.
+S.music_fight = (() => {
+  const beat = 60 / 132;
+  const beats = 48;
+  const x = buf(beat * beats);
+  const bass = [45, 45, 48, 45, 43, 43, 41, 40];
+  for (let b = 0; b < beats; b++) {
+    const n = bass[Math.floor(b / 2) % bass.length];
+    for (let h = 0; h < 2; h++)
+      mixWrap(x, tone(midi(n - 12), beat * 0.6, { attack: 0.005, decay: 0.09, harmonics: [1, 0.5, 0.3, 0.2] }), (b + h * 0.5) * beat, 0.3);
+    if (b % 2 === 0) mixWrap(x, tone(60, 0.3, { attack: 0.002, decay: 0.07, harmonics: [1, 0.3], glide: -0.6 }), b * beat, 0.55);
+    if (b % 4 === 2) mixWrap(x, burst(0.15, { decay: 0.04, lo: 300, hi: 3000 }), b * beat, 0.25);
+  }
+  const lead = [69, 72, 71, 67, 69, 64, 65, 64];
+  lead.forEach((n, k) => mixWrap(x, tone(midi(n), beat * 5, { attack: 0.05, decay: beat * 2, harmonics: [1, 0.35, 0.15] }), k * beat * 6, 0.16));
+  lowpass(x, 3500);
+  return normalize(x, 0.45);
+})();
+
 fs.mkdirSync(OUT, { recursive: true });
 let total = 0;
 for (const [name, x] of Object.entries(S)) total += writeWav(name, x);

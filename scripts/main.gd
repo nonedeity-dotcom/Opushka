@@ -38,6 +38,11 @@ var _script: Array = []  # сценарий для проверки — толь
 var _script_wait := 0
 var _script_pad := Vector2.ZERO
 var _spawns: Array = []
+## Тело правили после встречи с парой — запомнить его в родословной, когда закроют редактор.
+var _after_mate := false
+var _ach_t := 1.0
+## Сколько секунд назад было опасно — пока недавно, играет музыка боя.
+var _danger_t := 99.0
 
 
 func _ready() -> void:
@@ -73,6 +78,9 @@ func _ready() -> void:
 	hud = Hud.new()
 	ui.add_child(hud)
 	hud.dash_pressed.connect(func(): _dash = true)
+	hud.ability_pressed.connect(func():
+		if pond and not pond.use_ability():
+			sound.play("nope"))
 	hud.editor_pressed.connect(_call_mate)
 	hud.atlas_pressed.connect(func():
 		sound.play("ui")
@@ -87,8 +95,19 @@ func _ready() -> void:
 	editor.closed.connect(func():
 		editor.visible = false
 		sound.play("ui")
+		if pond == null:
+			return
 		pond.player.sync_player(evo)
+		if _after_mate:
+			_after_mate = false
+			evo.remember()
+		pond.resync_allies()
 		_save())
+	editor.summon.connect(func(id):
+		if pond:
+			editor.visible = false
+			pond.spawn(id, pond.player.pos + Vector2.from_angle(randf() * TAU) * (pond.player.radius * 4.0 + 120.0))
+			hud.toast("%s — рядом" % Content.SPECIES[id].name))
 	editor.changed.connect(func():
 		sound.play("place")
 		pond.player.sync_player(evo)
@@ -113,6 +132,18 @@ func _ready() -> void:
 		sound.play("levelup", 0.8)
 		evo = Evolution.create(d)
 		_begin(s, true))
+	menu.arena.connect(func(s):
+		sound.play("wave")
+		evo = Saves.load_slot(s)
+		if evo:
+			_begin(s, false, "arena"))
+	menu.sandbox.connect(func():
+		sound.play("levelup", 0.8)
+		evo = Saves.load_slot(Saves.SANDBOX)
+		var fresh := evo == null
+		if fresh:
+			evo = Evolution.create_sandbox()
+		_begin(Saves.SANDBOX, fresh, "sandbox"))
 
 	sound = SoundBank.new()
 	add_child(sound)
@@ -127,14 +158,26 @@ func _ready() -> void:
 		_to_menu()
 
 ## Начать игру в ячейке: океан вокруг, интерфейс, первое сохранение.
-func _begin(s: int, fresh: bool) -> void:
+func _begin(s: int, fresh: bool, mode := "normal") -> void:
 	slot = s
 	_new_pond()
 	menu.visible = false
 	hud.visible = true
 	fog.visible = true
+	_after_mate = false
+	_danger_t = 99.0
+	evo.check_achievements()
+	if evo.history.is_empty():
+		evo.remember()
+	if mode == "arena":
+		pond.start_arena()
+		hud.announce("Арена", "Волны врагов — продержись как можно дольше. Рекорд: %d" % evo.arena_best)
+	elif evo.sandbox:
+		pond.mode = "sandbox"
+		if fresh:
+			hud.announce("Песочница", "Все части открыты, ДНК сколько угодно. ♥ — сразу к телу, в «Атласе» можно призвать любого")
 	_save()
-	if fresh:
+	if fresh and not evo.sandbox:
 		hud.toast("Ты — крошечная клетка без глаз: видно только то, что рядом. Плыви к зелёным крупинкам — это еда")
 
 ## В меню: сохранить, убрать океан, показать ячейки.
@@ -143,6 +186,7 @@ func _to_menu() -> void:
 		_save()
 	pond = null
 	view.pond = null
+	sound.set_music("")
 	setup.visible = false
 	editor.visible = false
 	hud.visible = false
@@ -195,14 +239,23 @@ func _process(delta: float) -> void:
 		view.effects(pond.events)
 		_handle(pond.events)
 	hud.refresh(pond)
+	if pond == null:
+		return
 	backdrop.drift = pond.player.pos
+	backdrop.biome = pond.biome if pond.biome != "" else "shallows"
+	_music(delta)
+	_ach_t -= delta
+	if _ach_t <= 0.0:
+		_ach_t = 1.0
+		for a in evo.check_achievements():
+			_achieved(a)
 	var xf: Transform2D = view.get_canvas_transform()
 	var lights: Array = []
 	var z: float = view.camera.zoom.x
 	for m in pond.mobs:
-		if m.glow:
+		if m.glow and lights.size() < 8:
 			lights.append(Vector3((xf * m.pos).x, (xf * m.pos).y, m.radius * 3.0 * z))
-	fog.update(xf * pond.player.pos, pond.player.vision * z, delta, lights)
+	fog.update(xf * pond.player.pos, pond.vision() * (1.25 if pond.player.glow else 1.0) * z, delta, lights)
 	_update_arrows()
 	if _save_in > 0.0:
 		_save_in -= delta
@@ -335,13 +388,86 @@ func _handle(events: Array) -> void:
 				sound.play("mate", 1.25)
 				_buzz(60)
 				_dirty = true
-				hud.announce("Поколение %d" % e.generation, "Потомство можно изменить: части, форма, цвет")
+				hud.announce("Поколение %d" % e.generation, "Потомство можно изменить: части, форма, цвет. В свите потомков: %d" % evo.brood)
+				_after_mate = true
 				hud.editor_btn.badge = ""
 				hud.editor_btn.queue_redraw()
 				get_tree().create_timer(0.9).timeout.connect(_open_editor)
 			"golden":
 				sound.play("drop", 0.8)
 				hud.toast("Сияющая особь — %s! Из неё обязательно что-то выпадет. Она пугливая" % Content.SPECIES[e.species].name.to_lower())
+			"biome":
+				var bdef: Dictionary = Content.BIOMES[e.biome]
+				if e.first:
+					hud.announce(bdef.name, bdef.hint)
+					_dirty = true
+				else:
+					hud.toast(bdef.name)
+			"parasite":
+				sound.play("parasite")
+				_buzz(20)
+				if int(evo.stats.get("shaken", 0)) < 3:
+					hud.toast("Прицепился паразит — пьёт здоровье. Стряхни его рывком!")
+			"shaken":
+				sound.play("dash", 0.8)
+			"ability":
+				if e.by_player:
+					sound.play("ability")
+					_buzz(20)
+				elif e.pos.distance_to(pond.player.pos) < near:
+					sound.play("ability", 0.8)
+			"boss_phase":
+				sound.play("boss")
+				_buzz(60)
+				var bname: String = Content.SPECIES[e.species].name
+				if e.phase == 2:
+					hud.announce(bname, "Зовёт подмогу!")
+				else:
+					hud.announce(bname, "В ярости: быстрее и бьёт волной — отплывай!")
+			"boss_wave":
+				sound.play("boss", 1.3)
+			"lair_beaten":
+				sound.play("levelup")
+				_buzz(80)
+				_dirty = true
+				hud.announce("Логово свободно!", "%s побеждён — забери награду" % Content.SPECIES[e.species].name)
+			"wave":
+				sound.play("wave")
+				hud.announce("Волна %d" % e.wave, "Врагов: %d" % (1 + e.wave))
+			"arena_over":
+				sound.play("death")
+				_save()
+				hud.announce("Арена окончена", "Продержался волн: %d · рекорд: %d" % [e.wave - 1, evo.arena_best])
+				get_tree().create_timer(3.0).timeout.connect(_to_menu)
+			"permadeath":
+				sound.play("death")
+				_buzz(120)
+				var gens := evo.generation
+				if slot > 0:
+					Saves.delete_slot(slot)
+				slot = 0
+				hud.announce("Вид вымер", "Суперсложность: одна жизнь. Поколений прожито: %d" % gens)
+				pond.spawning = false
+				get_tree().create_timer(3.5).timeout.connect(_to_menu)
+			"ally_lost":
+				hud.toast("Потомок погиб. Новый подрастёт через некоторое время")
+
+func _achieved(a: Dictionary) -> void:
+	sound.play("goal")
+	hud.toast("Достижение: %s" % a.title)
+	_dirty = true
+
+## Музыка боя — пока за тобой гонятся или тебя недавно ранили.
+func _music(delta: float) -> void:
+	var p := pond.player
+	var danger := pond.boss_active != null or p.calm_t < 3.0 or pond.mode == "arena" and not pond.mobs.is_empty()
+	if not danger:
+		for m in pond.mobs:
+			if m.ai_target == p and m.ai_state == "chase" and m.pos.distance_to(p.pos) < p.vision * 1.5:
+				danger = true
+				break
+	_danger_t = 0.0 if danger else _danger_t + delta
+	sound.set_music("fight" if _danger_t < 4.0 else "calm")
 
 func _buzz(ms: int) -> void:
 	if settings.vibration:
@@ -358,8 +484,14 @@ func _update_arrows() -> void:
 		list.append({"at": xf * pond.mate.pos, "kind": "mate", "hidden": pond.mate.pos.distance_to(p.pos) > p.vision})
 	if p.eyes > 0.0:
 		for m in pond.mobs:
+			if m.invisible and p.eyes < 1.0:
+				continue
 			if pond._hunts(m) and m.radius >= p.radius * 0.8 and m.pos.distance_to(p.pos) < p.sight * 2.0:
 				list.append({"at": xf * m.pos, "kind": "danger"})
+	if pond.mode == "normal":
+		for l in pond.lairs_near(2200.0):
+			if not l.done and evo.level() >= int(Content.SPECIES[l.species].levels[0]):
+				list.append({"at": xf * l.pos, "kind": "lair"})
 	hud.indicators.targets = list
 
 
@@ -376,6 +508,14 @@ func _open_editor() -> void:
 ## Кнопка ♥: позвать пару. Тело меняется только после встречи с ней.
 func _call_mate() -> void:
 	if pond == null:
+		return
+	if evo.sandbox:
+		_after_mate = true
+		_open_editor()
+		return
+	if pond.mode == "arena":
+		sound.play("nope")
+		hud.toast("На арене не до пары — сначала продержись")
 		return
 	if pond.call_mate():
 		hud.toast("Пара где-то рядом — плыви по розовой стрелке")
@@ -558,7 +698,56 @@ func _run_script() -> void:
 			up.position = from + Vector2(0, float(q[2]))
 			up.pressed = false
 			Input.parse_input_event(up)
+		"goto":
+			# Переплыть в ближайшую воду нужного вида (для снимков).
+			for i in 4000:
+				var at := Vector2.from_angle(i * 0.61) * (200.0 + i * 12.0)
+				if pond.biome_at(at) == p[1]:
+					pond.player.pos = at
+					pond.mobs.clear()
+					pond.food.clear()
+					pond.rocks.clear()
+					pond.fill()
+					break
+		"lair":
+			var boss: String = p[1]
+			var b := pond.spawn(boss, pond.player.pos + Vector2(260, 0))
+			b.lair = b.pos
+		"hp":
+			for m in pond.mobs:
+				if m.lair != Vector2.INF:
+					m.hp = m.max_hp * float(p[1])
+		"ability":
+			pond.use_ability()
+		"gen":
+			# Запомнить нынешнее тело как новое поколение (для снимков родословной).
+			evo.remember()
+			evo.generation += 1
+		"part":
+			var q := p[1].split(",")
+			evo.unlocked[q[0]] = evo.unlocked.get(q[0], 1)
+			evo.body.append({"id": q[0], "a": int(q[1]), "d": float(q[2]) if q.size() > 2 else 1.0})
+			pond.player.sync_player(evo)
+		"pattern":
+			var q := p[1].split(",")
+			evo.pattern = q[0]
+			if q.size() > 1:
+				evo.color2 = int(q[1])
+			if q.size() > 2:
+				evo.color = int(q[2])
+		"arena":
+			pond.start_arena()
+		"sandbox":
+			menu.sandbox.emit()
+		"tab":
+			editor.tab = p[1]
+			editor.rebuild()
+		"menu":
+			_to_menu()
 		"banner":
 			hud.announce("Размер 3", "Места на теле больше: 5. Вокруг появятся новые клетки")
 		"print":
+			if pond == null:
+				print("СОСТОЯНИЕ: меню")
+				return
 			print("СОСТОЯНИЕ: размер ", evo.level(), " ДНК ", evo.dna_free(), "/", int(evo.dna_total), " клеток ", pond.mobs.size(), " еды ", pond.food.size(), " поз ", pond.player.pos)

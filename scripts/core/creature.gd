@@ -45,6 +45,24 @@ var regen := 0.0
 var dna_rate := 0.0
 var dash_power := 260.0
 var armor_all := 0.0  # доля урона, которую снимает броня со всех сторон
+var heatproof := false
+var coldproof := false
+var drains: Array = []  # присоски: [{a, arc, dmg}]
+var camo := 0.0  # насколько позже замечают хищники, 0–1
+var thorns := 0.0  # какая доля удара возвращается обидчику
+var dash_k := 1.0  # перезарядка рывка — во столько раз
+var ability := ""  # умение по кнопке: ink, shield, pulse, suck
+var ability_cd := 10.0
+var ability_power := 1.0
+## Невидимка: без глаз у игрока его почти не видно. Стая: держится вместе с такими же.
+var invisible := false
+var school := false
+var aggro := false
+## Союзник — потомок игрока из свиты.
+var ally := false
+## Паразит: к кому прицепился и где на нём сидит (угол от носа хозяина).
+var host: Creature = null
+var host_angle := 0.0
 var grabs: Array = []  # щупальца: [{a, arc, dmg}]
 var glow := false  # светится — видно сквозь туман
 
@@ -72,6 +90,11 @@ var stamina := 1.0
 var resting := 0.0
 ## Держат щупальцем — плывёт медленнее.
 var slow_t := 0.0
+var shield_t := 0.0  # щит: почти не ранят
+var hidden_t := 0.0  # в чернилах: хищники не видят
+var ability_t := 0.0  # до готовности умения
+var lair := Vector2.INF  # где логово у хозяина логова
+var phase_n := 1  # стадия боя у хозяина логова
 ## Сколько секунд живёт — для появления из мути.
 var age := 0.0
 # Только для рисования.
@@ -94,6 +117,9 @@ static func of_species(id: String, size := 0.0) -> Creature:
 	var def: Dictionary = Content.SPECIES[id]
 	var c := Creature.new()
 	c.species = id
+	c.invisible = def.get("invisible", false)
+	c.school = def.has("school")
+	c.aggro = def.get("aggro", false)
 	c.size_r = size if size > 0.0 else def.radius
 	c.shape = Content.shape_preset(def.get("shape", "round"))
 	c.radius = c.size_r * Content.shape_scale(c.shape)
@@ -133,6 +159,8 @@ func behavior() -> String:
 		return "player"
 	if species == "mate":
 		return "mate"
+	if ally:
+		return "ally"
 	return "skittish" if golden else Content.SPECIES[species].behavior
 
 func size_k() -> float:
@@ -154,6 +182,13 @@ func rebuild() -> void:
 	armor_all = 0.0
 	grabs = []
 	glow = false
+	heatproof = false
+	coldproof = false
+	drains = []
+	camo = 0.0
+	thorns = 0.0
+	dash_k = 1.0
+	ability = ""
 	regen = 0.0
 	dna_rate = 0.0
 	eyes = 0.0
@@ -179,6 +214,20 @@ func rebuild() -> void:
 			grabs.append({"a": p.a, "arc": arc, "dmg": def.grab * pw * dmg_k})
 		if def.get("glow", false):
 			glow = true
+		if def.get("heatproof", false):
+			heatproof = true
+		if def.get("coldproof", false):
+			coldproof = true
+		if def.has("drain"):
+			drains.append({"a": p.a, "arc": arc, "dmg": def.drain * pw * dmg_k})
+		camo = maxf(camo, float(def.get("camo", 0.0)) * minf(pw, 1.6))
+		thorns = maxf(thorns, float(def.get("thorns", 0.0)) * pw)
+		if def.has("dash_k"):
+			dash_k = minf(dash_k, float(def.dash_k) / pw)
+		if def.has("ability") and ability == "":
+			ability = def.ability
+			ability_cd = float(def.cooldown) / (1.0 + 0.1 * (pw - 1.0) / Content.PART_LEVEL_BONUS)
+			ability_power = pw * dmg_k
 		if def.has("armor"):
 			shells.append({"a": p.a, "arc": arc, "armor": minf(0.8, def.armor * pw)})
 		if def.has("poison"):
@@ -194,7 +243,7 @@ func rebuild() -> void:
 	sight = 190.0 * sqrt(k) * (1.0 + 0.3 * minf(eyes, 4.0))
 	if not is_player and behavior() == "skittish":
 		sight *= 1.35
-	dash_power = 260.0 * pow(k, 0.3)
+	dash_power = 260.0 * pow(k, 0.3) / sqrt(dash_k)
 	vision = (95.0 + size_r * 1.6) * (1.0 + 0.45 * minf(eyes, 4.0))
 	if golden:
 		speed *= 1.15

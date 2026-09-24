@@ -8,10 +8,14 @@
 ## «Форма» — ведёшь пальцем по клетке: тянешь наружу — край вытягивается, внутрь —
 ## втягивается. Готовые формы, сглаживание, цвет.
 ## Атлас: кого встречал, кто чем опасен и что роняет — с шансами.
+## Родословная: каким был вид в каждом поколении. Достижения: что уже получено и сколько
+## осталось, и вся коллекция.
 extends Control
 
 signal closed
 signal changed
+## Песочница: призвать существо этого вида рядом.
+signal summon(species: String)
 
 const RoundButton := preload("res://scripts/ui/round_button.gd")
 const DragScroll := preload("res://scripts/ui/drag_scroll.gd")
@@ -70,12 +74,17 @@ func rebuild() -> void:
 	_palette_scroll = null
 	_place()
 	_root.add_child(_header())
-	if tab == "body":
-		_body_tab()
-		if _palette_scroll:
-			_palette_scroll.set_deferred("scroll_vertical", keep_scroll)
-	else:
-		_atlas_tab()
+	match tab:
+		"body":
+			_body_tab()
+			if _palette_scroll:
+				_palette_scroll.set_deferred("scroll_vertical", keep_scroll)
+		"tree":
+			_tree_tab()
+		"awards":
+			_awards_tab()
+		_:
+			_atlas_tab()
 
 
 func _header() -> HBoxContainer:
@@ -84,12 +93,12 @@ func _header() -> HBoxContainer:
 	icon.icon = "dna"
 	icon.custom_minimum_size = Vector2(46, 46)
 	head.add_child(icon)
-	head.add_child(Kit.label("Поколение %d" % evo.generation if editable else "Атлас", 30, Art.TEXT, true))
+	head.add_child(Kit.label("Поколение %d" % evo.generation if editable else {"atlas": "Атлас", "tree": "Родословная", "awards": "Достижения"}.get(tab, "Атлас"), 28, Art.TEXT, true))
 	# Имя вида — прямо в заголовке, нажал и пишешь.
 	var name_edit := LineEdit.new()
 	name_edit.text = evo.name
 	name_edit.max_length = 18
-	name_edit.custom_minimum_size = Vector2(200, 0)
+	name_edit.custom_minimum_size = Vector2(170, 0)
 	name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_edit.add_theme_font_size_override("font_size", 22)
 	name_edit.add_theme_color_override("font_color", Art.MUTED)
@@ -107,13 +116,16 @@ func _header() -> HBoxContainer:
 	body_btn.disabled = not editable
 	body_btn.tooltip_text = "" if editable else "Тело меняется после встречи с парой: нажми ♥"
 	head.add_child(body_btn)
-	head.add_child(_toggle("Атлас", tab == "atlas", func():
-		tab = "atlas"
-		selected = ""
-		picked = -1
-		rebuild()))
-	head.add_child(_chip("ДНК %d" % evo.dna_free(), Art.GREEN))
-	head.add_child(_chip("Части %d/%d" % [evo.body.size(), evo.slots()], Art.TEXT))
+	for pair in [["atlas", "Атлас"], ["tree", "Родословная"], ["awards", "Достижения"]]:
+		var id: String = pair[0]
+		head.add_child(_toggle(pair[1], tab == id, func():
+			tab = id
+			selected = ""
+			picked = -1
+			rebuild()))
+	if tab == "body":
+		head.add_child(_chip("ДНК %d" % evo.dna_free() if not evo.sandbox else "ДНК без счёта", Art.GREEN))
+		head.add_child(_chip("Части %d/%d" % [evo.body.size(), evo.slots()], Art.TEXT))
 	var done := RoundButton.new()
 	done.setup("check", "Готово", 60)
 	done.accent = true
@@ -291,6 +303,32 @@ func _shape_tools() -> ScrollContainer:
 			rebuild())
 		colors.add_child(sw)
 	col.add_child(colors)
+	col.add_child(Kit.label("Узор", 22, Art.TEXT, true))
+	var pats := HFlowContainer.new()
+	pats.add_theme_constant_override("h_separation", 8)
+	pats.add_theme_constant_override("v_separation", 8)
+	for pp in Content.PATTERNS:
+		var pid: String = pp[0]
+		var pb := _toggle(pp[1], evo.pattern == pid, func():
+			evo.pattern = pid
+			changed.emit()
+			rebuild(), 52)
+		pats.add_child(pb)
+	col.add_child(pats)
+	if evo.pattern != "none":
+		col.add_child(Kit.label("Второй цвет — для узора", 22, Art.TEXT, true))
+		var colors2 := HFlowContainer.new()
+		colors2.add_theme_constant_override("h_separation", 6)
+		for i in Content.COLORS.size():
+			var sw2 := Swatch.new()
+			sw2.color = Color(Content.COLORS[i])
+			sw2.on = evo.color2 == i
+			sw2.pressed.connect(func():
+				evo.color2 = i
+				changed.emit()
+				rebuild())
+			colors2.add_child(sw2)
+		col.add_child(colors2)
 	col.add_child(Kit.muted("Форма — для вида, а не для силы: драка идёт по кругу того же размера. Вытянутое тело чуть крупнее круглого.", 18))
 	return scroll
 
@@ -397,7 +435,7 @@ func _atlas_tab() -> void:
 	ids.sort_custom(func(a, b): return Content.SPECIES[a].levels[0] * 100 + Content.SPECIES[a].radius < Content.SPECIES[b].levels[0] * 100 + Content.SPECIES[b].radius)
 	var hidden := 0
 	for id in ids:
-		if not evo.seen.has(id):
+		if not evo.seen.has(id) and not evo.sandbox:
 			hidden += 1
 			continue
 		grid.add_child(_species_card(id))
@@ -420,10 +458,19 @@ func _species_card(id: String) -> PanelContainer:
 	row.add_child(mini)
 	var text := Kit.vbox(4)
 	text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var kind: String = {"grazer": "мирный", "skittish": "пугливый", "drifter": "дрейфует", "hunter": "хищник", "boss": "великан"}[def.behavior]
+	var kind: String = {"grazer": "мирный", "skittish": "пугливый", "drifter": "дрейфует", "hunter": "хищник", "boss": "великан",
+		"giant": "гигант", "lair": "хозяин логова", "parasite": "паразит"}.get(def.behavior, "")
+	if def.has("school"):
+		kind += ", стая"
+	if def.get("invisible", false):
+		kind += ", невидимка"
 	text.add_child(Kit.label("%s · %s" % [def.name, kind], 22, Art.DANGER if def.behavior == "hunter" or def.get("hunts", false) else Art.TEXT, true))
 	text.add_child(Kit.muted(def.hint, 17))
-	text.add_child(Kit.muted("Размеры %d–%d · побед: %d" % [def.levels[0], def.levels[1], evo.kills_by.get(id, 0)], 17))
+	var waters: Array = []
+	for b in def.get("biomes", []):
+		waters.append(Content.BIOMES[b].name.to_lower())
+	var where := " · " + ", ".join(waters) if not waters.is_empty() else ""
+	text.add_child(Kit.muted("Размеры %d–%d%s · побед: %d" % [def.levels[0], def.levels[1], where, evo.kills_by.get(id, 0)], 17))
 	var drops := HFlowContainer.new()
 	drops.add_theme_constant_override("h_separation", 8)
 	drops.add_theme_constant_override("v_separation", 6)
@@ -443,6 +490,17 @@ func _species_card(id: String) -> PanelContainer:
 			chip.chance = -1.0
 			drops.add_child(chip)
 	text.add_child(drops)
+	if evo.sandbox:
+		var call := Button.new()
+		call.text = "Призвать"
+		call.focus_mode = Control.FOCUS_NONE
+		call.custom_minimum_size = Vector2(150, 46)
+		call.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		call.add_theme_font_size_override("font_size", 20)
+		for st in ["normal", "hover", "pressed"]:
+			call.add_theme_stylebox_override(st, Kit.box(Color("#6a5a9a"), 16))
+		call.pressed.connect(func(): summon.emit(id))
+		text.add_child(call)
 	row.add_child(text)
 	var card := Kit.card(row, Art.CARD, 20, 12)
 	card.mouse_filter = Control.MOUSE_FILTER_PASS
@@ -477,7 +535,130 @@ func _rock_card(rid: String) -> PanelContainer:
 	return card
 
 
+# --- родословная ---------------------------------------------------------------------
+
+func _tree_tab() -> void:
+	var scroll := DragScroll.new()
+	var grid := GridContainer.new()
+	grid.columns = 4 if landscape else 2
+	grid.add_theme_constant_override("h_separation", 10)
+	grid.add_theme_constant_override("v_separation", 10)
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(grid)
+	_root.add_child(scroll)
+	var list := evo.history.duplicate()
+	list.reverse()
+	for h in list:
+		var box := Kit.vbox(4)
+		var pic := Ancestor.new()
+		pic.snap = h
+		pic.custom_minimum_size = Vector2(0, 150)
+		pic.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		box.add_child(pic)
+		var now: bool = h.gen == evo.generation
+		box.add_child(Kit.label("Поколение %d%s" % [h.gen, " · сейчас" if now else ""], 21, Art.GOLD if now else Art.TEXT, true))
+		box.add_child(Kit.muted("Размер %d · частей %d" % [h.level, h.body.size()], 17))
+		var card := Kit.card(box, Art.CARD, 20, 12)
+		card.mouse_filter = Control.MOUSE_FILTER_PASS
+		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		grid.add_child(card)
+	var note := Kit.muted("Каждая встреча с парой — новое поколение. Здесь видно, как менялся твой вид. Потомков в свите: %d из 3." % evo.brood, 20)
+	note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_root.add_child(note)
+
+
+# --- достижения -----------------------------------------------------------------------
+
+func _awards_tab() -> void:
+	var scroll := DragScroll.new()
+	var col := Kit.vbox(10)
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(col)
+	_root.add_child(scroll)
+	# Коллекция: сколько всего собрано.
+	var parts_all: Array = Content.PARTS.keys().filter(func(p): return Content.obtainable(p))
+	var got_parts := parts_all.filter(func(p): return evo.unlocked.has(p)).size()
+	var maxed := parts_all.filter(func(p): return int(evo.unlocked.get(p, 0)) >= Content.PART_MAX_LEVEL).size()
+	var flow := HFlowContainer.new()
+	flow.add_theme_constant_override("h_separation", 8)
+	flow.add_theme_constant_override("v_separation", 8)
+	for pair in [["Достижения", "%d/%d" % [evo.achievements.size(), Content.ACHIEVEMENTS.size()]], ["Части", "%d/%d" % [got_parts, parts_all.size()]],
+			["На 5 уровне", str(maxed)], ["Виды", "%d/%d" % [evo.seen.size(), Content.SPECIES.size()]],
+			["Воды", "%d/%d" % [evo.biomes_seen.size(), Content.BIOMES.size()]], ["Логова", "%d/%d" % [evo.lairs_beaten.size(), 3]],
+			["Поколений", str(evo.generation)], ["Арена", "%d волн" % evo.arena_best]]:
+		flow.add_child(_chip("%s  %s" % pair, Art.TEXT))
+	col.add_child(flow)
+	var grid := GridContainer.new()
+	grid.columns = 2 if landscape else 1
+	grid.add_theme_constant_override("h_separation", 10)
+	grid.add_theme_constant_override("v_separation", 10)
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col.add_child(grid)
+	var list: Array = Content.ACHIEVEMENTS.duplicate()
+	list.sort_custom(func(a, b): return int(evo.achievements.has(a.id)) > int(evo.achievements.has(b.id)))
+	for a in list:
+		var row := AwardRow.new()
+		row.title = a.title
+		row.hint = a.get("hint", "")
+		var pr := evo.achievement_progress(a)
+		row.have = pr[0]
+		row.need = pr[1]
+		row.done = evo.achievements.has(a.id)
+		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		grid.add_child(row)
+
+
 # --- мелкие части ---------------------------------------------------------------------
+
+## Предок в родословной — каким было тело в том поколении.
+class Ancestor:
+	extends Control
+	var snap := {}
+	var t := 0.0
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_PASS
+
+	func _process(delta: float) -> void:
+		t += delta
+		queue_redraw()
+
+	func _draw() -> void:
+		var parts: Array = []
+		for p in snap.body:
+			parts.append({"id": p.id, "a": deg_to_rad(float(p.a)), "d": float(p.get("d", 1.0)), "lvl": 1})
+		var r := minf(size.x, size.y) * 0.24
+		CellArt.creature(self, size / 2.0, r, -PI / 2.0, Color(Content.COLORS[int(snap.color)]), parts, t,
+			{"shape": snap.shape, "shadow": false, "pattern": snap.get("pattern", "none"), "color2": Color(Content.COLORS[int(snap.get("color2", 0))])})
+
+## Строка достижения: кубок, название, полоса прогресса.
+class AwardRow:
+	extends Control
+	var title := ""
+	var hint := ""
+	var have := 0
+	var need := 1
+	var done := false
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_PASS
+		custom_minimum_size = Vector2(0, 84)
+
+	func _draw() -> void:
+		draw_style_box(Kit.box(Art.CARD if done else Color(0.08, 0.1, 0.12), 20, Art.GOLD if done else Color(0, 0, 0, 0), 0), Rect2(Vector2.ZERO, size))
+		Icons.draw(self, "trophy", Rect2(16, 20, 44, 44), Art.GOLD if done else Color("#3a4450"))
+		var font := get_theme_default_font()
+		draw_string(font, Vector2(76, 30), title, HORIZONTAL_ALIGNMENT_LEFT, size.x - 190, 21, Art.TEXT if done else Art.MUTED)
+		var count := "%d / %d" % [have, need]
+		var cw := font.get_string_size(count, HORIZONTAL_ALIGNMENT_LEFT, -1, 18).x
+		draw_string(font, Vector2(size.x - cw - 18, 30), count, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Art.GOLD if done else Art.MUTED)
+		if hint != "":
+			draw_string(font, Vector2(76, 54), hint, HORIZONTAL_ALIGNMENT_LEFT, size.x - 94, 15, Art.MUTED)
+		var bar := Rect2(76, 66, size.x - 94, 8)
+		draw_style_box(Kit.box(Color(1, 1, 1, 0.1), 4, Color(0, 0, 0, 0), 0), bar)
+		var k := clampf(float(have) / maxf(1.0, float(need)), 0.0, 1.0)
+		if k > 0.0:
+			draw_style_box(Kit.box(Art.GOLD if done else Art.GREEN, 4, Color(0, 0, 0, 0), 0), Rect2(bar.position, Vector2(maxf(8.0, bar.size.x * k), bar.size.y)))
 
 class RockPic:
 	extends Control
@@ -580,7 +761,8 @@ class Preview:
 			draw_arc(c, r * Content.SHAPE_MIN, 0, TAU, 48, Color(1, 1, 1, 0.08), 1.5, true)
 			draw_arc(c, r * Content.SHAPE_MAX, 0, TAU, 64, Color(1, 1, 1, 0.08), 1.5, true)
 		var col := Color(Content.COLORS[evo.color])
-		CellArt.creature(self, c, r, -PI / 2.0, col, evo.body_parts(), t, {"pick": editor.picked, "shadow": false, "shape": evo.shape})
+		CellArt.creature(self, c, r, -PI / 2.0, col, evo.body_parts(), t, {"pick": editor.picked, "shadow": false, "shape": evo.shape,
+			"pattern": evo.pattern, "color2": Color(Content.COLORS[evo.color2])})
 		# Нос — маленькая стрелка сверху, чтобы было видно, где перёд.
 		var nose := c + Vector2(0, -r * Content.shape_at(evo.shape, 0.0) - r * 0.55)
 		draw_colored_polygon(PackedVector2Array([nose, nose + Vector2(-9, 16), nose + Vector2(9, 16)]), Color(1, 1, 1, 0.35))

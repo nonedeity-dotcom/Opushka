@@ -1,8 +1,11 @@
 ## Главное меню: три ячейки сохранений. В пустой — новая игра с выбором сложности.
+## Под ними — песочница; у заполненной ячейки — ещё и арена для этого вида.
 extends Control
 
 signal play(slot: int)
 signal new_game(slot: int, difficulty: String)
+signal arena(slot: int)
+signal sandbox
 
 var t := 0.0
 var _row: HBoxContainer
@@ -50,17 +53,17 @@ func rebuild() -> void:
 	for ch in get_children():
 		remove_child(ch)
 		ch.queue_free()
-	var col := Kit.vbox(18)
+	var col := Kit.vbox(12)
 	col.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	col.offset_left = 40
 	col.offset_right = -40
-	col.offset_top = 30
-	col.offset_bottom = -30
+	col.offset_top = 20
+	col.offset_bottom = -20
 	add_child(col)
-	var title := Kit.label("Эволюция", 64, Art.TEXT, true)
+	var title := Kit.label("Эволюция", 44, Art.TEXT, true)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	col.add_child(title)
-	var sub := Kit.label("от одной клетки — к своему виду", 24, Art.MUTED)
+	var sub := Kit.label("от одной клетки — к своему виду", 22, Art.MUTED)
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	col.add_child(sub)
 	_row = Kit.hbox(18)
@@ -68,6 +71,17 @@ func rebuild() -> void:
 	col.add_child(_row)
 	for slot in range(1, Saves.COUNT + 1):
 		_row.add_child(_slot_card(slot))
+	var bottom := Kit.hbox(14)
+	var sb := _button("Песочница", Color("#6a5a9a"), func(): sandbox.emit())
+	sb.custom_minimum_size = Vector2(240, 50)
+	bottom.add_child(sb)
+	var sand := Saves.load_slot(Saves.SANDBOX)
+	var note := Kit.muted("Все части открыты, ДНК без счёта: собери любое тело и призови любого врага, чтобы проверить его" + (" · поколение %d" % sand.generation if sand else ""), 17)
+	note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	bottom.add_child(note)
+	col.add_child(bottom)
 
 func _slot_card(slot: int) -> PanelContainer:
 	var evo := Saves.load_slot(slot)
@@ -77,7 +91,7 @@ func _slot_card(slot: int) -> PanelContainer:
 	if evo:
 		var pic := SlotPic.new()
 		pic.evo = evo
-		pic.custom_minimum_size = Vector2(0, 120)
+		pic.custom_minimum_size = Vector2(0, 90)
 		box.add_child(pic)
 		box.add_child(Kit.label(evo.name, 28, Art.TEXT, true))
 		box.add_child(Kit.muted("Размер %d · поколение %d · частей %d/%d" % [evo.level(), evo.generation, evo.unlocked.size(), Content.PARTS.values().filter(func(p): return p.get("source", "") != "mob").size()], 18))
@@ -86,7 +100,16 @@ func _slot_card(slot: int) -> PanelContainer:
 		var spacer := Control.new()
 		spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		box.add_child(spacer)
-		box.add_child(_button("Играть", Art.GREEN, func(): play.emit(slot)))
+		var row := Kit.hbox(10)
+		var go := _button("Играть", Art.GREEN, func(): play.emit(slot))
+		go.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(go)
+		var ar := _button("Арена", Color("#8a6a2a"), func(): arena.emit(slot))
+		ar.custom_minimum_size.x = 110
+		row.add_child(ar)
+		box.add_child(row)
+		if evo.arena_best > 0:
+			box.add_child(Kit.muted("Рекорд арены: %d волн" % evo.arena_best, 16))
 		var del := _button("Точно удалить? Нажми ещё раз" if _arming == slot else "Удалить", Color(0.5, 0.2, 0.2, 0.7), func():
 			if _arming == slot:
 				Saves.delete_slot(slot)
@@ -98,13 +121,21 @@ func _slot_card(slot: int) -> PanelContainer:
 		box.add_child(del)
 	else:
 		box.add_child(Kit.label("Пусто", 28, Art.TEXT, true))
-		box.add_child(Kit.muted("Новая игра — с одной клетки. Выбери сложность:", 18))
-		for d in ["easy", "normal", "hard"]:
+		box.add_child(Kit.muted("Новая игра — с одной клетки. Выбери сложность:", 17))
+		var grid := GridContainer.new()
+		grid.columns = 2
+		grid.add_theme_constant_override("h_separation", 8)
+		grid.add_theme_constant_override("v_separation", 8)
+		for d in ["easy", "normal", "hard", "insane"]:
 			var def: Dictionary = Content.DIFFICULTY[d]
-			var b := _button(def.name, Art.GREEN if d == "normal" else Art.CARD_BORDER, func(): new_game.emit(slot, d))
-			b.tooltip_text = def.hint
-			box.add_child(b)
-			box.add_child(Kit.muted(def.hint, 15))
+			var bg := Art.GREEN if d == "normal" else (Color("#8a2a3a") if d == "insane" else Art.CARD_BORDER)
+			var b := _button(def.name, bg, func(): new_game.emit(slot, d))
+			b.custom_minimum_size.y = 48
+			b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			b.add_theme_font_size_override("font_size", 19)
+			grid.add_child(b)
+		box.add_child(grid)
+		box.add_child(Kit.muted("Тяжёлая: гибель отнимает часть роста. Сверхсложная: одна жизнь, хищников больше, туман гуще.", 15))
 	var card := Kit.card(box, Color(0.08, 0.14, 0.18, 0.92), 24, 18)
 	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	return card

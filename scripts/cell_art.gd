@@ -8,9 +8,9 @@ extends RefCounted
 
 ## Части, которые торчат наружу, — рисуются под телом, чтобы край их прикрывал.
 ## Рты рисуются поверх — у них видна сама пасть на краю тела.
-const OUTSIDE := ["proboscis", "cilia", "flagellum", "flagellum2", "spike", "spike2", "drill", "tentacle", "horn", "lantern"]
+const OUTSIDE := ["proboscis", "cilia", "flagellum", "flagellum2", "spike", "spike2", "drill", "tentacle", "horn", "lantern", "jet"]
 ## Части, что лежат дугой по краю тела.
-const RIM := ["shell", "membrane", "stone_skin", "plates"]
+const RIM := ["shell", "membrane", "stone_skin", "plates", "thermo", "thorn_armor"]
 
 
 ## Клетка целиком. r — «рост» клетки; opts: shape (форма тела), flash, bite, poisoned,
@@ -53,6 +53,7 @@ static func creature(ci: CanvasItem, at: Vector2, r: float, heading: float, colo
 		if parts[i].id in OUTSIDE:
 			_part(ci, parts[i], at, r, heading, color, t + w, bite, alpha, i == pick, shape, gulp)
 	ci.draw_colored_polygon(body, Color(color, alpha))
+	_pattern(ci, opts.get("pattern", "none"), opts.get("color2", color), at, r, heading, shape, t + w, alpha)
 	var edge := body.duplicate()
 	edge.append(body[0])
 	ci.draw_polyline(edge, Color(color.darkened(0.45), alpha), maxf(1.5, r * 0.09), true)
@@ -84,6 +85,36 @@ static func creature(ci: CanvasItem, at: Vector2, r: float, heading: float, colo
 			ci.draw_line(at2 - Vector2(len, 0), at2 + Vector2(len, 0), Color(1, 0.95, 0.6, tw), maxf(1.0, r * 0.05), true)
 			ci.draw_line(at2 - Vector2(0, len), at2 + Vector2(0, len), Color(1, 0.95, 0.6, tw), maxf(1.0, r * 0.05), true)
 
+## Узор поверх тела: полоски от края к середине, пятна, кольца или переход цвета.
+static func _pattern(ci: CanvasItem, kind: String, col2: Color, at: Vector2, r: float, heading: float, shape: Array, t: float, alpha: float) -> void:
+	var c2 := Color(col2, 0.75 * alpha)
+	match kind:
+		"stripes":
+			for i in 10:
+				var a := TAU * i / 10.0 + 0.3
+				var edge := r * Content.shape_at(shape, a)
+				var d := Vector2.from_angle(heading + a)
+				ci.draw_line(at + d * edge * 0.5, at + d * edge * 0.92, c2, maxf(1.5, r * 0.13), true)
+		"spots":
+			for i in 7:
+				var a := TAU * i / 7.0 + 0.8
+				var k := 0.45 + 0.3 * float(i % 3) / 2.0
+				ci.draw_circle(at + Vector2.from_angle(heading + a) * r * Content.shape_at(shape, a) * k, r * (0.1 + 0.04 * (i % 2)), c2)
+		"rings":
+			for k in [0.62, 0.8]:
+				var ring := PackedVector2Array()
+				for i in 25:
+					var a := TAU * i / 24.0
+					ring.append(at + Vector2.from_angle(heading + a) * r * Content.shape_at(shape, a) * k)
+				ci.draw_polyline(ring, c2, maxf(1.5, r * 0.07), true)
+		"gradient":
+			for k in [0.75, 0.5, 0.28]:
+				var pts := PackedVector2Array()
+				for i in 24:
+					var a := TAU * i / 24.0
+					pts.append(at + Vector2.from_angle(heading + a) * r * Content.shape_at(shape, a) * k)
+				ci.draw_colored_polygon(pts, Color(col2, 0.3 * alpha))
+
 ## Где у тела часть: точка и поворот. На краю — по форме тела; внутри — ближе к середине.
 static func part_anchor(p: Dictionary, at: Vector2, r: float, heading: float, shape: Array) -> Vector2:
 	var d: float = p.get("d", 1.0)
@@ -92,7 +123,9 @@ static func part_anchor(p: Dictionary, at: Vector2, r: float, heading: float, sh
 	return at + Vector2.from_angle(heading + p.a) * edge * k
 
 ## Внутренняя часть в своей системе нарисована не с нуля: сдвиг до её середины.
-const INNER_CENTER := {"eye": Vector2(-2.5, 0), "chloroplast": Vector2(-6.0, 0), "electro": Vector2(-1.5, 0), "crystal": Vector2(-2.0, 0)}
+const INNER_CENTER := {"eye": Vector2(-2.5, 0), "chloroplast": Vector2(-6.0, 0), "electro": Vector2(-1.5, 0), "crystal": Vector2(-2.0, 0),
+	"fat": Vector2(-4.0, 0), "camo": Vector2(-4.0, 0), "ink": Vector2(-4.0, 0), "shield_gland": Vector2(-4.0, 0), "pulse": Vector2(-4.0, 0),
+	"suction": Vector2(-4.0, 0), "life_core": Vector2(-4.0, 0)}
 
 ## Одна часть. Годится и для «примерки» в редакторе.
 static func _part(ci: CanvasItem, p: Dictionary, at: Vector2, r: float, heading: float, color: Color, t: float, bite: float, alpha: float, picked: bool, shape: Array, gulp := 0.0) -> void:
@@ -139,6 +172,17 @@ static func _rim_part(ci: CanvasItem, id: String, at: Vector2, r: float, heading
 	var pts := out_pts.duplicate()
 	for i in range(n, -1, -1):
 		pts.append(in_pts[i])
+	if id == "thermo":
+		ci.draw_colored_polygon(pts, Color("#e0804a", 0.8 * alpha))
+		ci.draw_polyline(out_pts, Color("#f8c080", alpha), maxf(1.0, r * 0.04), true)
+		return
+	if id == "thorn_armor":
+		ci.draw_colored_polygon(pts, Color("#8a5a3a", alpha))
+		for i in range(1, n, 2):
+			var base: Vector2 = out_pts[i]
+			var outv := (base - at).normalized()
+			ci.draw_colored_polygon(PackedVector2Array([base + outv.orthogonal() * r * 0.06, base + outv * r * 0.2, base - outv.orthogonal() * r * 0.06]), Color("#e8c898", alpha))
+		return
 	if id == "plates":
 		ci.draw_colored_polygon(pts, Color("#7a7a68", alpha))
 		for i in range(0, n + 1, 2):
@@ -271,6 +315,41 @@ static func part_shape(ci: CanvasItem, id: String, color: Color, t: float, bite 
 			pts.append_array(Art.quad(Vector2(19, -3.5), Vector2(11, 0), Vector2(-1, 5.5), 8))
 			ci.draw_colored_polygon(pts, Color("#ece2c8", alpha))
 			ci.draw_polyline(pts, Color("#a89878", alpha), 0.8, true)
+		"fat":
+			Art.ellipse(ci, Vector2(-4, 0), 4.2, 5.0, Color("#f0d890", alpha))
+			ci.draw_circle(Vector2(-5.2, -1.6), 1.3, Color(1, 1, 1, 0.8 * alpha))
+		"camo":
+			for i in 6:
+				var q := Vector2(-4, 0) + Vector2.from_angle(i * 1.1) * 3.5
+				ci.draw_circle(q, 1.3, Color.from_hsv(fmod(t * 0.2 + i * 0.17, 1.0), 0.5, 1.0, 0.8 * alpha))
+		"ink":
+			Art.ellipse(ci, Vector2(-4, 0), 4.5, 3.6, Color("#2a2238", alpha))
+			ci.draw_circle(Vector2(-5.5, -1.2), 1.0, Color(1, 1, 1, 0.5 * alpha))
+		"shield_gland":
+			var hexa := PackedVector2Array()
+			for i in 6:
+				hexa.append(Vector2(-4, 0) + Vector2.from_angle(i * TAU / 6.0) * 4.5)
+			ci.draw_colored_polygon(hexa, Color("#6ab0f0", 0.85 * alpha))
+			ci.draw_polyline(hexa + PackedVector2Array([hexa[0]]), Color("#c8e6ff", alpha), 0.8, true)
+		"pulse":
+			ci.draw_circle(Vector2(-4, 0), 4.2, Color("#f0d84a", alpha))
+			ci.draw_arc(Vector2(-4, 0), 2.6, t * 4.0, t * 4.0 + 4.5, 10, Color("#806010", alpha), 1.0, true)
+		"suction":
+			ci.draw_circle(Vector2(-4, 0), 4.2, Color("#5aa8a0", alpha))
+			ci.draw_arc(Vector2(-4, 0), 3.0, -t * 5.0, -t * 5.0 + 4.0, 10, Color("#d8fff8", alpha), 1.0, true)
+			ci.draw_arc(Vector2(-4, 0), 1.6, -t * 5.0 + 2.0, -t * 5.0 + 5.5, 8, Color("#d8fff8", alpha), 0.8, true)
+		"life_core":
+			var beat := 1.0 + 0.15 * absf(sin(t * 3.0))
+			ci.draw_circle(Vector2(-4, 0), 7.0 * beat, Color(1.0, 0.4, 0.5, 0.2 * alpha))
+			Art.heart(ci, Vector2(-4, -0.5), 8.0 * beat, Color("#f0506a", alpha))
+		"sucker":
+			ci.draw_circle(Vector2(2.5, 0), 4.2, dark)
+			ci.draw_circle(Vector2(2.5, 0), 2.6, Color("#e89aa8", alpha))
+			ci.draw_circle(Vector2(2.5, 0), 1.2, Color("#6a2a3a", alpha))
+		"jet":
+			Art.poly(ci, [Vector2(-1, -4), Vector2(7, -3), Vector2(9, 0), Vector2(7, 3), Vector2(-1, 4)], Color("#8aa0b8", alpha))
+			ci.draw_circle(Vector2(9, 0), 2.2, Color("#30404e", alpha))
+			ci.draw_circle(Vector2(11.5 + sin(t * 20.0), 0), 1.5 * absf(sin(t * 10.0)), Color(0.8, 0.95, 1.0, 0.7 * alpha))
 		"chloroplast":
 			Art.ellipse(ci, Vector2(-6.0, 0), 5.0, 2.8, Color("#3f9a4a", alpha), 0.0, 14)
 			for x in [-8.5, -6.0, -3.5]:

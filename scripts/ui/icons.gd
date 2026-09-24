@@ -62,4 +62,29 @@ static func draw(ci: CanvasItem, name: String, rect: Rect2, col: Color) -> void:
 			ci.draw_line(Vector2(40, 14), Vector2(60, 14), col, w)
 			for x in [40.0, 60.0]:
 				ci.draw_line(Vector2(x, 40), Vector2(x, 78), col, 5)
+		"ink":
+			for q in [Vector2(36, 40), Vector2(62, 34), Vector2(50, 64), Vector2(28, 66), Vector2(72, 62)]:
+				ci.draw_circle(q, 13, col)
+		"shield":
+			Art.poly(ci, [Vector2(50, 10), Vector2(86, 24), Vector2(80, 60), Vector2(50, 90), Vector2(20, 60), Vector2(14, 24)], col)
+		"pulse":
+			Art.poly(ci, [Vector2(56, 8), Vector2(24, 54), Vector2(46, 54), Vector2(38, 92), Vector2(76, 42), Vector2(54, 42)], col)
+		"suck":
+			for i in 3:
+				ci.draw_arc(Vector2(50, 50), 14 + i * 13, i * 1.2, i * 1.2 + 4.2, 16, col, 6, true)
+		"skull":
+			ci.draw_circle(Vector2(50, 44), 30, col)
+			ci.draw_rect(Rect2(34, 60, 32, 24), col)
+			ci.draw_circle(Vector2(39, 44), 8, Art.BG)
+			ci.draw_circle(Vector2(61, 44), 8, Art.BG)
+		"trophy":
+			Art.poly(ci, [Vector2(24, 14), Vector2(76, 14), Vector2(70, 46), Vector2(50, 60), Vector2(30, 46)], col)
+			ci.draw_rect(Rect2(44, 58, 12, 18), col)
+			ci.draw_rect(Rect2(30, 76, 40, 10), col)
+		"tree":
+			ci.draw_line(Vector2(50, 90), Vector2(50, 40), col, 7)
+			ci.draw_line(Vector2(50, 60), Vector2(26, 34), col, 6)
+			ci.draw_line(Vector2(50, 50), Vector2(74, 26), col, 6)
+			for q in [Vector2(50, 30), Vector2(24, 28), Vector2(76, 20)]:
+				ci.draw_circle(q, 10, col)
 	Art.unpen(ci)

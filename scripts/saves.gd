@@ -3,6 +3,8 @@ class_name Saves
 extends RefCounted
 
 const COUNT := 3
+## Песочница живёт в своей, четвёртой ячейке — в меню её нет среди трёх.
+const SANDBOX := 4
 const LAST := "user://last_slot.txt"
 
 static func path(slot: int) -> String:
@@ -17,8 +19,10 @@ static func save_slot(slot: int, evo: Evolution) -> void:
 	var f := FileAccess.open(path(slot), FileAccess.WRITE)
 	if f:
 		f.store_string(JSON.stringify(evo.to_dict()))
+	if slot < 1 or slot > COUNT:
+		return
 	var l := FileAccess.open(LAST, FileAccess.WRITE)
-	if l and slot > 0:
+	if l:
 		l.store_string(str(slot))
 
 static func delete_slot(slot: int) -> void:

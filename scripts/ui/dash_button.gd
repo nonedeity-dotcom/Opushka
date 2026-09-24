@@ -5,6 +5,10 @@ extends Control
 signal pressed
 
 var floating := false
+var icon := "dash"
+var caption := "Рывок"
+## Цвет готовой кнопки.
+var tint := Color(0.3, 0.55, 0.47, 0.95)
 ## 0 — готов, 1 — только что сделан.
 var cooldown := 0.0
 var _index := -1
@@ -46,15 +50,15 @@ func _draw() -> void:
 	var c := Vector2(d / 2.0, d / 2.0)
 	var r := d / 2.0 * (0.94 if _down else 1.0)
 	var ready := cooldown <= 0.0
-	var bg := Color(0.3, 0.55, 0.47, 0.95) if ready else (Color(0.05, 0.1, 0.13, 0.6) if floating else Art.CARD)
+	var bg := tint if ready else (Color(0.05, 0.1, 0.13, 0.6) if floating else Art.CARD)
 	draw_circle(c + Vector2(0, 4), r, Color(0, 0, 0, 0.25))
 	draw_circle(c, r, bg)
 	if not ready:
 		draw_arc(c, r - 5, -PI / 2, -PI / 2 + TAU * (1.0 - cooldown), 48, Art.GREEN, 6, true)
 	draw_arc(c, r - 2, 0, TAU, 64, Color(1, 1, 1, 0.18), 3, true)
-	Icons.draw(self, "dash", Rect2(c - Vector2(r, r) * 0.5, Vector2(r, r)), Art.TEXT if ready else Art.MUTED)
+	Icons.draw(self, icon, Rect2(c - Vector2(r, r) * 0.5, Vector2(r, r)), Art.TEXT if ready else Art.MUTED)
 	var font := get_theme_default_font()
-	var text := "Рывок"
+	var text := caption
 	var w := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 22).x
 	var pos := Vector2(c.x - w / 2.0, d + 28)
 	if floating:

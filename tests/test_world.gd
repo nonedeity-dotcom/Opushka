@@ -1,0 +1,276 @@
+## Воды, течения, стаи, паразиты, логова, свита, умения, арена, песочница, достижения.
+extends RefCounted
+
+
+func _pond(evo: Evolution = null) -> Pond:
+	var p := Pond.new(evo if evo else Evolution.create(), 777)
+	p.spawning = false
+	p.nature = false
+	return p
+
+func _run(p: Pond, seconds: float, input := Vector2.ZERO) -> Array:
+	var all: Array = []
+	for i in int(seconds / 0.05):
+		p.step(0.05, input)
+		all.append_array(p.events)
+	return all
+
+func _evo_with(parts: Array, dna := 500.0) -> Evolution:
+	var e := Evolution.create()
+	e.add_dna(dna)
+	e.body = []
+	for p in parts:
+		e.unlocked[p[0]] = p[2] if p.size() > 2 else 1
+		e.body.append({"id": p[0], "a": p[1], "d": p[3] if p.size() > 3 else 1.0})
+	return e
+
+
+func test_воды(c) -> void:
+	var p := Pond.new(Evolution.create(), 4242)
+	var found := {}
+	for y in range(-40, 40):
+		for x in range(-40, 40):
+			found[p.biome_at(Vector2(x, y) * 400.0)] = true
+	c.eq("в океане есть все четыре воды", found.size(), 4)
+	var hot := Vector2.INF
+	for i in 4000:
+		var q := Vector2(i % 80 - 40, i / 80 - 25) * 400.0
+		if p.biome_at(q) == "hot":
+			hot = q
+			break
+	var pool: Array = p._species_pool("hot").map(func(x): return x[0])
+	c.ok("в горячей воде — горячие жители, а холодных нет", pool.has("puzyrnik") and not pool.has("ledyanka"))
+
+func test_горячая_вода_жжёт(c) -> void:
+	var p := Pond.new(Evolution.create(), 4242)
+	p.spawning = false
+	for i in 6000:
+		var q := Vector2(i % 80 - 40, i / 80 - 40) * 400.0
+		if p.biome_at(q) == "hot":
+			p.player.pos = q
+			break
+	var hp0 := p.player.hp
+	var ev := _run(p, 2.0)
+	c.ok("узнал, где он", ev.any(func(e): return e.t == "biome" and e.biome == "hot"))
+	c.ok("без термооболочки жжёт", p.player.hp < hp0)
+	c.ok("и вода отмечена", p.evo.biomes_seen.has("hot"))
+
+func test_течения(c) -> void:
+	var p := Pond.new(Evolution.create(), 4242)
+	var strong := 0
+	for i in 20000:
+		if p.current_at(Vector2(i % 200, i / 200) * 37.0).length() > 30.0:
+			strong += 1
+	c.ok("течения есть, но не везде (%d из 20000)" % strong, strong > 200 and strong < 12000)
+
+func test_стая(c) -> void:
+	var p := _pond(_evo_with([["filter", 0]], 0.0))
+	p._spawn_mob(false, Vector2(600, 0))
+	var school := p.mobs.filter(func(m): return m.species == p.mobs[0].species)
+	if p.mobs[0].school:
+		c.ok("стая появляется вся сразу", school.size() == Content.SPECIES[p.mobs[0].species].school)
+	var q := _pond()
+	for i in 6:
+		q.spawn("malki", Vector2(600 + i * 70, 0))
+	_run(q, 6.0)
+	var xs: Array = q.mobs.map(func(m): return m.pos)
+	var spread := 0.0
+	for a in xs:
+		for b in xs:
+			spread = maxf(spread, a.distance_to(b))
+	c.ok("мальки сбиваются в кучу", spread < 350.0)
+
+func test_паразит(c) -> void:
+	var p := _pond()
+	var m := p.spawn("piyavka", Vector2(40, 0))
+	var ev := _run(p, 1.5)
+	c.ok("прицепился", m.host == p.player and ev.any(func(e): return e.t == "parasite"))
+	var hp0 := p.player.hp
+	_run(p, 1.0)
+	c.ok("пьёт здоровье", p.player.hp < hp0)
+	p.player.dash_cd = 0.0
+	p.step(0.05, Vector2.RIGHT, true)
+	c.ok("рывок стряхнул", m.host == null and p.evo.stats.get("shaken", 0) == 1)
+
+func test_невидимка_и_маскировка(c) -> void:
+	var p := _pond()
+	var ghost := p.spawn("prizrak", Vector2(3000, 0))
+	c.ok("призрак — невидимка", ghost.invisible)
+	var hid := _pond(_evo_with([["filter", 0], ["camo", 180]], 0.0))
+	hid._safe_t = 0.0
+	var h := hid.spawn("kusaka", Vector2(130, 0))
+	var bare := _pond(_evo_with([["filter", 0]], 0.0))
+	bare._safe_t = 0.0
+	var h2 := bare.spawn("kusaka", Vector2(130, 0))
+	_run(hid, 0.5)
+	_run(bare, 0.5)
+	c.ok("маскировку хищник не замечает, а без неё — гонится", h.ai_state != "chase" and h2.ai_state == "chase")
+
+func test_логово(c) -> void:
+	var p := Pond.new(_evo_with([["jaws", 0]], 600.0), 4242)
+	p.spawning = false
+	var lair := Vector2.INF
+	for y in range(-12, 12):
+		for x in range(-12, 12):
+			lair = p.lair_at(Vector2i(x, y))
+			if lair != Vector2.INF:
+				break
+		if lair != Vector2.INF:
+			break
+	c.ok("логова в океане есть", lair != Vector2.INF)
+	p.player.pos = lair + Vector2(1400, 0)
+	p._lairs_around()
+	var boss: Creature = p.mobs.filter(func(m): return Content.SPECIES[m.species].behavior == "lair")[0]
+	c.ok("хозяин сидит в логове", boss.pos.distance_to(lair) < 1.0)
+	_run(p, 1.0)
+	c.ok("пока ты далеко — дома", boss.pos.distance_to(lair) < boss.radius)
+	boss.hp = boss.max_hp * 0.55
+	var ev := _run(p, 0.2)
+	c.ok("на середине — вторая стадия и подмога", ev.any(func(e): return e.t == "boss_phase" and e.phase == 2) and p.mobs.size() >= 4)
+	boss.player_hit_t = 0.0
+	boss.alive = false
+	p._deaths()
+	var drops: Array = p.events.filter(func(e): return e.t == "drop").map(func(e): return e.part)
+	var reward: String = Content.SPECIES[boss.species].drops[0][0]
+	c.ok("награда выпадает всегда", drops.has(reward))
+	c.ok("логово засчитано", p.evo.lairs_beaten.has(boss.species))
+
+func test_свита(c) -> void:
+	var e := _evo_with([["jaws", 0], ["cilia", 180]], 300.0)
+	e.brood = 2
+	var p := Pond.new(e, 99)
+	p.spawning = false
+	p.nature = false
+	p.fill()
+	p.mobs.clear()
+	c.eq("двое потомков рядом", p.allies.size(), 2)
+	_run(p, 3.0, Vector2.RIGHT)
+	c.ok("плывут следом", p.allies.all(func(a): return a.pos.distance_to(p.player.pos) < 200.0))
+	var hp0: float = p.allies[0].hp
+	p.allies[0].pos = p.player.pos + Vector2(p.player.radius, 0)
+	_run(p, 1.0)
+	c.eq("своих не кусаешь", p.allies[0].hp, hp0)
+	var m := p.spawn("zelenka", p.player.pos + Vector2(150, 0))
+	p.player.ai_target = m
+	_run(p, 10.0)
+	c.ok("нападают на твою цель", not m.alive or m.hp < m.max_hp)
+
+func test_умения(c) -> void:
+	var ink := _pond(_evo_with([["filter", 0], ["ink", 180]], 100.0))
+	ink._safe_t = 0.0
+	var h := ink.spawn("kusaka", Vector2(120, 0))
+	_run(ink, 0.4)
+	c.ok("хищник гонится", h.ai_state == "chase")
+	c.ok("чернила", ink.use_ability())
+	_run(ink, 0.5)
+	c.ok("и теряет из виду", h.ai_state != "chase")
+	c.ok("второй раз сразу — нельзя", not ink.use_ability())
+	var sh := _pond(_evo_with([["filter", 0], ["shield_gland", 180]], 100.0))
+	sh.use_ability()
+	sh.player.hp = 100.0
+	sh.player.max_hp = 100.0
+	sh._hurt(sh.player, 10.0, null, "bite")
+	c.ok("щит: удар в пять раз слабее", 100.0 - sh.player.hp < 2.5)
+	var pu := _pond(_evo_with([["filter", 0], ["pulse", 180]], 100.0))
+	var z := pu.spawn("zelenka", Vector2(40, 0))
+	pu.use_ability()
+	c.ok("импульс бьёт всех рядом", z.hp < z.max_hp)
+	var su := _pond(_evo_with([["filter", 0], ["suction", 180]], 100.0))
+	su.food.append({"pos": Vector2(100, 0), "kind": "plant", "value": 1, "r": 7.0, "t": 0.0, "v": 0, "eaten": false})
+	su.use_ability()
+	_run(su, 0.3)
+	c.ok("еда плывёт к тебе", su.food.is_empty() or su.food[0].pos.x < 100.0)
+
+func test_арена(c) -> void:
+	var p := _pond(_evo_with([["jaws", 0], ["spike", 90], ["spike", -90]], 400.0))
+	p.start_arena()
+	var ev := _run(p, 3.0)
+	c.ok("первая волна", ev.any(func(e): return e.t == "wave" and e.wave == 1) and not p.mobs.is_empty())
+	for m in p.mobs:
+		m.pos = p.arena_center + Vector2(5000, 0)
+	_run(p, 0.1)
+	c.ok("за стенку не уплыть", p.mobs.all(func(m): return m.pos.distance_to(p.arena_center) <= p.arena_radius))
+	p.player.hp = 0.1
+	p._hurt(p.player, 50.0, null, "bite")
+	p._deaths()
+	c.ok("гибель на арене — конец боя", p.arena_over and p.events.any(func(e): return e.t == "arena_over"))
+
+func test_пара_даёт_потомка(c) -> void:
+	var p := _pond(_evo_with([["jaws", 0], ["cilia", 180]], 300.0))
+	p.call_mate()
+	p.mate.pos = p.player.pos + Vector2(p.player.radius + p.mate.radius, 0)
+	var ev := _run(p, 0.2)
+	c.ok("встреча с парой", ev.any(func(e): return e.t == "mated"))
+	c.eq("в свите один потомок", p.evo.brood, 1)
+	c.eq("и он уже рядом", p.allies.size(), 1)
+	p.evo.body.append({"id": "spike", "a": 90, "d": 1.0})
+	p.evo.unlocked["spike"] = 1
+	p.player.sync_player(p.evo)
+	p.resync_allies()
+	c.ok("потомок похож на родителя после правки", p.allies[0].parts.any(func(q): return q.id == "spike"))
+
+func test_арена_без_роста(c) -> void:
+	var p := _pond(_evo_with([["jaws", 0], ["spike", 90], ["spike", -90]], 400.0))
+	p.start_arena()
+	var dna := p.evo.dna_total
+	var m := p.spawn("zelenka", p.player.pos + Vector2(60, 0))
+	m.hp = 0.0
+	m.alive = false
+	m.player_hit_t = 0.0
+	p._deaths()
+	c.eq("на арене ДНК не растёт", p.evo.dna_total, dna)
+	c.ok("и части не выпадают", p.capsules.is_empty())
+
+func test_песочница(c) -> void:
+	var e := Evolution.create_sandbox()
+	c.ok("все части открыты на пятом", Content.PARTS.keys().filter(func(k): return Content.obtainable(k)).all(func(k): return e.unlocked.get(k, 0) == 5))
+	c.ok("ДНК хватает на всё", e.dna_free() > 10000)
+	c.ok("мест много", e.slots() >= 12)
+
+func test_сверхсложность(c) -> void:
+	var p := _pond(Evolution.create("insane"))
+	p.player.hp = 0.1
+	p._hurt(p.player, 50.0, null, "bite")
+	p._deaths()
+	c.ok("одна жизнь: событие «вид исчез»", p.events.any(func(e): return e.t == "permadeath"))
+	var hard := Pond.new(Evolution.create("insane"), 5)
+	hard._safe_t = 0.0
+	var soft := Pond.new(Evolution.create("easy"), 5)
+	soft._safe_t = 0.0
+	var pool: Array = hard._species_pool()
+	var calm: Array = soft._species_pool()
+	var share := func(pl: Array) -> float:
+		var h := 0.0
+		var all := 0.0
+		for x in pl:
+			all += x[1]
+			if Content.SPECIES[x[0]].behavior == "hunter":
+				h += x[1]
+		return h / all
+	c.ok("хищников больше, чем на лёгкой", share.call(pool) > share.call(calm))
+
+func test_родословная_и_достижения(c) -> void:
+	var e := Evolution.create()
+	e.remember()
+	e.generation = 2
+	e.color = 4
+	e.remember()
+	c.eq("два поколения в родословной", e.history.size(), 2)
+	c.eq("цвет запомнен", e.history[-1].color, 4)
+	e.stats.kills = 1
+	var got := e.check_achievements()
+	c.ok("достижение «первая победа»", got.any(func(a): return a.id == "first_kill"))
+	c.eq("дважды не даётся", e.check_achievements().filter(func(a): return a.id == "first_kill").size(), 0)
+	var copy := Evolution.from_dict(JSON.parse_string(JSON.stringify(e.to_dict())))
+	c.ok("сохраняется всё", copy.achievements.has("first_kill") and copy.history.size() == 2)
+
+func test_океан_не_пустеет(c) -> void:
+	var p := Pond.new(Evolution.create(), 31)
+	p.fill()
+	p.view_radius = 480.0
+	var empty := 0
+	for i in 60 * 20:
+		p.step(0.05, Vector2(1, 0.3).normalized())
+		if i % 20 == 0 and not p.mobs.any(func(m): return m.pos.distance_to(p.player.pos) < p.vision() * 2.5):
+			empty += 1
+	c.ok("за минуту плавания рядом почти всегда кто-то есть (пусто %d раз из 60)" % empty, empty < 15)

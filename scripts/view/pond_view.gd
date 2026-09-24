@@ -123,6 +123,32 @@ func effects(events: Array) -> void:
 				for i in 10:
 					_fx.append({"k": "heart", "pos": e.pos + Vector2(randf() - 0.5, randf() - 0.5) * 30.0, "vel": Vector2(randf_range(-30, 30), randf_range(-90, -40)), "life": 1.0, "speed": 0.7, "r": randf_range(6.0, 12.0)})
 				_ring(e.pos, pond.player.radius * 4.0, Color("#f07aa8"), 1.0)
+			"ally_lost":
+				_fx.append({"k": "corpse", "who": e.who, "life": 1.0, "speed": 1.8})
+				_bits(e.pos, e.color, 10, 100.0)
+			"parasite":
+				_bits(e.pos, Color("#8a5a6a"), 6, 60.0)
+			"shaken":
+				_ring(e.pos, pond.player.radius * 2.5, Color("#e89aa8"), 0.5)
+			"ability":
+				match e.ability:
+					"ink":
+						for i in 14:
+							_fx.append({"k": "ink", "pos": e.pos + Vector2(randf() - 0.5, randf() - 0.5) * e.r * 3.0, "vel": Vector2.from_angle(randf() * TAU) * randf_range(10.0, 50.0), "life": 1.0, "speed": 0.35, "r": e.r * randf_range(0.8, 1.6)})
+					"pulse":
+						_ring(e.pos, e.r * 4.0, Color("#f2e05a"), 0.5)
+						_ring(e.pos, e.r * 2.5, Color.WHITE, 0.3)
+					"suck":
+						_ring(e.pos, e.r * 9.0, Color("#8fe0d0"), 0.8)
+					"shield":
+						_ring(e.pos, e.r * 1.6, Color("#8ac8ff"), 0.4)
+			"boss_phase":
+				_ring(e.pos, 200.0, Color("#c080ff"), 1.0)
+				_shake = 1.0
+			"boss_wave":
+				_ring(e.pos, e.r, Color("#ff9070"), 0.6)
+			"wave":
+				_ring(pond.arena_center, pond.arena_radius, Art.GOLD, 1.2)
 			"dash":
 				for i in 5:
 					_fx.append({"k": "bubble", "pos": e.pos + Vector2(randf() - 0.5, randf() - 0.5) * 20.0, "life": 0.9, "r": randf_range(2.0, 4.0)})
@@ -148,6 +174,9 @@ func _draw() -> void:
 		return
 	var view := view_rect()
 	_water(view)
+	_currents(view)
+	for l in pond.lairs_near(view.size.length()):
+		_lair(l)
 	var near := view.grow(30.0)
 	for f in pond.food:
 		if near.has_point(f.pos):
@@ -166,28 +195,50 @@ func _draw() -> void:
 			_creature(m)
 	if pond.mate != null and view.grow(pond.mate.radius * 3.0).has_point(pond.mate.pos):
 		CellArt.mate(self, pond.mate, t)
+	for a in pond.allies:
+		_creature(a)
+		draw_arc(a.pos, a.radius * 1.3, 0, TAU, 20, Color(1, 1, 1, 0.25), 1.5, true)
+	if pond.mode == "arena":
+		draw_arc(pond.arena_center, pond.arena_radius, 0, TAU, 96, Color(1.0, 0.85, 0.5, 0.5), 6.0, true)
 	var p := pond.player
 	draw_circle(p.pos, p.radius * 1.6, Color(1, 1, 1, 0.05))
+	if p.shield_t > 0.0:
+		draw_circle(p.pos, p.radius * 1.5, Color(0.55, 0.8, 1.0, 0.18))
+		draw_arc(p.pos, p.radius * 1.5, 0, TAU, 40, Color(0.7, 0.9, 1.0, 0.7), 3.0, true)
 	if p.invuln > 0.0:
 		draw_arc(p.pos, p.radius * 1.35, 0, TAU, 32, Color(1, 1, 1, 0.3 + 0.3 * sin(t * 12.0)), 2.0, true)
 	_creature(p)
 	_draw_fx()
 
 func _creature(c: Creature) -> void:
+	var ghost := 1.0 if c.is_player else clampf(c.age / 0.6, 0.0, 1.0)
+	if c.invisible:
+		# Невидимка: без глаз — лишь дрожание воды, с глазами — всё лучше.
+		ghost *= clampf(0.08 + pond.player.eyes * 0.3, 0.08, 1.0)
+	if c.hidden_t > 0.0:
+		ghost *= 0.35
+	var pattern := "none"
+	var col2 := c.color
+	if c.is_player or c.ally:
+		pattern = pond.evo.pattern
+		col2 = Color(Content.COLORS[pond.evo.color2])
 	CellArt.creature(self, c.pos, c.size_r, c.heading, c.color, c.parts, c.phase, {
+		"pattern": pattern, "color2": col2,
 		"flash": c.flash, "bite": c.bite_anim, "poisoned": c.poison_t > 0.0, "wobble": c.wobble,
 		"shape": c.shape, "golden": c.golden, "gulp": c.eat_anim, "grow": c.grow_anim,
 		"stretch": clampf(c.vel.length() / maxf(c.speed, 1.0), 0.0, 1.6),
 		# Новая клетка проявляется из мути, а не возникает разом.
-		"ghost": 1.0 if c.is_player else clampf(c.age / 0.6, 0.0, 1.0),
+		"ghost": ghost,
 	})
+	if c.invisible and ghost < 0.5:
+		draw_arc(c.pos, c.radius * (1.0 + 0.05 * sin(t * 5.0)), 0, TAU, 24, Color(0.8, 0.9, 1.0, 0.12), 1.5, true)
 	if c.slow_t > 0.0:
 		draw_arc(c.pos, c.radius * 1.15, 0, TAU, 24, Color(0.9, 0.5, 0.8, 0.5), 2.0, true)
 	if not c.is_player and c.hp < c.max_hp - 0.01:
 		var w := maxf(c.radius * 1.6, 18.0)
 		var at := c.pos + Vector2(-w / 2.0, -c.radius - 10.0)
 		draw_rect(Rect2(at, Vector2(w, 4)), Color(0, 0, 0, 0.5))
-		draw_rect(Rect2(at, Vector2(w * c.hp / c.max_hp, 4)), Art.DANGER if pond._hunts(c) else Color("#e8e0c0"))
+		draw_rect(Rect2(at, Vector2(w * c.hp / c.max_hp, 4)), Color("#8fe0a0") if c.ally else (Art.DANGER if pond._hunts(c) else Color("#e8e0c0")))
 
 ## Вода: два слоя пылинок с разной глубиной — ближние плывут быстрее дальних.
 func _water(view: Rect2) -> void:
@@ -249,6 +300,8 @@ func _draw_fx() -> void:
 				for i in 4:
 					pts.append(f.pos + Vector2.from_angle(rot + i * 1.7) * s * (0.6 + 0.4 * (i % 2)))
 				draw_colored_polygon(pts, Color(f.col, a))
+			"ink":
+				draw_circle(f.pos, f.r * (1.5 - a * 0.5), Color(0.12, 0.08, 0.2, 0.55 * a))
 			"heart":
 				Art.heart(self, f.pos, f.r, Color(0.95, 0.5, 0.7, a))
 			"text":
@@ -256,3 +309,32 @@ func _draw_fx() -> void:
 				var w := _font.get_string_size(f.s, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
 				draw_string_outline(_font, f.pos - Vector2(w / 2.0, 0), f.s, HORIZONTAL_ALIGNMENT_LEFT, -1, size, maxi(2, int(4.0 / camera.zoom.x)), Color(0, 0, 0, 0.6 * a))
 				draw_string(_font, f.pos - Vector2(w / 2.0, 0), f.s, HORIZONTAL_ALIGNMENT_LEFT, -1, size, Color(f.col, a))
+
+## Течения — бегущие штрихи вдоль потока.
+func _currents(view: Rect2) -> void:
+	var z := camera.zoom.x
+	var cell := 70.0 / z
+	var x0 := floori(view.position.x / cell)
+	var y0 := floori(view.position.y / cell)
+	for gy in range(y0, floori(view.end.y / cell) + 1):
+		for gx in range(x0, floori(view.end.x / cell) + 1):
+			var p := Vector2(gx + 0.5, gy + 0.5) * cell
+			var f := pond.current_at(p)
+			var sp := f.length()
+			if sp < 8.0:
+				continue
+			var dir := f / sp
+			var k := fposmod(t * sp / cell + float(_hash(gx, gy, 3) % 100) / 100.0, 1.0)
+			var a := p + dir * (k - 0.5) * cell
+			draw_line(a, a + dir * cell * 0.35, Color(0.8, 0.95, 1.0, 0.18 * minf(1.0, sp / 60.0) * sin(PI * k)), 2.0 / z, true)
+
+## Логово: тёмное пятно со светящимся кругом; пустое — если хозяина уже победили.
+func _lair(l: Dictionary) -> void:
+	var r := 220.0
+	draw_circle(l.pos, r, Color(0.05, 0.02, 0.08, 0.35))
+	var col := Color(0.6, 0.4, 0.9, 0.25 if l.done else 0.55)
+	draw_arc(l.pos, r, 0, TAU, 64, col, 4.0, true)
+	for i in 8:
+		var a := TAU * i / 8.0 + t * 0.1
+		draw_line(l.pos + Vector2.from_angle(a) * r * 0.9, l.pos + Vector2.from_angle(a) * r * 1.08, col, 3.0, true)
+

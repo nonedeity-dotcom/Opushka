@@ -6,6 +6,7 @@ extends RefCounted
 func _pond(evo: Evolution = null) -> Pond:
 	var p := Pond.new(evo if evo else Evolution.create(), 12345)
 	p.spawning = false
+	p.nature = false
 	return p
 
 func _run(p: Pond, seconds: float, input := Vector2.ZERO) -> Array:
