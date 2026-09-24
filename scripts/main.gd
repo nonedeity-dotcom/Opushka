@@ -288,7 +288,6 @@ func _process(delta: float) -> void:
 	if pond == null:
 		return
 	backdrop.drift = pond.player.pos
-	backdrop.biome = pond.biome if pond.biome != "" else "shallows"
 	backdrop.level = evo.level()
 	backdrop.zoom = view.camera.zoom.x
 	backdrop.player_r = pond.player.size_r
@@ -484,13 +483,6 @@ func _handle(events: Array) -> void:
 			"golden":
 				sound.play("drop", 0.8)
 				hud.toast("Сияющая особь — %s! Из неё обязательно что-то выпадет. Она пугливая" % Content.SPECIES[e.species].name.to_lower())
-			"biome":
-				var bdef: Dictionary = Content.BIOMES[e.biome]
-				if e.first:
-					hud.announce(bdef.name, bdef.hint)
-					_dirty = true
-				else:
-					hud.toast(bdef.name)
 			"parasite":
 				sound.play("parasite")
 				_buzz(20)
@@ -834,17 +826,6 @@ func _run_script() -> void:
 			up.position = from + Vector2(0, float(q[2]))
 			up.pressed = false
 			Input.parse_input_event(up)
-		"goto":
-			# Переплыть в ближайшую воду нужного вида (для снимков).
-			for i in 4000:
-				var at := Vector2.from_angle(i * 0.61) * (200.0 + i * 12.0)
-				if pond.biome_at(at) == p[1]:
-					pond.player.pos = at
-					pond.mobs.clear()
-					pond.food.clear()
-					pond.rocks.clear()
-					pond.fill()
-					break
 		"giant":
 			# Позвать гиганта рядом (для снимков).
 			var g := pond.spawn(p[1], pond.player.pos + Vector2(320, 0))

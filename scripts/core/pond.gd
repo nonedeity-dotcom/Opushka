@@ -24,7 +24,7 @@ const KILL_CREDIT := 3.0
 const REGEN_DELAY := 4.0
 ## Хищник гонится за теми, кто не больше него во столько раз.
 const PREY_RATIO := 1.3
-const MEAT_DNA := 1.1
+const MEAT_DNA := 1.25
 ## Хищник гонится не дольше стольких секунд, потом отдыхает — от него можно оторваться.
 const CHASE_TIME := 5.0
 const REST_TIME := 4.0
@@ -67,7 +67,6 @@ var _ally_t := 0.0
 ## Логова: клетка сетки → хозяин, если он сейчас здесь; побеждённые в этот раз.
 ## Хозяин логова, который сейчас бьётся с тобой, — для полоски здоровья наверху.
 var boss_active: Creature = null
-var biome := ""
 var _director_t := 2.5
 var _kills_recent: Array = []
 ## Сколько секунд место съеденного пустует.
@@ -158,7 +157,6 @@ func step(dt: float, input: Vector2, dash := false) -> void:
 	_deaths()
 	if player.dna_rate > 0.0 and mode != "arena":
 		_gain(player.dna_rate * dt)
-	_biome_effects(dt)
 	if mode == "arena":
 		_arena(dt)
 	if spawning:
@@ -196,8 +194,6 @@ func _move(c: Creature, dt: float) -> void:
 		spd *= float(evo.diff().hunt)
 	if c.slow_t > 0.0:
 		spd *= 0.6
-	if c.is_player and biome == "cold" and not c.coldproof:
-		spd *= float(Content.BIOMES.cold.chill)
 	var want_dir := c.desire if c.is_player else avoid(c, c.desire)
 	var goal := want_dir * spd
 	# Во время рывка вода тормозит слабее — разгон доносит до цели.
@@ -344,6 +340,8 @@ func _wants_bite(x: Creature, y: Creature) -> bool:
 	if x.is_player or x.ally:
 		return true
 	var def: Dictionary = Content.SPECIES[x.species]
+	if def.behavior == "roamer" and not x.giant:
+		return _hunts(x) or y == x.last_attacker
 	return def.behavior == "hunter" or def.get("hunts", false) or y == x.last_attacker
 
 ## Ранить y. Панцирь со стороны удара снимает часть урона.
@@ -365,6 +363,8 @@ func _hurt(y: Creature, dmg: float, from: Creature, kind: String, silent := fals
 		dmg *= float(evo.diff().hurt)
 	if from != null and is_giant(from):
 		dmg *= GIANT_DAMAGE
+	elif from != null and not from.is_player and Content.SPECIES.get(from.species, {}).get("behavior", "") == "roamer":
+		dmg *= FORMER_GIANT_DAMAGE
 	y.hp -= dmg
 	if not y.is_player and not y.ally and not y.split_done and y.species != "mate" and Content.SPECIES[y.species].get("splits", false) \
 			and y.hp > 0.0 and y.hp < y.max_hp * 0.5 and y.size_r >= 8.0 and not _to_split.has(y):
@@ -529,7 +529,7 @@ func _deaths() -> void:
 			food.append({"pos": m.pos + off, "kind": "meat", "value": total / pieces, "r": piece_r, "t": 0.0, "v": rng.randi() % 256, "eaten": false})
 		var by_player := m.player_hit_t < KILL_CREDIT
 		events.append({"t": "kill", "pos": m.pos, "species": m.species, "by_player": by_player, "radius": m.radius, "color": m.color, "golden": m.golden, "who": m})
-		if def.behavior == "roamer":
+		if m.giant:
 			if boss_active == m:
 				boss_active = null
 			if by_player:
@@ -550,6 +550,9 @@ func _deaths() -> void:
 			for d in (def.drops if mode != "arena" else []):
 				if rng.randf() < d[1] * float(evo.diff().drop):
 					dropped.append(d[0])
+			# С гиганта его главная часть выпадает всегда — победа трудная.
+			if m.giant and not def.drops.is_empty() and mode != "arena" and not dropped.has(def.drops[0][0]):
+				dropped.append(def.drops[0][0])
 			# Из сияющей что-нибудь выпадает всегда.
 			if m.golden and dropped.is_empty() and not def.drops.is_empty() and mode != "arena":
 				dropped.append(def.drops[rng.randi() % def.drops.size()][0])
@@ -611,6 +614,9 @@ func _hunts(m: Creature) -> bool:
 	if m.is_player or m.ally or m.species == "mate":
 		return false
 	var def: Dictionary = Content.SPECIES[m.species]
+	# Бывший гигант мирный, но если ты его ранил — даёт сдачи.
+	if def.behavior == "roamer" and not m.giant:
+		return m.player_hit_t < 6.0
 	return def.behavior == "hunter" or def.get("hunts", false)
 
 ## Опасен ли o для m: охотник или ты (тебе хватит и рывка), и не мелочь.
@@ -642,7 +648,7 @@ func _nearest_prey(m: Creature) -> Creature:
 	for o in everyone():
 		if o == m or not o.alive or o.species == m.species or o.invuln > 0.0 or o.hidden_t > 0.0:
 			continue
-		if not o.is_player and not o.ally and Content.SPECIES[o.species].behavior == "roamer":
+		if is_giant(o):
 			continue
 		# Хищники чужих видов — соперники: сцепляются, даже если соперник чуть крупнее.
 		var rival := not o.is_player and not o.ally and _hunts(o)
@@ -776,12 +782,11 @@ func _spawn_plant(inner: float, outer: float, anywhere := false) -> void:
 		var r := sqrt(rng.randf_range(inner * inner, outer * outer)) if anywhere else rng.randf_range(inner, outer)
 		var p := player.pos + Vector2.from_angle(rng.randf() * TAU if anywhere else _spawn_angle()) * r
 		var meadow := (_meadow.get_noise_2d(p.x, p.y) + 1.0) * 0.5
-		var rich: float = Content.BIOMES[biome_at(p)].plants
-		if rng.randf() < (0.2 + 0.8 * meadow * meadow) * rich:
+		if rng.randf() < (0.2 + 0.8 * meadow * meadow) * 1.15:
 			food.append({"pos": p, "kind": "plant", "value": value, "r": 6.0 + 2.5 * value, "t": 0.0, "v": rng.randi() % 256, "eaten": false})
 			return
 
-func _species_pool(where := "") -> Array:
+func _species_pool() -> Array:
 	var lvl := evo.level()
 	var aggro: float = evo.diff().aggro
 	var pool: Array = []
@@ -791,12 +796,17 @@ func _species_pool(where := "") -> Array:
 			continue
 		if _safe_t > 0.0 and (def.behavior == "hunter" or def.get("hunts", false)):
 			continue
-		if def.weight <= 0.0:
+		# Бывшие гиганты: ты их перерос — плавают стайками, как все.
+		var former_giant: bool = def.behavior == "roamer" and not is_giant_now(def)
+		if def.weight <= 0.0 and not former_giant:
 			continue
-		# У каждой воды свои жители; у кого вода не указана — живут везде.
-		if where != "" and def.has("biomes") and not where in def.biomes:
+		if def.behavior == "roamer" and not former_giant:
 			continue
-		var w: float = def.weight
+		# Совсем мелкие для тебя — уже не встречаются (кроме паразитов: они мелкие нарочно).
+		var est: float = giant_size(def) if def.behavior == "roamer" else float(def.radius) * grow_k(def)
+		if est < player.size_r * 0.3 and def.behavior != "parasite":
+			continue
+		var w: float = 0.3 if former_giant else def.weight
 		if def.behavior == "hunter" or def.get("aggro", false):
 			w *= aggro
 		pool.append([id, w])
@@ -814,7 +824,7 @@ func _spawn_mob(anywhere := false, at := Vector2.INF) -> Creature:
 		var inner := maxf(vision() * 1.15, 200.0)
 		var outer := maxf(view_radius + 600.0, inner + 400.0)
 		at = player.pos + Vector2.from_angle(_spawn_angle()) * rng.randf_range(inner, outer + (500.0 if anywhere else 0.0))
-	var pool := _species_pool(biome_at(at))
+	var pool := _species_pool()
 	if pool.is_empty():
 		return null
 	var total := 0.0
@@ -831,7 +841,7 @@ func _spawn_mob(anywhere := false, at := Vector2.INF) -> Creature:
 	var golden: bool = def.behavior != "roamer" and not def.has("school") and rng.randf() < Content.GOLDEN_CHANCE
 	var first := spawn(pick, at, golden)
 	# Стайка появляется вся сразу, кучкой: двое или трое, не больше.
-	var group := rng.randi_range(2, mini(int(def.school), 3)) if def.has("school") else 1
+	var group := rng.randi_range(2, mini(int(def.school), 3)) if def.has("school") else (rng.randi_range(2, 3) if def.behavior == "roamer" else 1)
 	for i in group - 1:
 		spawn(pick, at + Vector2.from_angle(rng.randf() * TAU) * rng.randf_range(10.0, 60.0))
 	return first
@@ -841,13 +851,18 @@ func spawn(id: String, at: Vector2, golden := false, size := 0.0) -> Creature:
 	var def: Dictionary = Content.SPECIES[id]
 	# Великаны всегда во много раз больше тебя, каким бы ты ни был. Остальные растут вместе
 	# с тобой, но медленнее: хищники остаются опасными, а мелочь — мелочью.
+	var giant := false
 	if size <= 0.0:
-		if def.has("scale"):
+		if def.behavior == "roamer":
+			size = giant_size(def) * rng.randf_range(0.95, 1.05)
+			giant = is_giant_now(def)
+		elif def.has("scale"):
 			size = player.size_r * float(def.scale)
 		else:
 			size = float(def.radius) * grow_k(def) * rng.randf_range(0.9, 1.1)
 	var bonus := 0 if def.has("scale") else clampi((evo.level() - int(def.levels[0])) / 3, 0, 2)
 	var m := Creature.of_species(id, size, bonus)
+	m.giant = giant
 	_vary(m, def)
 	if golden:
 		m.make_golden()
@@ -871,6 +886,22 @@ func _vary(m: Creature, def: Dictionary) -> void:
 	var roll := rng.randf()
 	m.pattern = "spots" if roll < 0.18 else ("stripes" if roll < 0.3 else ("rings" if roll < 0.38 else "none"))
 	m.color2 = m.color.darkened(0.3) if rng.randf() < 0.6 else m.color.lightened(0.35)
+
+## Сколько уровней после своего вид ещё остаётся гигантом.
+const GIANT_LEVELS := 2
+
+## Размер бродячего вида сейчас. Пока он гигант — во много раз больше тебя, но с каждым твоим
+## уровнем на четверть меньше (не меньше 1,8 раза). Перерос — он уже с тебя ростом,
+## дальше мельчает (до 0,6 тебя), зато плавает стайкой.
+func giant_size(def: Dictionary) -> float:
+	var steps := evo.level() - int(def.levels[0])
+	if is_giant_now(def):
+		return player.size_r * maxf(1.8, float(def.get("scale", 2.0)) * pow(0.75, maxi(steps, 0)))
+	return player.size_r * maxf(0.6, 1.0 - 0.12 * (steps - GIANT_LEVELS - 1))
+
+## Гигант ли вид сейчас (для тебя): на своём уровне и ещё двух следующих.
+func is_giant_now(def: Dictionary) -> bool:
+	return evo.level() <= int(def.levels[0]) + GIANT_LEVELS
 
 ## Во сколько раз вид крупнее своего обычного: каким он задуман на размере, с которого
 ## появляется, таким и встречается; перерастаешь его — он подрастает, но медленнее тебя.
@@ -1288,7 +1319,7 @@ func pick_giant() -> String:
 	var total := 0.0
 	for id in Content.SPECIES:
 		var def: Dictionary = Content.SPECIES[id]
-		if def.behavior != "roamer" or lvl < int(def.levels[0]) or lvl > int(def.levels[1]):
+		if def.behavior != "roamer" or lvl < int(def.levels[0]) or lvl > int(def.levels[1]) or not is_giant_now(def):
 			continue
 		var w := 3.0 if int(def.levels[0]) == lvl else (2.0 if int(def.levels[0]) == lvl - 1 else 1.0)
 		pool.append([id, w])
@@ -1477,19 +1508,6 @@ func _mate_step(dt: float) -> void:
 
 # --- воды и течения -------------------------------------------------------------------
 
-## Какая вода в этом месте: мелководье, глубина, горячие источники, холодное течение.
-func biome_at(p: Vector2) -> String:
-	if mode == "arena" or not nature:
-		return "shallows"
-	var t := _temp.get_noise_2d(p.x, p.y)
-	if t > 0.32:
-		return "hot"
-	if t < -0.32:
-		return "cold"
-	if _depth.get_noise_2d(p.x, p.y) > 0.18:
-		return "deep"
-	return "shallows"
-
 ## Течение в точке: узкие полосы вдоль линий плавного шума. Вне полос — ноль.
 func current_at(p: Vector2) -> Vector2:
 	if mode == "arena" or not nature:
@@ -1510,19 +1528,9 @@ func vision() -> float:
 	# Глаз разгоняет туман по-настоящему: один — видно почти весь экран, два — весь.
 	var k := clampf(player.eyes / 2.0, 0.0, 1.0)
 	var v := lerpf(player.vision, maxf(player.vision, view_radius * 1.1), k) * player.light
-	v *= float(Content.BIOMES[biome if biome != "" else "shallows"].vision) * float(evo.diff().vision)
+	v *= float(evo.diff().vision)
 	# На арене видно весь круг — прятаться там не в чем.
 	return maxf(v * 1.6, arena_radius * 1.15) if mode == "arena" else v
-
-func _biome_effects(dt: float) -> void:
-	var b := biome_at(player.pos)
-	if b != biome:
-		biome = b
-		var first := not evo.biomes_seen.has(b)
-		evo.biomes_seen[b] = true
-		events.append({"t": "biome", "biome": b, "first": first})
-	if biome == "hot" and not player.heatproof and player.alive and player.invuln <= 0.0:
-		_hurt(player, float(Content.BIOMES.hot.burn) * player.size_k() * dt, null, "heat", true)
 
 
 # --- паразиты -------------------------------------------------------------------------
@@ -1594,10 +1602,12 @@ func _shake_off() -> void:
 const PARASITE_FULL := 12.0
 ## Гиганты бьют слабее своего размера — иначе одолеть их было бы нельзя.
 const GIANT_DAMAGE := 0.35
+## Бывшие гиганты (ты их перерос) — стаей, но бьют слабее обычного.
+const FORMER_GIANT_DAMAGE := 0.6
 
 ## Гигант ли это (бродячий, один на всю округу).
 static func is_giant(m: Creature) -> bool:
-	return not m.is_player and not m.ally and m.species != "mate" and Content.SPECIES[m.species].behavior == "roamer"
+	return m.giant
 
 
 # --- свита ----------------------------------------------------------------------------

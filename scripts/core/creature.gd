@@ -22,6 +22,8 @@ var color2 := Color.WHITE
 var parts: Array = []  # [{id, a — радианы, d — глубина: 1 край, 0 середина, lvl}]
 ## Сияющая особь: редкая, пугливая, крепче, и что-нибудь из неё выпадает всегда.
 var golden := false
+## Гигант: плывёт один через всю округу. Перерос его — он уже обычный и ходит стайкой.
+var giant := false
 var announced := false
 
 var pos := Vector2.ZERO
@@ -185,7 +187,13 @@ func behavior() -> String:
 		return "mate"
 	if ally:
 		return "ally"
-	return "skittish" if golden else Content.SPECIES[species].behavior
+	if golden:
+		return "skittish"
+	var def: Dictionary = Content.SPECIES[species]
+	# Бывший гигант (ты его перерос) — мирный, плавает стайкой; тронешь — даст сдачи.
+	if def.behavior == "roamer" and not giant:
+		return "drifter"
+	return def.behavior
 
 func size_k() -> float:
 	return size_r / 16.0
@@ -301,10 +309,6 @@ func _apply_bonus() -> void:
 	var lvl := func(id: String) -> int: return int(bonus.get(id, 0))
 	max_hp *= 1.0 + 0.15 * lvl.call("hp")
 	regen += 0.35 * lvl.call("regen") * size_k()
-	if lvl.call("heat") > 0:
-		heatproof = true
-	if lvl.call("cold") > 0:
-		coldproof = true
 	camo = maxf(camo, [0.0, 0.25, 0.4, 0.55][mini(lvl.call("camo"), 3)])
 	dash_k *= [1.0, 0.85, 0.72, 0.6][mini(lvl.call("dash"), 3)]
 	dash_power = 260.0 * pow(size_k(), 0.3) / sqrt(dash_k)

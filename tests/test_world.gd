@@ -30,36 +30,6 @@ func _evo_with(parts: Array, dna := 500.0) -> Evolution:
 	return _with_sac(e)
 
 
-func test_воды(c) -> void:
-	var p := Pond.new(Evolution.create(), 4242)
-	var found := {}
-	for y in range(-40, 40):
-		for x in range(-40, 40):
-			found[p.biome_at(Vector2(x, y) * 400.0)] = true
-	c.eq("в океане есть все четыре воды", found.size(), 4)
-	var hot := Vector2.INF
-	for i in 4000:
-		var q := Vector2(i % 80 - 40, i / 80 - 25) * 400.0
-		if p.biome_at(q) == "hot":
-			hot = q
-			break
-	var pool: Array = p._species_pool("hot").map(func(x): return x[0])
-	c.ok("в горячей воде — горячие жители, а холодных нет", pool.has("puzyrnik") and not pool.has("ledyanka"))
-
-func test_горячая_вода_жжёт(c) -> void:
-	var p := Pond.new(Evolution.create(), 4242)
-	p.spawning = false
-	for i in 6000:
-		var q := Vector2(i % 80 - 40, i / 80 - 40) * 400.0
-		if p.biome_at(q) == "hot":
-			p.player.pos = q
-			break
-	var hp0 := p.player.hp
-	var ev := _run(p, 2.0)
-	c.ok("узнал, где он", ev.any(func(e): return e.t == "biome" and e.biome == "hot"))
-	c.ok("без термооболочки жжёт", p.player.hp < hp0)
-	c.ok("и вода отмечена", p.evo.biomes_seen.has("hot"))
-
 func test_течения(c) -> void:
 	var p := Pond.new(Evolution.create(), 4242)
 	var strong := 0
@@ -439,7 +409,7 @@ func test_бродячий_гигант(c) -> void:
 	c.ok("награда выпадает всегда", p.events.any(func(x): return x.t == "drop" and x.part == reward))
 
 func test_прилипала(c) -> void:
-	var p := _pond(_evo_with([["filter", 0], ["remora", 180], ["cilia", 90]], 300.0))
+	var p := _pond(_evo_with([["filter", 0], ["remora", 180], ["cilia", 90]], 100.0))
 	var host := p.spawn("gigant", p.player.pos + Vector2(-p.player.radius - 5.0, 0))
 	host.ai_t = 99.0
 	p.player.heading = 0.0

@@ -95,9 +95,9 @@ const PARTS := {
 		"hint": "Бьёт с разгона. Не выбить"},
 	# Для разных вод.
 	"thermo": {"name": "Термооболочка", "kind": "defense", "cost": 20, "heatproof": true, "source": "mob",
-		"hint": "Горячая вода не жжёт. Тебе — в магазине: «Термозащита»"},
+		"hint": "Часть огневиков и пузырников. Не выбить"},
 	"fat": {"name": "Жировая капля", "kind": "defense", "cost": 16, "coldproof": true, "hp": 5.0, "inner": true, "source": "mob",
-		"hint": "В холодной воде не мёрзнешь. Тебе — в магазине: «Жировой слой»"},
+		"hint": "Часть ледянок и морозников. Не выбить"},
 	"sucker": {"name": "Присоска", "kind": "weapon", "cost": 24, "drain": 3.0, "arc": 40,
 		"hint": "Тянет здоровье из того, кого коснулась, и лечит тебя"},
 	"camo": {"name": "Хроматофоры", "kind": "special", "cost": 30, "camo": 0.45, "inner": true, "source": "mob",
@@ -139,16 +139,13 @@ const PARTS := {
 
 ## Разные воды. Океан поделён на области: где светло и спокойно, где темно, где жжёт,
 ## где холодно. У каждой — свои жители и свои части.
-const BIOMES := {
-	"shallows": {"name": "Мелководье", "hint": "Светло и спокойно, много водорослей", "plants": 1.2, "vision": 1.0,
-		"top": "#1d5566", "bottom": "#071219"},
-	"deep": {"name": "Глубина", "hint": "Темно: видно хуже, водятся невидимки", "plants": 0.6, "vision": 0.7,
-		"top": "#0f2a44", "bottom": "#03070e"},
-	"hot": {"name": "Горячие источники", "hint": "Вода жжёт — купи «Термозащиту» в магазине", "plants": 0.8, "vision": 1.0, "burn": 0.5,
-		"top": "#5a3a28", "bottom": "#140806"},
-	"cold": {"name": "Холодное течение", "hint": "Клетка мёрзнет и медлит — купи «Жировой слой» в магазине", "plants": 0.9, "vision": 0.95, "chill": 0.75,
-		"top": "#4a7a96", "bottom": "#0a1824"},
-}
+## Цвет воды по размеру: сначала светлое мелководье, чем больше клетка — тем глубже и темнее
+## океан вокруг. Только вид — на игру не влияет. [верх, низ] на каждый размер.
+const WATER := [
+	["#2c7480", "#0c1e24"], ["#276c7c", "#0b1c23"], ["#226478", "#0a1a22"], ["#1f5b72", "#091820"],
+	["#1d5566", "#071219"], ["#1c4c62", "#06101a"], ["#1c435c", "#050e18"], ["#1b3a54", "#040c16"],
+	["#1c324d", "#040a14"], ["#1d2b46", "#030811"],
+]
 
 ## Камни: их можно разбить — рывком, укусом, шипом. Из них — части, которых нет ни у кого.
 ## Радиус и прочность растут вместе с тобой.
@@ -270,10 +267,10 @@ const SPECIES := {
 		"hint": "Великан-хищник. Медленный — от него можно уплыть. Щупальца и пластины не выбить"},
 	# Стаи: плавают косяком. school — сколько в стае.
 	"malki": {"name": "Мальки", "behavior": "grazer", "radius": 7.0, "color": "#bfe8a0", "shape": "oval", "tier": 0, "school": 3,
-		"parts": [["filter", 0, 1], ["cilia", 180, 1]], "levels": [1, 10], "weight": 2.0, "biomes": ["shallows"],
+		"parts": [["filter", 0, 1], ["cilia", 180, 1]], "levels": [1, 10], "weight": 2.0,
 		"drops": [["cilia", 0.1]], "hint": "Плавают стайкой по двое-трое и разбегаются веером"},
 	"zubastiki": {"name": "Зубастики", "behavior": "hunter", "radius": 9.0, "color": "#e07070", "shape": "drop", "tier": 1, "school": 3, "aggro": true,
-		"parts": [["jaws", 0, 1], ["cilia", 180, 1]], "levels": [3, 9], "weight": 1.3, "biomes": ["shallows", "deep"],
+		"parts": [["jaws", 0, 1], ["cilia", 180, 1]], "levels": [3, 9], "weight": 1.3,
 		"drops": [["jaws", 0.12]], "hint": "Охотятся по двое-трое — одного не боятся, стайки бойся"},
 	# Агрессивные: бросаются даже на тех, кто крупнее.
 	"ostrozub": {"name": "Острозуб", "behavior": "hunter", "radius": 12.0, "color": "#e0806a", "shape": "drop", "tier": 2, "aggro": true,
@@ -288,28 +285,28 @@ const SPECIES := {
 		"drops": [["sucker", 0.2]], "hint": "Цепляется и пьёт здоровье. Стряхни рывком"},
 	# Невидимка: без глаз его почти не видно.
 	"prizrak": {"name": "Призрак", "behavior": "hunter", "radius": 20.0, "color": "#b0c8e0", "shape": "drop", "tier": 4, "invisible": true, "aggro": true,
-		"parts": [["fangs", 0, 1], ["camo", 180, 1], ["cilia", 150, 1], ["cilia", -150, 1]], "levels": [3, 10], "weight": 1.6, "biomes": ["deep"],
+		"parts": [["fangs", 0, 1], ["camo", 180, 1], ["cilia", 150, 1], ["cilia", -150, 1]], "levels": [3, 10], "weight": 1.6,
 		"drops": [["fangs", 0.2], ["cilia", 0.15]], "hint": "Прозрачный хищник глубин. Без глаз его почти не видно"},
 	"chernilnik": {"name": "Чернильник", "behavior": "skittish", "radius": 16.0, "color": "#5a4a7a", "shape": "bean", "tier": 2,
-		"parts": [["ink", 90, 1], ["filter", 0, 1], ["flagellum", 180, 1], ["eye", -30, 1]], "levels": [3, 10], "weight": 1.5, "biomes": ["deep", "cold"],
+		"parts": [["ink", 90, 1], ["filter", 0, 1], ["flagellum", 180, 1], ["eye", -30, 1]], "levels": [3, 10], "weight": 1.5,
 		"drops": [["ink", 0.3], ["eye", 0.2], ["flagellum", 0.1]], "hint": "Удирая, пускает чернила"},
 	"udilshik": {"name": "Удильщик", "behavior": "hunter", "radius": 24.0, "color": "#3a4a70", "shape": "wide", "tier": 4,
-		"parts": [["fangs", 0, 1], ["lantern", -30, 1], ["cilia", 150, 1], ["cilia", -150, 1], ["eye", 30, 1], ["firefly", 60, 1]], "levels": [4, 10], "weight": 1.2, "biomes": ["deep"],
+		"parts": [["fangs", 0, 1], ["lantern", -30, 1], ["cilia", 150, 1], ["cilia", -150, 1], ["eye", 30, 1], ["firefly", 60, 1]], "levels": [4, 10], "weight": 1.2,
 		"drops": [["fangs", 0.2], ["eye", 0.25], ["firefly", 0.2]], "hint": "Светится огоньком во тьме. Огонёк не выбить"},
 	# Горячие источники.
 	"puzyrnik": {"name": "Пузырник", "behavior": "grazer", "radius": 14.0, "color": "#e8a060", "tier": 1,
-		"parts": [["filter", 0, 1], ["thermo", 180, 1], ["cilia", 90, 1]], "levels": [1, 8], "weight": 3.0, "biomes": ["hot"],
-		"drops": [["filter", 0.2], ["cilia", 0.2]], "hint": "Живёт в горячей воде — её термооболочка не жжётся"},
+		"parts": [["filter", 0, 1], ["thermo", 180, 1], ["cilia", 90, 1]], "levels": [1, 8], "weight": 3.0,
+		"drops": [["filter", 0.2], ["cilia", 0.2]], "hint": "Мирная, в плотной термооболочке"},
 	"ognevik": {"name": "Огневик", "behavior": "hunter", "radius": 19.0, "color": "#e06a3a", "shape": "star", "tier": 3, "aggro": true,
-		"parts": [["jaws", 0, 1], ["thermo", 180, 1], ["cilia", 120, 1], ["cilia", -120, 1]], "levels": [2, 10], "weight": 2.0, "biomes": ["hot"],
-		"drops": [["jaws", 0.25], ["cilia", 0.15]], "hint": "Злой хищник горячих источников"},
+		"parts": [["jaws", 0, 1], ["thermo", 180, 1], ["cilia", 120, 1], ["cilia", -120, 1]], "levels": [2, 10], "weight": 2.0,
+		"drops": [["jaws", 0.25], ["cilia", 0.15]], "hint": "Злой огненный хищник"},
 	# Холодные течения.
 	"ledyanka": {"name": "Ледянка", "behavior": "grazer", "radius": 15.0, "color": "#a8d8f0", "shape": "oval", "tier": 1,
-		"parts": [["filter", 0, 1], ["fat", 180, 1], ["cilia", 180, 1]], "levels": [1, 9], "weight": 3.0, "biomes": ["cold"],
-		"drops": [["filter", 0.2], ["cilia", 0.2]], "hint": "Жировая капля греет её в холодной воде"},
+		"parts": [["filter", 0, 1], ["fat", 180, 1], ["cilia", 180, 1]], "levels": [1, 9], "weight": 3.0,
+		"drops": [["filter", 0.2], ["cilia", 0.2]], "hint": "Мирная и пухлая, с жировой каплей"},
 	"moroznik": {"name": "Морозник", "behavior": "hunter", "radius": 22.0, "color": "#7aa8d8", "shape": "star", "tier": 4, "aggro": true,
-		"parts": [["fangs", 0, 1], ["fat", 180, 1], ["spike", 120, 1], ["spike", -120, 1], ["cilia", 180, 1]], "levels": [3, 10], "weight": 1.6, "biomes": ["cold"],
-		"drops": [["spike", 0.25], ["fangs", 0.1]], "hint": "Хищник холодных течений"},
+		"parts": [["fangs", 0, 1], ["fat", 180, 1], ["spike", 120, 1], ["spike", -120, 1], ["cilia", 180, 1]], "levels": [3, 10], "weight": 1.6,
+		"drops": [["spike", 0.25], ["fangs", 0.1]], "hint": "Хищник с ледяными шипами"},
 	# Стрелки: держатся поодаль и бьют издалека.
 	"plevun": {"name": "Плевун", "behavior": "shooter", "radius": 15.0, "color": "#9ac060", "shape": "bean", "tier": 3, "hunts": true,
 		"parts": [["spit", 0, 1], ["cilia", 150, 1], ["cilia", -150, 1], ["membrane", 180, 1]], "levels": [3, 10], "weight": 1.4,
@@ -381,7 +378,6 @@ const ACHIEVEMENTS := [
 	{"id": "parts10", "title": "Коллекционер", "stat": "@parts", "need": 10, "hint": "Найди десять разных частей"},
 	{"id": "parts_all", "title": "Полная коллекция", "stat": "@parts", "need": -1, "hint": "Найди все части, какие можно выбить"},
 	{"id": "maxed", "title": "Мастер части", "stat": "@maxed", "need": 1, "hint": "Прокачай любую часть до пятого уровня"},
-	{"id": "biomes", "title": "Путешественник", "stat": "@biomes", "need": 4, "hint": "Побывай во всех четырёх водах"},
 	{"id": "lairs", "title": "Покоритель гигантов", "stat": "@lairs", "need": 3, "hint": "Победи трёх разных бродячих гигантов"},
 	{"id": "gen10", "title": "Десять поколений", "stat": "@generation", "need": 10, "hint": "Проживи десять поколений"},
 	{"id": "brood3", "title": "Большая семья", "stat": "@brood", "need": 3, "hint": "Собери свиту из трёх потомков"},
@@ -449,8 +445,6 @@ static func shape_stats(shape: Array) -> Dictionary:
 
 ## Магазин: улучшения на весь вид, не части тела. Цена — за каждый следующий уровень.
 const UPGRADES := {
-	"heat": {"name": "Термозащита", "icon": "sun", "costs": [30], "hint": "Горячая вода больше не жжёт"},
-	"cold": {"name": "Жировой слой", "icon": "snow", "costs": [30], "hint": "В холодной воде не мёрзнешь и не медлишь"},
 	"room": {"name": "Лишнее место", "icon": "plus", "costs": [50, 120, 240], "hint": "+1 место под часть тела"},
 	"hp": {"name": "Крепкая оболочка", "icon": "heart", "costs": [30, 70, 140], "hint": "+15% здоровья"},
 	"regen": {"name": "Заживление", "icon": "leaf", "costs": [30, 70, 140], "hint": "Раны затягиваются быстрее"},

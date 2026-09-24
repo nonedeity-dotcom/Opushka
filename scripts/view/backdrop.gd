@@ -5,8 +5,7 @@ extends Control
 var t := 0.0
 ## Смещение камеры — лучи чуть сдвигаются, когда плывёшь, и вода не кажется картинкой.
 var drift := Vector2.ZERO
-## Цвет воды плавно меняется, когда переплываешь из одной воды в другую.
-var biome := "shallows"
+## Цвет воды плавно меняется с размером: чем больше клетка, тем глубже и темнее океан.
 var _top := Color("#1d5566")
 var _bottom := Color("#071219")
 var _light := 1.0
@@ -34,11 +33,11 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	t += delta
-	var def: Dictionary = Content.BIOMES.get(biome, Content.BIOMES.shallows)
-	var k := 1.0 - exp(-1.5 * delta)
-	_top = _top.lerp(Color(def.top), k)
-	_bottom = _bottom.lerp(Color(def.bottom), k)
-	_light = lerpf(_light, 0.35 if biome == "deep" else 1.0, k)
+	var water: Array = Content.WATER[clampi(level, 1, Content.WATER.size()) - 1]
+	var k := 1.0 - exp(-0.8 * delta)
+	_top = _top.lerp(Color(water[0]), k)
+	_bottom = _bottom.lerp(Color(water[1]), k)
+	_light = lerpf(_light, lerpf(1.0, 0.45, (level - 1) / 9.0), k)
 	if level != _ghost_level:
 		_ghost_level = level
 		_ghosts.clear()

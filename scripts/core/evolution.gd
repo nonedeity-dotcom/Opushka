@@ -406,7 +406,7 @@ static func from_dict(d: Variant) -> Evolution:
 	# Термооболочка, жировая капля и хроматофоры раньше были частями — теперь это покупки.
 	# Кто их уже добыл, получает их даром.
 	var raw_unlocked := _dict(d.get("unlocked"))
-	for pair in [["thermo", "heat"], ["fat", "cold"], ["camo", "camo"]]:
+	for pair in [["camo", "camo"]]:
 		if raw_unlocked.has(pair[0]) and not e.upgrades.has(pair[1]):
 			e.upgrades[pair[1]] = 1
 			e.gifts[pair[1]] = 1
@@ -469,8 +469,7 @@ static func from_dict(d: Variant) -> Evolution:
 		if n is int or n is float:
 			e.set(key, clampi(int(n), 0, 3 if key == "brood" else 9999))
 	for b in _dict(d.get("biomes_seen")):
-		if Content.BIOMES.has(b):
-			e.biomes_seen[b] = true
+		e.biomes_seen[b] = true
 	for b in _dict(d.get("lairs_beaten")):
 		if Content.SPECIES.has(b):
 			e.lairs_beaten[b] = true

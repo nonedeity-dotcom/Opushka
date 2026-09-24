@@ -307,10 +307,13 @@ func test_щупальце_держит(c) -> void:
 func test_великан(c) -> void:
 	var p := _pond(_evo_with([["filter", 0]], 800.0))
 	var g := p.spawn("gigant", Vector2(900, 0))
-	c.ok("великан во много раз больше тебя", g.radius > p.player.radius * 3.0)
+	c.ok("выросшему первый великан уже не гигант", not g.giant and g.behavior() != "roamer")
+	c.ok("и уже не больше тебя", g.size_r <= p.player.size_r * 1.05)
+	c.ok("плавает стайкой среди обычных", p._species_pool().any(func(x): return x[0] == "gigant"))
 	var small := _pond()
 	var g2 := small.spawn("gigant", Vector2(900, 0))
-	c.ok("и маленького тоже", g2.radius > small.player.radius * 3.0)
+	c.ok("маленькому великан — гигант", g2.giant)
+	c.ok("и во много раз больше", g2.radius > small.player.radius * 3.0)
 
 func test_пара(c) -> void:
 	var p := _pond()
@@ -336,3 +339,12 @@ func test_сложность_в_драке(c) -> void:
 		p._hurt(p.player, 10.0, null, "bite")
 		hurt.append(100.0 - p.player.hp)
 	c.ok("на тяжёлой больнее, чем на лёгкой", hurt[1] > hurt[0] * 2.0)
+
+func test_бывший_гигант_мирный(c) -> void:
+	var p := _pond(_evo_with([["filter", 0]], 1100.0))
+	p._safe_t = 0.0
+	var m := p.spawn("pozhiratel", p.player.pos + Vector2(p.player.radius * 2.2, 0))
+	c.ok("пожиратель уже не гигант", not m.giant)
+	c.ok("сам не охотится", not p._hunts(m) and not p._wants_bite(m, p.player))
+	m.player_hit_t = 0.0
+	c.ok("ранил его — даёт сдачи", p._hunts(m))

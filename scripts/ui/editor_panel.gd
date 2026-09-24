@@ -500,11 +500,7 @@ func _species_card(id: String) -> PanelContainer:
 		kind += ", невидимка"
 	text.add_child(Kit.label("%s · %s" % [def.name, kind], 22, Art.DANGER if def.behavior == "hunter" or def.get("hunts", false) else Art.TEXT, true))
 	text.add_child(Kit.muted(def.hint, 17))
-	var waters: Array = []
-	for b in def.get("biomes", []):
-		waters.append(Content.BIOMES[b].name.to_lower())
-	var where := " · " + ", ".join(waters) if not waters.is_empty() else ""
-	text.add_child(Kit.muted("Размеры %d–%d%s · побед: %d" % [def.levels[0], def.levels[1], where, evo.kills_by.get(id, 0)], 17))
+	text.add_child(Kit.muted("Размеры %d–%d · побед: %d" % [def.levels[0], def.levels[1], evo.kills_by.get(id, 0)], 17))
 	var drops := HFlowContainer.new()
 	drops.add_theme_constant_override("h_separation", 8)
 	drops.add_theme_constant_override("v_separation", 6)
@@ -618,7 +614,7 @@ func _awards_tab() -> void:
 	flow.add_theme_constant_override("v_separation", 8)
 	for pair in [["Достижения", "%d/%d" % [evo.achievements.size(), Content.ACHIEVEMENTS.size()]], ["Части", "%d/%d" % [got_parts, parts_all.size()]],
 			["На 5 уровне", str(maxed)], ["Виды", "%d/%d" % [evo.seen.size(), Content.SPECIES.size()]],
-			["Воды", "%d/%d" % [evo.biomes_seen.size(), Content.BIOMES.size()]], ["Гиганты", "%d/%d" % [evo.lairs_beaten.size(), Content.SPECIES.values().filter(func(d): return d.behavior == "roamer").size()]],
+			["Гиганты", "%d/%d" % [evo.lairs_beaten.size(), Content.SPECIES.values().filter(func(d): return d.behavior == "roamer").size()]],
 			["Поколений", str(evo.generation)], ["Арена", "%d волн" % evo.arena_best]]:
 		flow.add_child(_chip("%s  %s" % pair, Art.TEXT))
 	col.add_child(flow)

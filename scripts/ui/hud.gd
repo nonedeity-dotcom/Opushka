@@ -45,7 +45,6 @@ var reveal: Control
 var minimap: Control
 ## Второе умение (чернила, щит, разряд, всасывание) — есть, только если есть такая часть.
 var ability_btn: Control
-var biome_chip: Control
 var boss_bar: Control
 var arena_pill: Control
 
@@ -134,8 +133,6 @@ func _ready() -> void:
 	ability_btn.visible = false
 	ability_btn.pressed.connect(func(): ability_pressed.emit())
 	add_child(ability_btn)
-	biome_chip = BiomeChip.new()
-	add_child(biome_chip)
 	boss_bar = BossBar.new()
 	boss_bar.visible = false
 	add_child(boss_bar)
@@ -195,14 +192,6 @@ func refresh(pond: Pond) -> void:
 			ability_btn.caption = look[1]
 			ability_btn.queue_redraw()
 		ability_btn.set_cooldown(pond.player.ability_t / maxf(pond.player.ability_cd, 0.1))
-	var b := pond.biome if pond.biome != "" else "shallows"
-	var warn := ""
-	if b == "hot" and not pond.player.heatproof:
-		warn = "жжёт!"
-	elif b == "cold" and not pond.player.coldproof:
-		warn = "холодно"
-	biome_chip.visible = pond.mode != "arena"
-	biome_chip.set_state(b, warn)
 	var boss := pond.boss_active
 	boss_bar.visible = boss != null and boss.alive
 	if boss_bar.visible:
@@ -304,8 +293,6 @@ func _layout() -> void:
 	dna_pill.position = Vector2(left + size_pill.size.x + 10, top)
 	hp_bar.position = Vector2(left, top + 74)
 	hp_bar.size = Vector2(size_pill.size.x + 10 + dna_pill.size.x, 26)
-	biome_chip.position = Vector2(left, top + 108)
-	biome_chip.size = Vector2(hp_bar.size.x, 30)
 	settings_btn.position = Vector2(right - 64, top)
 	atlas_btn.position = Vector2(right - 64 * 2 - 10, top)
 	shop_btn.position = Vector2(right - 64 * 3 - 20, top)
@@ -445,41 +432,6 @@ class IconBox:
 	func _draw() -> void:
 		draw_circle(size / 2.0, size.x / 2.0, Color(0.56, 0.82, 0.7, 0.15))
 		Icons.draw(self, icon, Rect2(size * 0.22, size * 0.56), Art.GREEN)
-
-## Какая вода вокруг — и предупреждение, если в ней плохо.
-class BiomeChip:
-	extends Control
-	var biome := "shallows"
-	var warn := ""
-	var t := 0.0
-
-	func _ready() -> void:
-		mouse_filter = Control.MOUSE_FILTER_IGNORE
-
-	func set_state(b: String, w: String) -> void:
-		if w != "":
-			t += get_process_delta_time()
-			queue_redraw()
-		if b == biome and w == warn:
-			return
-		biome = b
-		warn = w
-		queue_redraw()
-
-	func _draw() -> void:
-		var def: Dictionary = Content.BIOMES[biome]
-		var font := get_theme_default_font()
-		var text: String = def.name
-		var col := Color(def.top).lightened(0.45)
-		draw_circle(Vector2(13, 15), 8, col)
-		var pos := Vector2(30, 23)
-		draw_string_outline(font, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 20, 5, Color(0, 0, 0, 0.6))
-		draw_string(font, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 20, Art.TEXT)
-		if warn != "":
-			var x := 30 + font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 20).x + 12
-			var wc := Color(Art.DANGER if biome == "hot" else Color("#9fd8ff"), 0.7 + 0.3 * sin(t * 6.0))
-			draw_string_outline(font, Vector2(x, 23), warn, HORIZONTAL_ALIGNMENT_LEFT, -1, 20, 5, Color(0, 0, 0, 0.6))
-			draw_string(font, Vector2(x, 23), warn, HORIZONTAL_ALIGNMENT_LEFT, -1, 20, wc)
 
 ## Хозяин логова: имя, здоровье и стадия боя.
 class BossBar:
