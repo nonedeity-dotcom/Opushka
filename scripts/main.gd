@@ -27,11 +27,17 @@ var fog: ColorRect
 var menu: Control
 var shop: Control
 var pause: Control
+## Суша (второй этап): мир и её экран — пока открыта.
+var land_world: Node3D
+var land_hud: Control
+var _ui: Control
+var _back_layer: CanvasLayer
 var landscape := true
 ## Ячейка сохранения, в которую играем. 0 — проверочный запуск: не сохраняется.
 var slot := 0
 var _debug := false
 var _show_menu := false
+var _show_land := false
 
 var _seed := 0
 var _dash := false
@@ -73,6 +79,7 @@ func _ready() -> void:
 	var back := CanvasLayer.new()
 	back.layer = -1
 	add_child(back)
+	_back_layer = back
 	backdrop = preload("res://scripts/view/backdrop.gd").new()
 	back.add_child(backdrop)
 
@@ -103,6 +110,7 @@ func _ready() -> void:
 	ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(ui)
+	_ui = ui
 
 	hud = Hud.new()
 	ui.add_child(hud)
@@ -198,6 +206,10 @@ func _ready() -> void:
 		evo = Saves.load_slot(s)
 		if evo:
 			_begin(s, false, "arena"))
+	menu.land.connect(func(s):
+		slot = s
+		evo = Saves.load_slot(s)
+		_to_land())
 	menu.sandbox.connect(func():
 		sound.play("levelup", 0.8)
 		evo = Saves.load_slot(Saves.SANDBOX)
@@ -213,7 +225,9 @@ func _ready() -> void:
 	_orient()
 	get_viewport().size_changed.connect(_on_resize)
 	_on_resize()
-	if _debug and not _show_menu:
+	if _show_land:
+		_to_land()
+	elif _debug and not _show_menu:
 		_begin(0, false)
 	else:
 		_to_menu()
@@ -242,7 +256,38 @@ func _begin(s: int, fresh: bool, mode := "normal") -> void:
 		hud.toast("Ты — крошечная клетка без глаз: видно только то, что рядом. Плыви к зелёным крупинкам — это еда")
 
 ## В меню: сохранить, убрать океан, показать ячейки.
+## Суша: океан прячется, открывается остров в 3D.
+func _to_land() -> void:
+	menu.visible = false
+	hud.visible = false
+	fog.visible = false
+	_back_layer.visible = false
+	view.visible = false
+	sound.set_music("calm")
+	var land := Land.new(evo, _seed if _seed != 0 else randi())
+	land_world = LandWorld.new()
+	add_child(land_world)
+	land_world.setup(land)
+	land_world.ate.connect(func():
+		sound.play("eat", randf_range(0.9, 1.1))
+		_buzz(10))
+	land_hud = preload("res://scripts/land/land_hud.gd").new()
+	land_hud.world = land_world
+	land_hud.back.connect(_to_menu)
+	_ui.add_child(land_hud)
+
+func _leave_land() -> void:
+	if land_world:
+		land_world.queue_free()
+		land_world = null
+	if land_hud:
+		land_hud.queue_free()
+		land_hud = null
+	_back_layer.visible = true
+	view.visible = true
+
 func _to_menu() -> void:
+	_leave_land()
 	if pond:
 		_save()
 	pond = null
@@ -290,6 +335,8 @@ func _vignette(edge := Color(0.0, 0.02, 0.04, 0.55)) -> TextureRect:
 
 func _process(delta: float) -> void:
 	_run_script()
+	if land_hud:
+		land_hud.override = _script_pad
 	if pond == null:
 		return
 	if _prof_on:
@@ -836,6 +883,7 @@ func _apply_debug_args() -> void:
 		return
 	_debug = true
 	_show_menu = args.has("menu")
+	_show_land = args.has("land")
 	_prof_on = args.has("profile")
 	evo = Evolution.create(args.get("difficulty", "normal"))
 	_seed = int(args.get("seed", "0"))
@@ -1036,6 +1084,13 @@ func _run_script() -> void:
 		"hide":
 			# Спрятать клетку от всех (для снимков драк).
 			pond.player.hidden_t = 999.0
+		"tp":
+			# Суша: перенестись в точку (x,z) — для снимков.
+			var q := p[1].split(",")
+			var l: Land = land_world.land
+			l.pos = Vector3(float(q[0]), l.terrain.height(float(q[0]), float(q[1])), float(q[1]))
+		"yaw":
+			land_world.cam_yaw = deg_to_rad(float(p[1]))
 		"myhp":
 			pond.player.hp = pond.player.max_hp * float(p[1])
 		"event":

@@ -8,6 +8,8 @@ signal play(slot: int)
 signal new_game(slot: int, difficulty: String)
 signal arena(slot: int)
 signal sandbox
+## Второй этап — суша (пока пробная версия).
+signal land(slot: int)
 
 var t := 0.0
 var _row: HBoxContainer
@@ -153,6 +155,10 @@ func _slot_card(slot: int) -> PanelContainer:
 		ar.custom_minimum_size = Vector2(110, 60)
 		row.add_child(ar)
 		box.add_child(row)
+		var ld := _button("Суша · 3D, проба", Color("#3e7a5a"), func(): land.emit(slot))
+		ld.custom_minimum_size.y = 48
+		ld.add_theme_font_size_override("font_size", 19)
+		box.add_child(ld)
 	else:
 		# Новая игра: сначала выбрать сложность, потом «Начать» — случайно не начнёшь.
 		var plus := PlusMark.new()
