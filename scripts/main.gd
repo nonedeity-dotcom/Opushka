@@ -291,6 +291,7 @@ func _process(delta: float) -> void:
 	backdrop.biome = pond.biome if pond.biome != "" else "shallows"
 	backdrop.level = evo.level()
 	backdrop.zoom = view.camera.zoom.x
+	backdrop.player_r = pond.player.size_r
 	t0 = Time.get_ticks_usec()
 	_music(delta)
 	_voice_gap -= delta
@@ -503,24 +504,11 @@ func _handle(events: Array) -> void:
 					_buzz(20)
 				elif e.pos.distance_to(pond.player.pos) < near:
 					sound.play("ability", 0.8)
-			"boss_phase":
-				sound.play("boss")
-				_buzz(60)
-				var bname: String = Content.SPECIES[e.species].name
-				if e.phase == 2:
-					hud.announce(bname, "Зовёт подмогу!")
-				else:
-					hud.announce(bname, "В ярости: быстрее и бьёт волной — отплывай!")
-			"boss_charge":
-				if e.pos.distance_to(pond.player.pos) < e.r + pond.player.radius + 40.0:
-					hud.toast("Сейчас ударит волной — отплыви!")
-			"boss_wave":
-				sound.play("boss", 1.3)
-			"lair_beaten":
+			"giant_beaten":
 				sound.play("levelup")
 				_buzz(80)
 				_dirty = true
-				hud.announce("Логово свободно!", "%s побеждён — забери награду" % Content.SPECIES[e.species].name)
+				hud.announce("Гигант побеждён!", "%s — забери награду" % Content.SPECIES[e.species].name)
 			"wave":
 				sound.play("wave")
 				hud.announce("Волна %d" % e.wave, "Врагов: %d" % (1 + e.wave))
@@ -586,15 +574,6 @@ func _update_arrows() -> void:
 				continue
 			if pond._hunts(m) and m.radius >= p.radius * 0.8 and m.pos.distance_to(p.pos) < p.sight * 2.0:
 				list.append({"at": xf * m.pos, "kind": "danger"})
-	if pond.mode == "normal":
-		# Стрелка — только к ближайшему логову, чтобы не пестрило.
-		var best: Dictionary = {}
-		for l in pond.lairs_near(2200.0):
-			if not l.done and evo.level() >= int(Content.SPECIES[l.species].levels[0]):
-				if best.is_empty() or l.pos.distance_to(p.pos) < best.pos.distance_to(p.pos):
-					best = l
-		if not best.is_empty():
-			list.append({"at": xf * best.pos, "kind": "lair"})
 	hud.indicators.targets = list
 	_update_minimap()
 
@@ -613,15 +592,13 @@ func _update_minimap() -> void:
 		put.call(k.pos, Color(0.55, 0.6, 0.65, 0.6), 2.0)
 	for col in pond.colonies:
 		put.call(col.pos, Color(0.45, 0.85, 0.45, 0.9), 4.0)
-	for l in pond.lairs_near(reach):
-		if not l.done:
-			put.call(l.pos, Color("#c9a0ff"), 5.0)
 	for m in pond.mobs:
 		if (m.invisible and p.eyes < 1.0) or (m.behavior() == "ambush" and m.revealed_t <= 0.0 and p.eyes < 2.0):
 			continue
-		if m.behavior() == "roamer":
-			put.call(m.pos, Color("#ffa050"), 6.5)
-		elif pond._hunts(m) and m.radius >= p.radius * 0.8:
+		# Гигантов на карте нет — их замечаешь сам, по теням и голосу.
+		if Pond.is_giant(m):
+			continue
+		if pond._hunts(m) and m.radius >= p.radius * 0.8:
 			put.call(m.pos, Art.DANGER, 3.5)
 		else:
 			put.call(m.pos, Color(0.85, 0.85, 0.8, 0.7), 2.5)
@@ -868,13 +845,13 @@ func _run_script() -> void:
 					pond.rocks.clear()
 					pond.fill()
 					break
-		"lair":
-			var boss: String = p[1]
-			var b := pond.spawn(boss, pond.player.pos + Vector2(260, 0))
-			b.lair = b.pos
+		"giant":
+			# Позвать гиганта рядом (для снимков).
+			var g := pond.spawn(p[1], pond.player.pos + Vector2(320, 0))
+			g.ai_goal = pond.player.pos - Vector2(3000, 0)
 		"hp":
 			for m in pond.mobs:
-				if m.lair != Vector2.INF:
+				if Pond.is_giant(m):
 					m.hp = m.max_hp * float(p[1])
 		"ability":
 			pond.use_ability()

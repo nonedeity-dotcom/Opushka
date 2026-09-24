@@ -24,7 +24,7 @@ const KILL_CREDIT := 3.0
 const REGEN_DELAY := 4.0
 ## Хищник гонится за теми, кто не больше него во столько раз.
 const PREY_RATIO := 1.3
-const MEAT_DNA := 1.3
+const MEAT_DNA := 1.1
 ## Хищник гонится не дольше стольких секунд, потом отдыхает — от него можно оторваться.
 const CHASE_TIME := 5.0
 const REST_TIME := 4.0
@@ -39,7 +39,7 @@ var rocks: Array = []  # [{pos, r, hp, max_hp, kind, v, uid, flash, vel, drift}]
 var colonies: Array = []  # [{pos, r, vel, drift, spin, v, uid, regrow}]
 var _colony_uid := 1
 const COLONY_BITS := 10
-const COLONY_REGROW := 3.5
+const COLONY_REGROW := 4.5
 ## Пара: зовёшь кнопкой ♥, доплываешь — и можно менять тело. null — не звал.
 var mate: Creature = null
 var _rock_uid := -1
@@ -65,8 +65,6 @@ var mode := "normal"
 var allies: Array[Creature] = []
 var _ally_t := 0.0
 ## Логова: клетка сетки → хозяин, если он сейчас здесь; побеждённые в этот раз.
-var lairs := {}
-var lairs_done := {}
 ## Хозяин логова, который сейчас бьётся с тобой, — для полоски здоровья наверху.
 var boss_active: Creature = null
 var biome := ""
@@ -161,7 +159,6 @@ func step(dt: float, input: Vector2, dash := false) -> void:
 	if player.dna_rate > 0.0 and mode != "arena":
 		_gain(player.dna_rate * dt)
 	_biome_effects(dt)
-	_bosses(dt)
 	if mode == "arena":
 		_arena(dt)
 	if spawning:
@@ -257,7 +254,7 @@ func _timers(c: Creature, dt: float) -> void:
 		c.poison_t -= dt
 		_hurt(c, c.poison_dps * dt, c.poison_from, "poison", true)
 	# Хозяин логова сам по себе не лечится — только дома, когда тебя давно нет.
-	if c.lair != Vector2.INF:
+	if is_giant(c):
 		return
 	var heal := c.regen
 	if c.calm_t > REGEN_DELAY:
@@ -366,10 +363,8 @@ func _hurt(y: Creature, dmg: float, from: Creature, kind: String, silent := fals
 	dmg *= mult
 	if y.is_player:
 		dmg *= float(evo.diff().hurt)
-	if from != null and from.lair != Vector2.INF and kind != "wave":
-		dmg *= LAIR_DAMAGE
-	if from != null and not from.is_player and not from.ally and from.species != "mate" and from.behavior() == "roamer":
-		dmg *= LAIR_DAMAGE
+	if from != null and is_giant(from):
+		dmg *= GIANT_DAMAGE
 	y.hp -= dmg
 	if not y.is_player and not y.ally and not y.split_done and y.species != "mate" and Content.SPECIES[y.species].get("splits", false) \
 			and y.hp > 0.0 and y.hp < y.max_hp * 0.5 and y.size_r >= 8.0 and not _to_split.has(y):
@@ -377,7 +372,7 @@ func _hurt(y: Creature, dmg: float, from: Creature, kind: String, silent := fals
 		_to_split.append(y)
 	# Шипастая броня: обидчику возвращается часть удара (у хозяина логова — вдвое меньше).
 	if y.thorns > 0.0 and from != null and from != y and kind in ["bite", "spike", "grab", "ram", "drain"]:
-		from.hp -= dmg * y.thorns * (0.5 if y.lair != Vector2.INF else 1.0)
+		from.hp -= dmg * y.thorns * (0.5 if is_giant(y) else 1.0)
 		from.flash = 1.0
 		if from.hp <= 0.0:
 			from.hp = 0.0
@@ -534,13 +529,12 @@ func _deaths() -> void:
 			food.append({"pos": m.pos + off, "kind": "meat", "value": total / pieces, "r": piece_r, "t": 0.0, "v": rng.randi() % 256, "eaten": false})
 		var by_player := m.player_hit_t < KILL_CREDIT
 		events.append({"t": "kill", "pos": m.pos, "species": m.species, "by_player": by_player, "radius": m.radius, "color": m.color, "golden": m.golden, "who": m})
-		if def.behavior == "lair":
-			lairs_done[_lair_key(m.lair)] = true
+		if def.behavior == "roamer":
 			if boss_active == m:
 				boss_active = null
 			if by_player:
 				evo.lairs_beaten[m.species] = true
-				events.append({"t": "lair_beaten", "species": m.species, "pos": m.pos})
+				events.append({"t": "giant_beaten", "species": m.species, "pos": m.pos})
 		if mode == "arena" and by_player:
 			wave_kills += 1
 		if by_player:
@@ -549,7 +543,7 @@ func _deaths() -> void:
 			evo.kills_by[m.species] = evo.kills_by.get(m.species, 0) + 1
 			if m.golden:
 				evo.count("golden")
-			var bonus: float = (0.8 + 1.1 * def.tier) * (3.0 if m.golden else 1.0)
+			var bonus: float = (0.6 + 0.9 * def.tier) * (3.0 if m.golden else 1.0)
 			events[-1].dna = bonus
 			_gain(bonus)
 			var dropped: Array = []
@@ -598,14 +592,10 @@ func _reborn() -> void:
 			m.host = null
 	var lost := evo.death_loss()
 	events.append({"t": "death", "pos": player.pos, "lost": lost})
-	# Новая клетка — поодаль и не у чужого логова.
+	# Новая клетка — поодаль; гиганта рядом с ней нет.
 	var away := Vector2.from_angle(rng.randf() * TAU) * (view_radius * 2.0 + 400.0)
-	for i in 8:
-		var at := player.pos + away
-		if lairs_near_point(at, 1100.0).is_empty():
-			break
-		away = away.rotated(TAU / 8.0)
 	player.pos += away
+	mobs = mobs.filter(func(m): return not is_giant(m) or m.pos.distance_to(player.pos) > view_radius * 1.5)
 	player.vel = Vector2.ZERO
 	player.alive = true
 	player.hp = player.max_hp
@@ -652,7 +642,7 @@ func _nearest_prey(m: Creature) -> Creature:
 	for o in everyone():
 		if o == m or not o.alive or o.species == m.species or o.invuln > 0.0 or o.hidden_t > 0.0:
 			continue
-		if not o.is_player and not o.ally and Content.SPECIES[o.species].behavior in ["boss", "giant", "lair"]:
+		if not o.is_player and not o.ally and Content.SPECIES[o.species].behavior == "roamer":
 			continue
 		# Хищники чужих видов — соперники: сцепляются, даже если соперник чуть крупнее.
 		var rival := not o.is_player and not o.ally and _hunts(o)
@@ -693,9 +683,6 @@ func _think(m: Creature, dt: float) -> void:
 	if b == "parasite":
 		_parasite_think(m)
 		return
-	if b == "lair":
-		_lair_think(m)
-		return
 	if b == "shooter":
 		_shooter_think(m)
 		return
@@ -719,18 +706,13 @@ func _think(m: Creature, dt: float) -> void:
 	var flee_r := m.sight * (1.0 if b == "skittish" else 0.65)
 	var threat := _nearest_threat(m, flee_r)
 	var runs := b == "grazer" or b == "skittish" or (hunts and weak)
-	if threat != null and hunts and threat.radius >= m.radius * 1.4 and b != "boss" and b != "giant":
+	if threat != null and hunts and threat.radius >= m.radius * 1.4:
 		runs = true
 	if threat != null and runs:
 		m.ai_state = "flee"
 		m.desire = (m.pos - threat.pos).normalized()
 		if m.school:
 			m.desire = (m.desire + _school_pull(m) * 0.4).normalized()
-		return
-	if b == "boss" and not hunts and m.calm_t < 3.0 and m.last_attacker != null and m.last_attacker.alive:
-		# Великан не гоняется — разворачивается к обидчику шипами.
-		m.ai_state = "guard"
-		m.desire = (m.last_attacker.pos - m.pos).normalized() * 0.25
 		return
 	if hunts and m.ai_state == "chase" and m.stamina <= 0.0:
 		# Выдохся: отстаёт и отдыхает — от хищника можно оторваться.
@@ -754,12 +736,12 @@ func _think(m: Creature, dt: float) -> void:
 	var f := _nearest_food(m, m.sight)
 	if not f.is_empty():
 		m.ai_state = "feed"
-		m.desire = (f.pos - m.pos).normalized() * (0.45 if b in ["drifter", "boss", "giant"] else 0.8)
+		m.desire = (f.pos - m.pos).normalized() * (0.45 if b == "drifter" else 0.8)
 		return
 	if m.ai_state != "wander" or m.pos.distance_to(m.ai_goal) < m.radius or rng.randf() < 0.03:
 		m.ai_state = "wander"
 		m.ai_goal = m.pos + Vector2.from_angle(rng.randf() * TAU) * rng.randf_range(80.0, 220.0)
-	m.desire = (m.ai_goal - m.pos).normalized() * (0.35 if b in ["drifter", "boss", "giant"] else 0.5)
+	m.desire = (m.ai_goal - m.pos).normalized() * (0.35 if b == "drifter" else 0.5)
 	if m.school:
 		m.desire = (m.desire + _school_pull(m)).limit_length(0.7)
 
@@ -792,7 +774,7 @@ func _spawn_plant(inner: float, outer: float, anywhere := false) -> void:
 	var value := 1 + (lvl - 1) / 4
 	for attempt in 6:
 		var r := sqrt(rng.randf_range(inner * inner, outer * outer)) if anywhere else rng.randf_range(inner, outer)
-		var p := player.pos + Vector2.from_angle(rng.randf() * TAU) * r
+		var p := player.pos + Vector2.from_angle(rng.randf() * TAU if anywhere else _spawn_angle()) * r
 		var meadow := (_meadow.get_noise_2d(p.x, p.y) + 1.0) * 0.5
 		var rich: float = Content.BIOMES[biome_at(p)].plants
 		if rng.randf() < (0.2 + 0.8 * meadow * meadow) * rich:
@@ -802,18 +784,12 @@ func _spawn_plant(inner: float, outer: float, anywhere := false) -> void:
 func _species_pool(where := "") -> Array:
 	var lvl := evo.level()
 	var aggro: float = evo.diff().aggro
-	var boss_here := mobs.any(func(m): return Content.SPECIES[m.species].behavior == "boss")
-	var giant_here := mobs.any(func(m): return Content.SPECIES[m.species].behavior == "giant")
 	var pool: Array = []
 	for id in Content.SPECIES:
 		var def: Dictionary = Content.SPECIES[id]
 		if lvl < def.levels[0] or lvl > def.levels[1]:
 			continue
-		if def.behavior == "boss" and boss_here:
-			continue
-		if def.behavior == "giant" and giant_here:
-			continue
-		if _safe_t > 0.0 and (def.behavior == "hunter" or def.behavior == "boss" or def.get("hunts", false)):
+		if _safe_t > 0.0 and (def.behavior == "hunter" or def.get("hunts", false)):
 			continue
 		if def.weight <= 0.0:
 			continue
@@ -826,12 +802,18 @@ func _species_pool(where := "") -> Array:
 		pool.append([id, w])
 	return pool
 
+## Куда ставить новое: плывёшь быстро — чаще впереди по ходу (иначе впереди пусто).
+func _spawn_angle() -> float:
+	if player.vel.length() > 40.0 and rng.randf() < 0.7:
+		return player.vel.angle() + rng.randf_range(-1.1, 1.1)
+	return rng.randf() * TAU
+
 func _spawn_mob(anywhere := false, at := Vector2.INF) -> Creature:
 	# Сначала место — ближе, чем раньше: сразу за краем видимого, — потом вода, потом кто в ней живёт.
 	if at == Vector2.INF:
 		var inner := maxf(vision() * 1.15, 200.0)
-		var outer := maxf(view_radius + 250.0, inner + 300.0)
-		at = player.pos + Vector2.from_angle(rng.randf() * TAU) * rng.randf_range(inner, outer + (500.0 if anywhere else 0.0))
+		var outer := maxf(view_radius + 600.0, inner + 400.0)
+		at = player.pos + Vector2.from_angle(_spawn_angle()) * rng.randf_range(inner, outer + (500.0 if anywhere else 0.0))
 	var pool := _species_pool(biome_at(at))
 	if pool.is_empty():
 		return null
@@ -846,7 +828,7 @@ func _spawn_mob(anywhere := false, at := Vector2.INF) -> Creature:
 			pick = p[0]
 			break
 	var def: Dictionary = Content.SPECIES[pick]
-	var golden: bool = not def.behavior in ["boss", "giant", "lair", "roamer"] and not def.has("school") and rng.randf() < Content.GOLDEN_CHANCE
+	var golden: bool = def.behavior != "roamer" and not def.has("school") and rng.randf() < Content.GOLDEN_CHANCE
 	var first := spawn(pick, at, golden)
 	# Стайка появляется вся сразу, кучкой: двое или трое, не больше.
 	var group := rng.randi_range(2, mini(int(def.school), 3)) if def.has("school") else 1
@@ -903,16 +885,15 @@ func _manage() -> void:
 	for i in mini(_plant_target() - plants, 12):
 		_spawn_plant(view_radius + 40.0, outer)
 	# Кто уплыл далеко — исчезает, а рядом появляются новые: так вокруг всегда кто-то есть.
-	var far := view_radius + 700.0
+	var far := view_radius + 900.0
 	# Хозяева логов дома ждут дольше, но если уплыл совсем далеко — исчезают и они
 	# (вернёшься — логово снова занято, хозяин целый).
 	# Хозяева логов и бродячие гиганты уплывают из памяти позже остальных.
-	mobs = mobs.filter(func(m): return m.pos.distance_to(player.pos) < (far if m.lair == Vector2.INF and m.behavior() != "roamer" else far + 3000.0))
+	mobs = mobs.filter(func(m): return m.pos.distance_to(player.pos) < (far if not is_giant(m) else far + 3000.0))
 	capsules = capsules.filter(func(c): return c.pos.distance_to(player.pos) < far)
 	if mode != "arena":
-		for i in mini(_mob_target() - mobs.size(), 3):
+		for i in mini(_mob_target() - mobs.size(), 5):
 			_spawn_mob()
-		_lairs_around()
 	rocks = rocks.filter(func(k): return k.pos.distance_to(player.pos) < far)
 	if rocks.size() < _rock_target():
 		_spawn_rock(view_radius + 60.0, view_radius + 700.0)
@@ -963,7 +944,7 @@ func _spawn_rock(inner: float, outer: float, kind := "") -> Dictionary:
 			if roll <= 0.0:
 				kind = p[0]
 				break
-	var at := player.pos + Vector2.from_angle(rng.randf() * TAU) * rng.randf_range(inner, outer)
+	var at := player.pos + Vector2.from_angle(_spawn_angle()) * rng.randf_range(inner, outer)
 	return add_rock(kind, at)
 
 ## Поставить камень — и для проверок тоже.
@@ -1045,7 +1026,7 @@ func _colony_target() -> int:
 	return 0 if mode == "arena" else 4 + evo.level() / 4
 
 func _spawn_colony(inner: float, outer: float) -> Dictionary:
-	var at := player.pos + Vector2.from_angle(rng.randf() * TAU) * rng.randf_range(inner, outer)
+	var at := player.pos + Vector2.from_angle(_spawn_angle()) * rng.randf_range(inner, outer)
 	return add_colony(at)
 
 ## Круг: растёт вместе с тобой, по краю — места под еду, сначала все заняты.
@@ -1278,29 +1259,59 @@ func _do_splits() -> void:
 
 # --- бродячие гиганты -----------------------------------------------------------------
 
-var _roam_t := 90.0
+var _roam_t := 45.0
 
-## Иногда через твою часть океана проплывает гигант — и уплывает дальше.
+## Гиганты плавают поодиночке: вокруг не больше одного. Раз в минуту-две проплывает новый —
+## чаще тот, что появился на твоём размере, реже старые знакомые.
 func _roamers(dt: float) -> void:
-	if mode != "normal" or evo.level() < 5:
+	if mode == "arena":
 		return
-	if mobs.any(func(m): return m.behavior() == "roamer"):
+	if mobs.any(func(m): return is_giant(m)):
 		return
 	_roam_t -= dt
 	if _roam_t > 0.0:
 		return
-	_roam_t = rng.randf_range(150.0, 260.0)
-	var pick := "zmei" if evo.level() >= 6 and rng.randf() < 0.45 else "kit"
+	_roam_t = rng.randf_range(60.0, 120.0)
+	var pick := pick_giant()
+	if pick == "":
+		return
 	var dir := Vector2.from_angle(rng.randf() * TAU)
 	var m := spawn(pick, player.pos + dir * (view_radius + 500.0))
 	# Путь — мимо тебя и дальше, на другой край.
 	m.ai_goal = player.pos - dir.rotated(rng.randf_range(-0.4, 0.4)) * (view_radius + 3000.0)
 	events.append({"t": "roamer", "species": pick, "pos": m.pos})
 
+## Какой гигант проплывёт: новые для твоего размера — втрое чаще.
+func pick_giant() -> String:
+	var lvl := evo.level()
+	var pool: Array = []
+	var total := 0.0
+	for id in Content.SPECIES:
+		var def: Dictionary = Content.SPECIES[id]
+		if def.behavior != "roamer" or lvl < int(def.levels[0]) or lvl > int(def.levels[1]):
+			continue
+		var w := 3.0 if int(def.levels[0]) == lvl else (2.0 if int(def.levels[0]) == lvl - 1 else 1.0)
+		pool.append([id, w])
+		total += w
+	if pool.is_empty():
+		return ""
+	var roll := rng.randf() * total
+	for q in pool:
+		roll -= q[1]
+		if roll <= 0.0:
+			return q[0]
+	return pool[-1][0]
+
 func _roamer_think(m: Creature) -> void:
 	var def: Dictionary = Content.SPECIES[m.species]
 	var close := player.alive and player.hidden_t <= 0.0 and player.pos.distance_to(m.pos) < m.sight * 1.1
-	if def.get("hunts", false) and close and m.resting <= 0.0:
+	# Полоса здоровья сверху — пока гигант бьётся с тобой.
+	var engaged := close and (m.ai_state == "chase" or (m.last_attacker == player and m.calm_t < 6.0))
+	if engaged:
+		boss_active = m
+	elif boss_active == m:
+		boss_active = null
+	if (def.get("hunts", false) or m.aggro) and close and m.resting <= 0.0:
 		if m.stamina <= 0.0:
 			m.resting = REST_TIME
 			m.ai_state = "rest"
@@ -1359,7 +1370,7 @@ func _riding(dt: float) -> void:
 	if p.remora.is_empty() or not p.alive or p.dash_t > 0.0:
 		return
 	for m in mobs:
-		if not m.alive or m.radius < p.radius * 1.3 or m.lair != Vector2.INF or m.host != null:
+		if not m.alive or m.radius < p.radius * 1.3 or m.host != null:
 			continue
 		if p.pos.distance_to(m.pos) > p.radius + m.radius + 4.0:
 			continue
@@ -1414,11 +1425,9 @@ static func voice_of(m: Creature) -> String:
 			return "chirp"
 		"parasite":
 			return "hiss"
-		"boss", "giant":
-			return "boom"
 		"roamer":
 			return "whale" if m.species == "kit" else "boom"
-		"lair", "mate", "ally":
+		"mate", "ally":
 			return ""
 	return "growl"
 
@@ -1579,122 +1588,16 @@ func _shake_off() -> void:
 		events.append({"t": "shaken", "n": n, "pos": player.pos})
 
 
-# --- логова ---------------------------------------------------------------------------
+# --- гиганты: сила --------------------------------------------------------------------
 
 ## Через сколько секунд паразит насыщается и отпадает сам (рывком — сразу).
 const PARASITE_FULL := 12.0
-const LAIR_CELL := 2600.0
-## Сколько отдыхает хозяин логова после погони; бьёт он слабее своего размера.
-const LAIR_REST := 3.0
-const LAIR_DAMAGE := 0.35
-const LAIR_BOSS := {"deep": "koroleva", "hot": "strazh", "cold": "vikhr"}
+## Гиганты бьют слабее своего размера — иначе одолеть их было бы нельзя.
+const GIANT_DAMAGE := 0.35
 
-static func _lair_key(p: Vector2) -> Vector2i:
-	return Vector2i(floori(p.x / LAIR_CELL), floori(p.y / LAIR_CELL))
-
-## Где в клетке сетки логово (если оно там есть) — по постоянному «случаю» клетки.
-func lair_at(cell: Vector2i) -> Vector2:
-	var h := hash(Vector3i(cell.x, cell.y, int(_temp.seed)))
-	if h % 2 != 0:
-		return Vector2.INF
-	var p := (Vector2(cell) + Vector2(0.3 + 0.4 * float(h % 97) / 97.0, 0.3 + 0.4 * float(h % 89) / 89.0)) * LAIR_CELL
-	return p if LAIR_BOSS.has(biome_at(p)) else Vector2.INF
-
-## Логова поблизости: [{pos, species, done}] — для стрелок.
-func lairs_near(within: float) -> Array:
-	var out: Array = []
-	var c := _lair_key(player.pos)
-	for dy in range(-1, 2):
-		for dx in range(-1, 2):
-			var cell := c + Vector2i(dx, dy)
-			var p := lair_at(cell)
-			if p != Vector2.INF and p.distance_to(player.pos) < within:
-				out.append({"pos": p, "species": LAIR_BOSS[biome_at(p)], "done": lairs_done.has(cell)})
-	return out
-
-## Есть ли логово рядом с точкой (живое, не побеждённое).
-func lairs_near_point(at: Vector2, within: float) -> Array:
-	var out: Array = []
-	var c := _lair_key(at)
-	for dy in range(-1, 2):
-		for dx in range(-1, 2):
-			var cell := c + Vector2i(dx, dy)
-			var p := lair_at(cell)
-			if p != Vector2.INF and p.distance_to(at) < within and not lairs_done.has(cell):
-				out.append(p)
-	return out
-
-func _lairs_around() -> void:
-	for l in lairs_near(view_radius + 1400.0):
-		var cell := _lair_key(l.pos)
-		if l.done or lairs.has(cell) and lairs[cell].alive and mobs.has(lairs[cell]):
-			continue
-		var def: Dictionary = Content.SPECIES[l.species]
-		if evo.level() < def.levels[0]:
-			continue
-		var b := spawn(l.species, l.pos)
-		b.lair = l.pos
-		lairs[cell] = b
-
-func _lair_think(m: Creature) -> void:
-	var near := player.alive and player.pos.distance_to(m.lair) < 480.0 + m.radius and player.hidden_t <= 0.0
-	if near:
-		boss_active = m
-		# Хозяин тоже устаёт: погонялся — стоит и отдыхает. Это окно, чтобы бить самому.
-		if m.resting > 0.0 or m.stamina <= 0.0:
-			if m.ai_state == "chase":
-				m.resting = LAIR_REST
-			m.ai_state = "rest"
-			m.desire = (player.pos - m.pos).normalized() * 0.15
-			return
-		m.ai_state = "chase"
-		m.desire = (player.pos + player.vel * 0.3 - m.pos).normalized()
-		var close := m.pos.distance_to(player.pos) < (m.radius + player.radius) * 1.6
-		if close and m.dash_cd <= 0.0:
-			_lunge(m)
-			m.dash_cd = 3.0 if m.phase_n >= 3 else 4.5
-	else:
-		if boss_active == m:
-			boss_active = null
-		m.ai_state = "home"
-		var to := m.lair - m.pos
-		m.desire = to.normalized() * 0.5 if to.length() > m.radius else Vector2.ZERO
-		# Дома залечивается — но медленно и только когда тебя давно нет рядом: отплыл
-		# подлечиться — вернулся, а бой не начинается заново.
-		if m.calm_t > 8.0:
-			m.hp = minf(m.max_hp, m.hp + m.max_hp * 0.004)
-
-## Стадии боя хозяина логова: на 60% зовёт подмогу, на 30% — ярость.
-func _bosses(dt: float) -> void:
-	for m in mobs:
-		if Content.SPECIES[m.species].behavior != "lair" or not m.alive:
-			continue
-		var k := m.hp / m.max_hp
-		if m.phase_n == 1 and k < 0.6:
-			m.phase_n = 2
-			var def: Dictionary = Content.SPECIES[m.species]
-			for i in 2:
-				var mob := spawn(def.minions, m.pos + Vector2.from_angle(PI * i + PI / 2.0) * m.radius * 1.5)
-				mob.aggro = true
-			events.append({"t": "boss_phase", "phase": 2, "species": m.species, "pos": m.pos})
-		elif m.phase_n == 2 and k < 0.3:
-			m.phase_n = 3
-			m.speed *= 1.1
-			m.zap_cd = 3.0
-			events.append({"t": "boss_phase", "phase": 3, "species": m.species, "pos": m.pos})
-		if m.phase_n >= 3:
-			# В ярости: удар волной раз в несколько секунд. За секунду до удара — вспышка,
-			# чтобы успеть отплыть.
-			var before := m.zap_cd
-			m.zap_cd -= dt
-			if before > 1.0 and m.zap_cd <= 1.0:
-				events.append({"t": "boss_charge", "pos": m.pos, "r": m.radius * 2.2, "who": m})
-			if m.zap_cd <= 0.0:
-				m.zap_cd = 5.5
-				events.append({"t": "boss_wave", "pos": m.pos, "r": m.radius * 2.2})
-				if player.pos.distance_to(m.pos) < m.radius * 2.2 + player.radius:
-					_hurt(player, 3.5 * pow(m.size_k(), 0.5), m, "wave")
-					player.vel += (player.pos - m.pos).normalized() * 300.0
+## Гигант ли это (бродячий, один на всю округу).
+static func is_giant(m: Creature) -> bool:
+	return not m.is_player and not m.ally and m.species != "mate" and Content.SPECIES[m.species].behavior == "roamer"
 
 
 # --- свита ----------------------------------------------------------------------------
@@ -1876,7 +1779,7 @@ func _arena(dt: float) -> void:
 	_wave_t = 3.0
 	evo.arena_best = maxi(evo.arena_best, wave - 1)
 	# Великаны и боссы — только в каждой пятой волне, первым.
-	var pool := _species_pool().filter(func(q): return not Content.SPECIES[q[0]].behavior in ["boss", "giant"])
+	var pool := _species_pool()
 	var count := 1 + wave
 	for i in count:
 		var pick: String = pool[rng.randi() % pool.size()][0]

@@ -111,42 +111,29 @@ func test_невидимка_и_маскировка(c) -> void:
 	_run(bare, 0.5)
 	c.ok("маскировку хищник не замечает, а без неё — гонится", h.ai_state != "chase" and h2.ai_state == "chase")
 
-func test_логово(c) -> void:
-	var p := Pond.new(_evo_with([["jaws", 0]], 600.0), 4242)
-	p.spawning = false
-	var lair := Vector2.INF
-	for y in range(-12, 12):
-		for x in range(-12, 12):
-			lair = p.lair_at(Vector2i(x, y))
-			if lair != Vector2.INF:
-				break
-		if lair != Vector2.INF:
-			break
-	c.ok("логова в океане есть", lair != Vector2.INF)
-	p.player.pos = lair + Vector2(1400, 0)
-	p._lairs_around()
-	var boss: Creature = p.mobs.filter(func(m): return Content.SPECIES[m.species].behavior == "lair")[0]
-	c.ok("хозяин сидит в логове", boss.pos.distance_to(lair) < 1.0)
-	_run(p, 1.0)
-	c.ok("пока ты далеко — дома", boss.pos.distance_to(lair) < boss.radius)
-	boss.hp = boss.max_hp * 0.55
-	var ev := _run(p, 0.2)
-	c.ok("на середине — вторая стадия и подмога", ev.any(func(e): return e.t == "boss_phase" and e.phase == 2) and p.mobs.size() >= 3)
-	boss.player_hit_t = 0.0
-	boss.alive = false
-	p._deaths()
-	var drops: Array = p.events.filter(func(e): return e.t == "drop").map(func(e): return e.part)
-	var reward: String = Content.SPECIES[boss.species].drops[0][0]
-	c.ok("награда выпадает всегда", drops.has(reward))
-	c.ok("логово засчитано", p.evo.lairs_beaten.has(boss.species))
+func test_гиганты_по_размерам(c) -> void:
+	for lvl in range(1, 11):
+		c.ok("на размере %d появляется новый гигант" % lvl, Content.SPECIES.values().any(func(d): return d.behavior == "roamer" and int(d.levels[0]) == lvl))
+	var p := _pond(_evo_with([["jaws", 0]], 900.0))
+	p.spawning = true
+	var picks := {}
+	for i in 200:
+		picks[p.pick_giant()] = picks.get(p.pick_giant(), 0) + 1
+	var lvl := p.evo.level()
+	var newest: Array = Content.SPECIES.keys().filter(func(id): return Content.SPECIES[id].behavior == "roamer" and int(Content.SPECIES[id].levels[0]) == lvl)
+	c.ok("чаще — новые для твоего размера", newest.any(func(id): return picks.get(id, 0) > 200 / picks.size()))
+	p._roam_t = 0.0
+	_run(p, 0.5)
+	p._roam_t = 0.0
+	_run(p, 0.5)
+	c.eq("гигант вокруг один", p.mobs.filter(func(m): return Pond.is_giant(m)).size(), 1)
 
-func test_хозяин_логова_проходим(c) -> void:
-	# Бьёт слабее своего размера, устаёт, сам не лечится, пока ты рядом.
+func test_гигант_проходим(c) -> void:
+	# Бьёт слабее своего размера и сам не лечится — одолеть можно.
 	var p := _pond(_evo_with([["jaws", 0, 3], ["spike", 90, 2], ["spike", -90, 2], ["cilia", 180, 3], ["membrane", 135, 2], ["membrane", -135, 2]], 700.0))
 	p.player.sync_player(p.evo)
 	p.player.hp = p.player.max_hp
 	var b := p.spawn("koroleva", Vector2(300, 0))
-	b.lair = b.pos
 	var t := 0.0
 	var deaths := 0
 	while t < 90.0 and b.alive:
@@ -154,13 +141,15 @@ func test_хозяин_логова_проходим(c) -> void:
 		p.step(0.05, to.normalized(), p.player.dash_cd <= 0.0 and to.length() < b.radius + 90.0)
 		deaths += p.events.filter(func(e): return e.t == "death").size()
 		t += 0.05
+		if not p.mobs.has(b):
+			break
 	c.ok("в лоб на 6-м размере побеждается за полторы минуты (%d с, гибелей %d)" % [t, deaths], not b.alive and deaths <= 2)
+	c.ok("победа засчитана", p.evo.lairs_beaten.has("koroleva"))
 	b = p.spawn("strazh", p.player.pos + Vector2(400, 0))
-	b.lair = b.pos
 	b.hp = b.max_hp * 0.5
 	b.calm_t = 0.0
 	p._timers(b, 3.0)
-	c.eq("хозяин сам не лечится", b.hp, b.max_hp * 0.5)
+	c.eq("гигант сам не лечится", b.hp, b.max_hp * 0.5)
 
 func test_свита(c) -> void:
 	var e := _evo_with([["jaws", 0], ["cilia", 180]], 300.0)

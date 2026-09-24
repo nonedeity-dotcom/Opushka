@@ -206,7 +206,7 @@ func refresh(pond: Pond) -> void:
 	var boss := pond.boss_active
 	boss_bar.visible = boss != null and boss.alive
 	if boss_bar.visible:
-		boss_bar.set_state(Content.SPECIES[boss.species].name, boss.hp / boss.max_hp, boss.phase_n)
+		boss_bar.set_state(Content.SPECIES[boss.species].name, boss.hp / boss.max_hp, 0)
 	arena_pill.visible = pond.mode == "arena"
 	if arena_pill.visible:
 		arena_pill.set_state(pond.wave, pond.evo.arena_best)
@@ -502,7 +502,7 @@ class BossBar:
 	func _draw() -> void:
 		var font := get_theme_default_font()
 		Icons.draw(self, "skull", Rect2(0, 0, 26, 26), Color("#c9a0ff"))
-		var text := "%s  ·  стадия %d из 3" % [title, phase]
+		var text := title
 		draw_string_outline(font, Vector2(34, 21), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 20, 5, Color(0, 0, 0, 0.6))
 		draw_string(font, Vector2(34, 21), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 20, Art.TEXT)
 		var bar := Rect2(0, 32, size.x, 16)
@@ -510,9 +510,6 @@ class BossBar:
 		var col := Color("#b07ae0") if phase < 3 else Art.DANGER
 		if k > 0.0:
 			draw_style_box(Kit.box(col, 8, Color(0, 0, 0, 0), 0), Rect2(bar.position, Vector2(maxf(12.0, bar.size.x * k), bar.size.y)))
-		for mark in [0.6, 0.3]:
-			var x: float = bar.size.x * mark
-			draw_line(Vector2(x, bar.position.y), Vector2(x, bar.end.y), Color(1, 1, 1, 0.45), 2)
 
 ## Арена: какая волна и лучший результат.
 class ArenaPill:

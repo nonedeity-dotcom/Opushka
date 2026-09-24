@@ -14,6 +14,7 @@ var _light := 1.0
 ## впереди (дальше — значит, при движении сдвигаются меньше) — сразу видно, что это фон.
 var level := 1
 var zoom := 1.0
+var player_r := 16.0
 var _ghosts: Array = []  # [{id, p, dir, speed, parts, shape}]
 var _ghost_level := -1
 var _rng := RandomNumberGenerator.new()
@@ -42,7 +43,7 @@ func _process(delta: float) -> void:
 		_ghost_level = level
 		_ghosts.clear()
 	var pool := _ghost_pool()
-	while _ghosts.size() < 3 and not pool.is_empty():
+	while _ghosts.size() < 2 and not pool.is_empty():
 		_ghosts.append(_new_ghost(pool, _ghosts.is_empty()))
 	for g in _ghosts:
 		g.p += Vector2.from_angle(g.dir) * g.speed * delta
@@ -50,18 +51,18 @@ func _process(delta: float) -> void:
 	queue_redraw()
 	_shadows.queue_redraw()
 
-## Виды, которые появятся на следующих одном-двух размерах; на последнем — самые большие.
+## Только новые гиганты — те, что появятся на следующих размерах; на последнем — Древний.
 func _ghost_pool() -> Array:
 	var out: Array = []
 	for id in Content.SPECIES:
 		var def: Dictionary = Content.SPECIES[id]
-		if float(def.get("weight", 0.0)) <= 0.0 and not def.has("scale"):
+		if def.behavior != "roamer":
 			continue
 		var a := int(def.levels[0])
 		if a > level and a <= level + 2:
 			out.append(id)
 	if out.is_empty():
-		out = ["leviafan", "velikan", "kit"]
+		out = ["drevniy"]
 	return out
 
 func _new_ghost(pool: Array, anywhere: bool) -> Dictionary:
@@ -75,7 +76,8 @@ func _new_ghost(pool: Array, anywhere: bool) -> Dictionary:
 	var start := drift * DEPTH + Vector2(_rng.randf_range(-0.5, 0.5), _rng.randf_range(-0.5, 0.5)) * size
 	if not anywhere:
 		start = drift * DEPTH - Vector2.from_angle(dir) * (size.length() * 0.6)
-	return {"id": id, "p": start, "dir": dir, "speed": _rng.randf_range(10.0, 22.0), "parts": parts,
+	# Плывут заметно: экран пересекают за 10–20 секунд.
+	return {"id": id, "p": start, "dir": dir, "speed": _rng.randf_range(70.0, 120.0), "parts": parts,
 		"shape": Content.shape_preset(def.get("shape", "round")), "wobble": _rng.randf() * 10.0}
 
 func _ghost_screen(g: Dictionary) -> Vector2:
@@ -113,8 +115,8 @@ class Shadows:
 		for g in back._ghosts:
 			var at: Vector2 = back._ghost_screen(g)
 			var def: Dictionary = Content.SPECIES[g.id]
-			var base: float = 16.0 * float(def.scale) if def.has("scale") else float(def.radius)
-			var r := maxf(base * back.zoom * 1.7, 46.0)
+			# Гигант во столько-то раз больше тебя — и тень такая же, чуть крупнее (ближе к нам).
+			var r := maxf(back.player_r * float(def.get("scale", 3.0)) * back.zoom * 1.15, 60.0)
 			if not Rect2(Vector2.ZERO, size).grow(r * 3.0 + 120.0).has_point(at):
 				gone.append(g)
 				continue

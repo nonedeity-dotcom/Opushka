@@ -490,7 +490,7 @@ func _species_card(id: String) -> PanelContainer:
 	var text := Kit.vbox(4)
 	text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var kind: String = {"grazer": "мирный", "skittish": "пугливый", "drifter": "дрейфует", "hunter": "хищник", "boss": "великан",
-		"giant": "гигант", "lair": "хозяин логова", "parasite": "паразит", "shooter": "стрелок", "ambush": "обманка",
+		"giant": "гигант", "parasite": "паразит", "shooter": "стрелок", "ambush": "обманка",
 		"roamer": "бродячий гигант"}.get(def.behavior, "")
 	if def.get("splits", false):
 		kind += ", делится"
@@ -618,7 +618,7 @@ func _awards_tab() -> void:
 	flow.add_theme_constant_override("v_separation", 8)
 	for pair in [["Достижения", "%d/%d" % [evo.achievements.size(), Content.ACHIEVEMENTS.size()]], ["Части", "%d/%d" % [got_parts, parts_all.size()]],
 			["На 5 уровне", str(maxed)], ["Виды", "%d/%d" % [evo.seen.size(), Content.SPECIES.size()]],
-			["Воды", "%d/%d" % [evo.biomes_seen.size(), Content.BIOMES.size()]], ["Логова", "%d/%d" % [evo.lairs_beaten.size(), 3]],
+			["Воды", "%d/%d" % [evo.biomes_seen.size(), Content.BIOMES.size()]], ["Гиганты", "%d/%d" % [evo.lairs_beaten.size(), Content.SPECIES.values().filter(func(d): return d.behavior == "roamer").size()]],
 			["Поколений", str(evo.generation)], ["Арена", "%d волн" % evo.arena_best]]:
 		flow.add_child(_chip("%s  %s" % pair, Art.TEXT))
 	col.add_child(flow)

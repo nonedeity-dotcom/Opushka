@@ -326,7 +326,7 @@ func _goal_met(id: String) -> bool:
 		"parts8":
 			return unlocked.size() >= 8
 		"boss":
-			return kills_by.get("velikan", 0) + kills_by.get("leviafan", 0) > 0
+			return kills_by.get("velikan", 0) + kills_by.get("leviafan", 0) + kills_by.get("titan", 0) > 0
 		"lair":
 			return not lairs_beaten.is_empty()
 		"size10":

@@ -153,15 +153,6 @@ func effects(events: Array) -> void:
 				_ring(e.pos, 60.0, Art.DANGER, 0.5)
 			"remora_on", "remora_off":
 				_ring(e.pos, pond.player.radius * 2.0, Color("#dfe6ee"), 0.5)
-			"boss_phase":
-				_ring(e.pos, 200.0, Color("#c080ff"), 1.0)
-				_shake = 1.0
-			"boss_charge":
-				# Предупреждение: круг удара наливается красным за секунду до волны.
-				_fx.append({"k": "charge", "who": e.who, "r": e.r, "life": 1.0, "speed": 1.0})
-			"boss_wave":
-				_ring(e.pos, e.r, Color("#ff9070"), 0.6)
-				_shake = minf(1.0, _shake + 0.5)
 			"wave":
 				_ring(pond.arena_center, pond.arena_radius, Art.GOLD, 1.2)
 			"dash":
@@ -202,8 +193,6 @@ func _draw() -> void:
 	_mark("вода")
 	_currents(view)
 	_mark("течения")
-	for l in pond.lairs_near(view.size.length()):
-		_lair(l)
 	var near := view.grow(30.0)
 	for col in pond.colonies:
 		if view.grow(col.r * 1.5).has_point(col.pos):
@@ -329,11 +318,6 @@ func _draw_fx() -> void:
 				draw_arc(f.pos, f.r, 0, TAU, 10, Color(0.8, 0.95, 1.0, 0.5 * a), 1.0, true)
 			"ring":
 				draw_arc(f.pos, f.r * (1.0 - a * 0.7), 0, TAU, 40, Color(f.col, a * 0.8), 3.0, true)
-			"charge":
-				var boss: Creature = f.who
-				var k := 1.0 - a
-				draw_circle(boss.pos, f.r, Color(1.0, 0.35, 0.25, 0.08 + 0.14 * k))
-				draw_arc(boss.pos, f.r, 0, TAU, 64, Color(1.0, 0.45, 0.3, 0.4 + 0.5 * k), 3.0 + 3.0 * k, true)
 			"zap":
 				var pts := PackedVector2Array([f.from])
 				for i in range(1, 6):
@@ -395,13 +379,4 @@ func _currents(view: Rect2) -> void:
 	if not pts.is_empty():
 		draw_multiline_colors(pts, cols, 2.0 / z)
 
-## Логово: тёмное пятно со светящимся кругом; пустое — если хозяина уже победили.
-func _lair(l: Dictionary) -> void:
-	var r := 220.0
-	draw_circle(l.pos, r, Color(0.05, 0.02, 0.08, 0.35))
-	var col := Color(0.6, 0.4, 0.9, 0.25 if l.done else 0.55)
-	draw_arc(l.pos, r, 0, TAU, 64, col, 4.0, true)
-	for i in 8:
-		var a := TAU * i / 8.0 + t * 0.1
-		draw_line(l.pos + Vector2.from_angle(a) * r * 0.9, l.pos + Vector2.from_angle(a) * r * 1.08, col, 3.0, true)
 
