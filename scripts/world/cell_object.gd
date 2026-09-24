@@ -9,6 +9,8 @@ var nature := ""
 var structure := ""
 var depleted := false
 var lit := false
+## Как выглядит постройка изнутри: что растёт на грядке, сколько яиц в курятнике.
+var look := ""
 var v := 0
 ## Качание после удара: затухает само.
 var shake := 0.0
@@ -25,12 +27,18 @@ func sync(info: Dictionary, night: bool) -> bool:
 	var s: String = info.get("built", "")
 	var d: bool = info.get("depleted", false)
 	var l: bool = night and s != "" and Content.STRUCTURES[s].has("light")
-	if n == nature and s == structure and d == depleted and l == lit:
+	var k: String = info.get("look", "")
+	if n == nature and s == structure and d == depleted and l == lit and k == look:
 		return false
+	look = k
 	nature = n
 	structure = s
 	depleted = d
 	lit = l
+	# Грядка плоская: по ней ходят, и персонаж должен быть поверх неё. Для сортировки по
+	# глубине её точка — верх клетки, а не низ (подсолнух высокий — он как дерево).
+	var flat := structure == "bed" and look.split(":")[0] != "sunflower"
+	position = Vector2(cell.x + 0.5, cell.y + (0.02 if flat else 1.0)) * Art.TILE
 	set_process(structure == "campfire" or shake > 0.0)
 	queue_redraw()
 	return true
@@ -50,9 +58,10 @@ func _process(delta: float) -> void:
 
 func _draw() -> void:
 	var sway := sin(shake * 18.0) * shake * 8.0
-	Art.pen(self, Rect2(-Art.TILE / 2.0, -Art.TILE, Art.TILE, Art.TILE))
+	var top := position.y - (cell.y + 1.0) * Art.TILE
+	Art.pen(self, Rect2(-Art.TILE / 2.0, -Art.TILE - top, Art.TILE, Art.TILE))
 	if structure != "":
-		Art.structure(self, structure, lit, _flicker)
+		Art.structure(self, structure, lit, _flicker, look)
 	elif nature != "":
 		Art.nature(self, nature, depleted, v, sway)
 	Art.unpen(self)

@@ -7,7 +7,8 @@
 extends Node
 
 const EFFECTS := ["step1", "step2", "twig", "pebble", "chop", "stone", "berries", "water", "eat",
-	"craft", "place", "pickup", "sleep", "goal", "nope", "ui", "bag"]
+	"craft", "place", "pickup", "sleep", "goal", "nope", "ui", "bag", "dig", "plant", "pour", "harvest",
+	"cluck", "pet"]
 ## Насколько тише остальных: шаги — фон, их не должно быть слышно громче топора.
 const LEVEL := {"step1": -7.0, "step2": -7.0, "ui": -4.0, "nope": -3.0}
 

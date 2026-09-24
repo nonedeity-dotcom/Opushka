@@ -288,6 +288,57 @@ S.amb_night = (() => {
   return loop(mix(w, crickets), 0.5);
 })();
 
+// --- огород и звери (добавлены позже — в конце, чтобы прежние звуки не поменялись) ---
+
+// Копать: два глухих «шурх» лопаткой по земле.
+S.dig = (() => {
+  const x = buf(0.45);
+  [0, 0.2].forEach((at, k) => {
+    mix(x, burst(0.18, { attack: 0.02, decay: 0.05, lo: 150, hi: 1400 }), at, 1 - k * 0.2);
+    mix(x, tone(120, 0.12, { decay: 0.04, harmonics: [1, 0.3] }), at, 0.5);
+  });
+  return finish(x, 0.6);
+})();
+
+// Посадить: мягкий хлопок землёй и светлая нотка.
+S.plant = finish(mix(burst(0.15, { attack: 0.01, decay: 0.04, lo: 200, hi: 1800 }), tone(784, 0.35, { attack: 0.01, decay: 0.1, harmonics: [1, 0.2] }), 0.08, 0.35), 0.5);
+
+// Полить: журчание — шум с «пузырьками».
+S.pour = (() => {
+  const sec = 0.9;
+  const x = buf(sec);
+  for (let i = 0; i < x.length; i++) {
+    const t = i / RATE;
+    const e = Math.min(1, t / 0.08) * Math.min(1, (sec - t) / 0.25);
+    x[i] = noise() * e;
+  }
+  bandpass(x, 900, 4500);
+  for (let k = 0; k < 9; k++) mix(x, tone(700 + rnd() * 900, 0.07, { attack: 0.004, decay: 0.02, harmonics: [1], glide: 2 }), 0.05 + rnd() * 0.7, 0.5);
+  return finish(x, 0.45);
+})();
+
+// Урожай: весёлые три ноты вверх и шорох ботвы.
+S.harvest = (() => {
+  const x = buf(0.8);
+  mix(x, burst(0.2, { attack: 0.02, decay: 0.06, lo: 900, hi: 5000 }), 0, 0.4);
+  [587.33, 739.99, 880].forEach((f, k) => mix(x, tone(f, 0.4, { decay: 0.12, harmonics: [1, 0.25] }), 0.05 + k * 0.09, 0.6));
+  return finish(x, 0.55);
+})();
+
+// Курица: «ко-ко» — две короткие ноты с хрипотцой.
+S.cluck = (() => {
+  const x = buf(0.45);
+  [0, 0.17].forEach((at, k) => {
+    const n = tone(520 - k * 60, 0.12, { attack: 0.005, decay: 0.035, harmonics: [1, 0.7, 0.5, 0.3], glide: -1.5 });
+    mix(x, n, at, 1);
+    mix(x, burst(0.05, { decay: 0.015, lo: 600, hi: 2500 }), at, 0.25);
+  });
+  return finish(x, 0.5);
+})();
+
+// Погладить, подружиться: тёплый двойной колокольчик.
+S.pet = finish(mix(tone(659.25, 0.7, { attack: 0.01, decay: 0.25, harmonics: [1, 0.2, 0.05] }), tone(987.77, 0.7, { attack: 0.01, decay: 0.25, harmonics: [1, 0.15] }), 0.12, 0.6), 0.45);
+
 fs.mkdirSync(OUT, { recursive: true });
 let total = 0;
 for (const [name, x] of Object.entries(S)) total += writeWav(name, x);

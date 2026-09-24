@@ -9,6 +9,7 @@ signal closed
 signal eat(id: String)
 signal place(id: String)
 signal craft(id: String)
+signal plant(id: String)
 
 var village: Village
 var landscape := false
@@ -125,7 +126,7 @@ func _items(scroll: ScrollContainer) -> void:
 	for id in ids:
 		var t := ItemTile.new()
 		t.id = id
-		t.count = village.bag[id]
+		t.count = village.water if id == "can" else village.bag[id]
 		t.picked = id == picked
 		t.pressed.connect(func():
 			picked = "" if picked == id else id
@@ -143,13 +144,15 @@ func _items(scroll: ScrollContainer) -> void:
 		text.add_child(Kit.label(item.name, 26, Art.TEXT, true))
 		text.add_child(Kit.muted(item.hint, 20))
 		row.add_child(text)
+		if item.has("seed"):
+			row.add_child(_button("Посадить", func(): plant.emit(picked)))
 		if item.has("food"):
 			row.add_child(_button("Съесть", func(): eat.emit(picked)))
 		if item.has("places"):
 			row.add_child(_button("Поставить", func(): place.emit(picked)))
 		col.add_child(Kit.card(row, Art.CARD, 20, 14))
 	else:
-		col.add_child(Kit.muted("Нажми на вещь — там можно съесть или поставить. Постройка встаёт на клетку, к которой ты повернулся.", 20))
+		col.add_child(Kit.muted("Нажми на вещь — там можно съесть, поставить или посадить. Постройка встаёт на клетку, к которой ты повернулся, семена — в грядку перед тобой.", 20))
 
 func _button(text: String, on_press: Callable, enabled := true) -> Button:
 	var b := Button.new()
@@ -241,8 +244,8 @@ class ItemTile:
 		var name: String = Content.ITEMS[id].name
 		var w := font.get_string_size(name, HORIZONTAL_ALIGNMENT_LEFT, -1, 20).x
 		draw_string(font, Vector2((size.x - w) / 2, size.y - 20), name, HORIZONTAL_ALIGNMENT_LEFT, -1, 20, Art.MUTED)
-		if not Content.ITEMS[id].get("tool", false):
-			var t := str(count)
+		if id == "can" or not Content.ITEMS[id].get("tool", false):
+			var t := "%d/%d" % [count, Content.CAN_SIZE] if id == "can" else str(count)
 			var tw := font.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1, 20).x
 			draw_style_box(Kit.box(Art.BG, 14, Color(0, 0, 0, 0), 0), Rect2(size.x - tw - 24, 8, tw + 16, 28))
 			draw_string(font, Vector2(size.x - tw - 16, 29), t, HORIZONTAL_ALIGNMENT_LEFT, -1, 20, Art.TEXT)

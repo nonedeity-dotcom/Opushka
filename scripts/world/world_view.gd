@@ -6,6 +6,8 @@ extends Node2D
 const GroundChunk := preload("res://scripts/world/ground_chunk.gd")
 const CellObject := preload("res://scripts/world/cell_object.gd")
 const PlayerView := preload("res://scripts/world/player_view.gd")
+const AnimalView := preload("res://scripts/world/animal_view.gd")
+const Critters := preload("res://scripts/world/critters.gd")
 
 var village: Village
 var objects: Node2D
@@ -15,6 +17,8 @@ var night_tint: CanvasModulate
 var marker: Node2D
 var _nodes := {}  # Vector2i → узел клетки
 var _lights := {}  # Vector2i → PointLight2D
+var _animals := {}  # Animals.Animal → AnimalView
+var critters: Node2D
 var _light_texture: Texture2D
 var show_target := true
 
@@ -25,6 +29,7 @@ func build(v: Village) -> void:
 		child.queue_free()
 	_nodes.clear()
 	_lights.clear()
+	_animals.clear()
 	var w := v.world()
 
 	var ground := Node2D.new()
@@ -51,6 +56,15 @@ func build(v: Village) -> void:
 
 	player = PlayerView.new()
 	objects.add_child(player)
+
+	# Светлячки и бабочки — на своём слое, который движется вместе с миром: ночное
+	# затемнение их не касается, и светлячки светятся в темноте.
+	var glow := CanvasLayer.new()
+	glow.layer = 1
+	glow.follow_viewport_enabled = true
+	add_child(glow)
+	critters = Critters.new()
+	glow.add_child(critters)
 
 	night_tint = CanvasModulate.new()
 	add_child(night_tint)
@@ -133,6 +147,13 @@ func sync_all() -> void:
 
 ## Раз в секунду: не отросло ли что-нибудь. Смотрим только собранные клетки — их немного.
 func sync_regrowth() -> void:
+	# Грядки и курятники меняются со временем сами: растёт, несутся.
+	for k in village.built:
+		if village.built[k] == "bed" or village.built[k] == "coop":
+			var p: PackedStringArray = k.split(":")
+			var c := Vector2i(int(p[0]), int(p[1]))
+			if _nodes.has(c):
+				_nodes[c].sync(village.cell(c), village.is_night())
 	for k in village.used:
 		var p: PackedStringArray = k.split(":")
 		var c := Vector2i(int(p[0]), int(p[1]))
@@ -148,9 +169,65 @@ func update_view(moved: float) -> void:
 	for c in _lights:
 		_lights[c].energy = d * 1.1
 		_lights[c].visible = d > 0.02
-	marker.visible = show_target and village.action_label() != ""
+	var label := village.action_label()
+	var animal := village._animal_for_button()
+	marker.visible = show_target and label != "" and animal == null
 	if marker.visible:
 		marker.position = Vector2(village.target()) * Art.TILE
+	_sync_animals(animal)
+	critters.update(village, camera.get_screen_center_position(), d)
+
+
+func _sync_animals(near: Animals.Animal) -> void:
+	if village.animals == null:
+		return
+	var alive := {}
+	for a in village.animals.list:
+		alive[a] = true
+		var view: Node2D = _animals.get(a)
+		if view == null:
+			view = AnimalView.new()
+			view.animal = a
+			objects.add_child(view)
+			_animals[a] = view
+		view.refresh(a == near)
+	for a in _animals.keys():
+		if not alive.has(a):
+			_animals[a].queue_free()
+			_animals.erase(a)
+
+## Сердечки над зверем — покормил или погладил.
+func hearts(at: Vector2) -> void:
+	var p := CPUParticles2D.new()
+	p.position = at * Art.TILE + Vector2(0, -Art.TILE * 0.6)
+	p.one_shot = true
+	p.explosiveness = 0.6
+	p.amount = 5
+	p.lifetime = 1.2
+	p.direction = Vector2(0, -1)
+	p.spread = 35.0
+	p.initial_velocity_min = 30.0
+	p.initial_velocity_max = 60.0
+	p.gravity = Vector2.ZERO
+	var img := Image.create(24, 22, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	for y in 22:
+		for x in 24:
+			var u := (x - 12) / 9.5
+			var w := (y - 11.5) / 9.5
+			# Сердце по формуле: (x²+y²−1)³ − x²y³ ≤ 0.
+			var q := u * u + w * w - 1.0
+			if q * q * q - u * u * (-w) * (-w) * (-w) <= 0.0:
+				img.set_pixel(x, y, Color("#e0788a"))
+	p.texture = ImageTexture.create_from_image(img)
+	var g := Gradient.new()
+	g.set_color(0, Color(1, 1, 1, 1))
+	g.set_color(1, Color(1, 1, 1, 0))
+	p.color_ramp = g
+	p.z_index = 6
+	add_child(p)
+	p.emitting = true
+	p.finished.connect(p.queue_free)
 
 
 ## Мир под пальцем: из точки экрана в клетку.
@@ -176,6 +253,18 @@ func burst(c: Vector2i, kind: String) -> void:
 			colors = [Color("#c9566a"), Color("#4a8756")]
 		"twig", "pebble":
 			colors = [Color("#8a6440"), Color("#8f949b")]
+			amount = 8
+		"dig", "plant":
+			colors = [Color("#6b4b2e"), Color("#4f9a55")]
+			amount = 12
+		"pour":
+			colors = [Color("#a9cfe0"), Color("#4d7d94")]
+			amount = 16
+		"harvest":
+			colors = [Color("#e8873a"), Color("#f2c23a"), Color("#5fae62")]
+			amount = 18
+		"cluck":
+			colors = [Color("#f2ece0"), Color("#e0c070")]
 			amount = 8
 		"place", "craft", "pickup":
 			colors = [Color("#e8e6e0"), Color("#a5845a")]

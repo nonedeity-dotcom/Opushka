@@ -51,12 +51,14 @@ func _ready() -> void:
 		village = Village.create(randi() & 0x7FFFFFFF)
 		fresh = true
 	_apply_debug_args()
+	village.animals = Animals.new(village)
 
 	world = WorldView.new()
 	add_child(world)
 	world.build(village)
 
 	var layer := CanvasLayer.new()
+	layer.layer = 2
 	add_child(layer)
 	var ui := Control.new()
 	ui.theme = Kit.theme()
@@ -72,7 +74,7 @@ func _ready() -> void:
 	hud.rotate_pressed.connect(func():
 		settings.landscape = not landscape
 		_settings_changed(settings))
-	hud.eat_pressed.connect(func(): _handle(village.eat("berries")))
+	hud.eat_pressed.connect(func(): _handle(village.eat(village.snack())))
 	hud.pickup_pressed.connect(func(): _handle(village.pick_up()))
 
 	bag = BagPanel.new()
@@ -88,6 +90,9 @@ func _ready() -> void:
 	bag.craft.connect(func(id):
 		_handle(village.craft(id))
 		bag.rebuild())
+	bag.plant.connect(func(id):
+		bag.visible = false
+		_handle(village.plant(id)))
 
 	setup = SettingsPanel.new()
 	setup.visible = false
@@ -124,6 +129,8 @@ func _process(delta: float) -> void:
 	elif not panels and not _route.is_empty():
 		moved = _follow(delta)
 
+	if not panels:
+		village.animals.step(delta, village)
 	world.update_view(moved)
 	if moved > 0.0:
 		_dirty = true
@@ -142,6 +149,7 @@ func _process(delta: float) -> void:
 	if _regrow_in <= 0.0:
 		_regrow_in = 1.0
 		world.sync_regrowth()
+		village.animals.sync_chickens(village)
 
 	hud.refresh(village)
 
@@ -193,6 +201,14 @@ func _tap(screen: Vector2) -> void:
 	if bag.visible or setup.visible:
 		return
 	var c: Vector2i = world.cell_at_screen(screen)
+	# Нажал на зверя рядом — повернуться к нему и сделать, что можно (покормить, погладить).
+	var spot := (world.get_canvas_transform().affine_inverse() * screen) / Art.TILE
+	for a in village.animals.list:
+		if a.kind != "bird" and not a.gone and a.pos.distance_to(spot + Vector2(0, 0.3)) < 0.7 and a.pos.distance_to(village.pos) < 1.8:
+			_route.clear()
+			village.face(a.pos - village.pos)
+			_act()
+			return
 	if c == village.target() and village.action_label() != "":
 		_route.clear()
 		_act()
@@ -226,12 +242,14 @@ func _handle(out: Dictionary) -> void:
 	var s: String = out.get("sound", "")
 	if s != "":
 		sound.play(s)
-		var buzz: int = {"chop": 22, "stone": 26, "craft": 16, "place": 22, "pickup": 12, "berries": 10, "twig": 8, "pebble": 8}.get(s, 0)
+		var buzz: int = {"chop": 22, "stone": 26, "craft": 16, "place": 22, "pickup": 12, "berries": 10, "twig": 8, "pebble": 8, "dig": 14, "harvest": 14, "pet": 8}.get(s, 0)
 		if buzz > 0 and settings.vibration:
 			Input.vibrate_handheld(buzz)
 	if out.has("cell"):
 		world.sync_cell(out.cell)
 		world.burst(out.cell, s)
+	if out.has("hearts"):
+		world.hearts(out.hearts)
 	if out.get("slept", false):
 		world.sync_all()
 	if out.get("goal", false):
@@ -262,6 +280,7 @@ func _settings_changed(s: Settings) -> void:
 
 func _new_world() -> void:
 	village = Village.create(randi() & 0x7FFFFFFF)
+	village.animals = Animals.new(village)
 	setup.visible = false
 	world.build(village)
 	_route.clear()
@@ -315,7 +334,7 @@ func _load() -> Village:
 
 # --- проверка из командной строки -----------------------------------------------------
 #
-# godot --path . -- --fresh --seed=42 --time=1230 --bag=stick:12,axe:1 \
+# godot --path . -- --fresh --seed=42 --time=1230 --bag=stick:12,axe:1 --water=5 --pets=1 \
 #   --built=32:33:campfire --do="pad:1,0:40 act wait:20 open:bag"
 #
 # Нужна, чтобы прогнать настоящую игру без телефона и снять кадры. В обычной игре этих
@@ -334,6 +353,10 @@ func _apply_debug_args() -> void:
 		village.time = float(args.time)
 	if args.has("food"):
 		village.food = float(args.food)
+	if args.has("water"):
+		village.water = int(args.water)
+	if args.has("pets"):
+		village.pets = int(args.pets)
 	if args.has("bag"):
 		for pair in args.bag.split(","):
 			var p: PackedStringArray = pair.split(":")
@@ -379,6 +402,10 @@ func _run_script() -> void:
 			_handle(village.craft(p[1]))
 		"place":
 			_handle(village.place(p[1]))
+		"plant":
+			_handle(village.plant(p[1]))
+		"time":
+			village.time += float(p[1])
 		"goto":
 			# Дойти до ближайшего дерева, куста, камня — той же дорогой, что и по касанию.
 			var here := village.tile_of(village.pos)

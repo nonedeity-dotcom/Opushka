@@ -199,12 +199,88 @@ static func nature(ci: CanvasItem, id: String, depleted: bool, v: int, sway := 0
 			line(ci, Vector2(50, 56), Vector2(60, 36), Color("#8a6440"), 4)
 			line(ci, Vector2(30, 42), Vector2(64, 70), Color("#7a5636"), 5)
 			ellipse(ci, Vector2(62, 34), 5, 3, Color("#5f9a62"))
+		"wildcarrot":
+			if depleted:
+				ellipse(ci, Vector2(50, 74), 12, 5, Color("#4b3a2a"))
+				return
+			shadow(ci, 18)
+			_carrot_tops(ci, Vector2(50 + sway * 0.4, 72), 1.0)
+			# Белые зонтики цветов — так дикую морковь и узнают.
+			for p in [Vector2(36, 30), Vector2(58, 24), Vector2(66, 40)]:
+				line(ci, Vector2(50, 70), p + Vector2(sway * 0.5, 4), Color("#5a8a52"), 2)
+				ellipse(ci, p + Vector2(sway * 0.5, 0), 9, 5, Color("#ece8dc"))
+				ellipse(ci, p + Vector2(sway * 0.5, -1), 5, 2.5, Color("#fbf9f2"))
+			ellipse(ci, Vector2(50, 76), 6, 4, Color("#e08a3c"))
+		"sunflower":
+			_sunflower(ci, 3, depleted, sway)
+
+
+## Ботва моркови: пучок перистых листьев из точки base.
+static func _carrot_tops(ci: CanvasItem, base: Vector2, k: float) -> void:
+	for a in [-0.9, -0.45, 0.0, 0.45, 0.9]:
+		var tip := base + Vector2(sin(a) * 22.0, -cos(a) * 30.0) * k
+		line(ci, base, tip, Color("#4f9a55"), 3.0 * k + 1.0)
+		ellipse(ci, tip, 6.0 * k, 4.0 * k, Color("#5fae62"))
+
+## Подсолнух: 0 — росток, 1 — листья, 2 — стебель с бутоном, 3 — цветёт. Выше клетки.
+static func _sunflower(ci: CanvasItem, stage: int, depleted: bool, sway := 0.0) -> void:
+	if stage == 0:
+		line(ci, Vector2(50, 76), Vector2(50, 62), Color("#5a9a52"), 3)
+		ellipse(ci, Vector2(44, 62), 7, 4, Color("#6fb266"))
+		ellipse(ci, Vector2(56, 60), 7, 4, Color("#6fb266"))
+		return
+	var top := Vector2(50 + sway, 20.0 if stage == 1 else (-4.0 if stage == 2 else -18.0))
+	shadow(ci, 16)
+	ci.draw_polyline(quad(Vector2(50, 80), Vector2(48, (80 + top.y) / 2), top), Color("#4f8a45"), 5, true)
+	for y in [60.0, 42.0, 24.0]:
+		if y < top.y:
+			continue
+		ellipse(ci, Vector2(38, y), 11, 6, Color("#5a9a4e"))
+		ellipse(ci, Vector2(62, y - 6), 11, 6, Color("#62a456"))
+	if stage == 1:
+		return
+	if stage == 2:
+		ci.draw_circle(top, 8, Color("#6f9a48"))
+		return
+	if not depleted:
+		for i in 12:
+			var ang := TAU * i / 12.0
+			ellipse(ci, top + Vector2(cos(ang), sin(ang)) * 16, 7, 7, Color("#f2c23a"))
+		ci.draw_circle(top, 12, Color("#6b4a2a"))
+		for i in 6:
+			ci.draw_circle(top + Vector2(cos(i), sin(i * 1.7)) * 6, 1.6, Color("#4a321c"))
+	else:
+		ci.draw_circle(top, 9, Color("#7a6040"))
 
 
 # --- постройки ------------------------------------------------------------------------
 
-static func structure(ci: CanvasItem, id: String, lit: bool, flicker := 0.0) -> void:
+static func structure(ci: CanvasItem, id: String, lit: bool, flicker := 0.0, look := "") -> void:
 	match id:
+		"bed":
+			var parts := look.split(":")
+			var crop := parts[0] if parts.size() > 0 else ""
+			var stage := int(parts[1]) if parts.size() > 1 else 0
+			var wet := parts.size() > 2 and parts[2] == "1"
+			ci.draw_rect(Rect2(8, 26, 84, 66), Color("#7a5636"))
+			ci.draw_rect(Rect2(14, 32, 72, 54), Color("#3b2a1e") if wet else Color("#5a4230"))
+			for y in [44.0, 58.0, 72.0]:
+				ci.draw_line(Vector2(18, y), Vector2(82, y), Color("#33241a") if wet else Color("#4c3727"), 3)
+			if wet:
+				ellipse(ci, Vector2(32, 50), 6, 2.5, Color(0.55, 0.75, 0.9, 0.35))
+				ellipse(ci, Vector2(66, 66), 7, 2.5, Color(0.55, 0.75, 0.9, 0.35))
+			if crop == "carrot":
+				for p in [Vector2(32, 62), Vector2(68, 62)]:
+					if stage == 0:
+						line(ci, p + Vector2(0, 8), p + Vector2(-4, 0), Color("#6fb266"), 3)
+						line(ci, p + Vector2(0, 8), p + Vector2(4, -2), Color("#6fb266"), 3)
+					else:
+						_carrot_tops(ci, p + Vector2(0, 10), 0.45 + stage * 0.2)
+						if stage == 3:
+							ellipse(ci, p + Vector2(0, 12), 7, 4, Color("#e8873a"))
+			elif crop == "sunflower":
+				_sunflower(ci, stage, false)
+
 		"campfire":
 			for p in [Vector2(26, 74), Vector2(36, 82), Vector2(50, 85), Vector2(64, 82), Vector2(74, 74)]:
 				ellipse(ci, p, 7, 5, Color("#80858c"))
@@ -227,6 +303,22 @@ static func structure(ci: CanvasItem, id: String, lit: bool, flicker := 0.0) -> 
 			for x in [14.0, 64.0]:
 				ellipse(ci, Vector2(x + 11, 86), 12, 4, SHADOW)
 				poly(ci, [Vector2(x, 30), Vector2(x + 11, 20), Vector2(x + 22, 30), Vector2(x + 22, 86), Vector2(x, 86)], Color("#8a6a45"))
+		"coop":
+			var eggs := int(look.trim_prefix("eggs:")) if look.begins_with("eggs:") else 0
+			shadow(ci, 40)
+			ci.draw_rect(Rect2(14, 34, 72, 50), Color("#b4905e"))
+			for x in [26.0, 40.0, 54.0, 68.0]:
+				ci.draw_line(Vector2(x, 36), Vector2(x, 84), Color("#9a774b"), 2)
+			poly(ci, [Vector2(6, 38), Vector2(50, 4), Vector2(94, 38)], Color("#a8563c"))
+			poly(ci, [Vector2(6, 38), Vector2(50, 4), Vector2(50, 12), Vector2(15, 38)], Color("#bd6a4c"))
+			ci.draw_rect(Rect2(38, 54, 24, 30), Color("#3a2618"))
+			ellipse(ci, Vector2(50, 54), 12, 8, Color("#3a2618"))
+			# Соломка у входа и лесенка.
+			for i in 5:
+				line(ci, Vector2(40 + i * 5, 84), Vector2(36 + i * 6, 90), Color("#e0c070"), 2)
+			line(ci, Vector2(62, 84), Vector2(78, 94), Color("#8a6a45"), 5)
+			for i in eggs:
+				ellipse(ci, Vector2(44 + (i % 3) * 7, 80 - (i / 3) * 6), 3.6, 4.6, Color("#f4ecdc"))
 		"house":
 			# Домик выше клетки: крыша заходит на клетку сверху.
 			ellipse(ci, Vector2(50, 92), 46, 7, Color(0, 0, 0, 0.25))
@@ -243,6 +335,65 @@ static func structure(ci: CanvasItem, id: String, lit: bool, flicker := 0.0) -> 
 			ci.draw_rect(Rect2(66, 56, 15, 13), window)
 			ci.draw_line(Vector2(26.5, 56), Vector2(26.5, 69), Color("#6b4b2e"), 1.6)
 			ci.draw_line(Vector2(73.5, 56), Vector2(73.5, 69), Color("#6b4b2e"), 1.6)
+
+static func _packet(ci: CanvasItem, col: Color) -> void:
+	_round_rect(ci, Rect2(24, 18, 52, 70), 6, col)
+	ci.draw_rect(Rect2(24, 18, 52, 12), col.darkened(0.2))
+
+static func heart(ci: CanvasItem, c: Vector2, size: float, col: Color) -> void:
+	var r := size * 0.3
+	ci.draw_circle(c + Vector2(-r, -r * 0.3), r, col)
+	ci.draw_circle(c + Vector2(r, -r * 0.3), r, col)
+	poly(ci, [c + Vector2(-r * 1.95, 0), c + Vector2(r * 1.95, 0), c + Vector2(0, size * 0.75)], col)
+
+
+# --- звери ----------------------------------------------------------------------------
+
+## Зверь на клетке 100×100, точка опоры — низ посередине (50, 90). `phase` — фаза шага.
+static func animal(ci: CanvasItem, kind: String, dir: Vector2, phase: float, moving: bool, lift := 0.0) -> void:
+	var flip := -1.0 if dir.x < -0.1 else 1.0
+	match kind:
+		"hare":
+			var hop := absf(sin(phase * TAU)) * (14.0 if moving else 0.0)
+			ellipse(ci, Vector2(50, 90), 20 - hop * 0.5, 5, Color(0, 0, 0, 0.25))
+			var o := Vector2(0, -hop)
+			var bodyc := Color("#a08a70")
+			ellipse(ci, Vector2(48, 72) + o, 20, 15, bodyc)
+			ci.draw_circle(Vector2(50 - 20 * flip, 70) + o, 6, Color("#efe6da"))
+			var head := Vector2(50 + 16 * flip, 58) + o
+			ci.draw_circle(head, 11, bodyc)
+			ellipse(ci, head + Vector2(-3 * flip, -18), 4, 13, bodyc)
+			ellipse(ci, head + Vector2(4 * flip, -17), 4, 13, Color("#b29a80"))
+			ellipse(ci, head + Vector2(4 * flip, -16), 2, 9, Color("#e2b8b0"))
+			ci.draw_circle(head + Vector2(5 * flip, -2), 2.2, Color("#2a2a2a"))
+			ci.draw_circle(head + Vector2(10 * flip, 3), 1.8, Color("#c9868a"))
+			ellipse(ci, Vector2(58 + 4 * flip, 86) + o, 6, 3, Color("#8a7458"))
+		"chicken":
+			var peck := 0.0 if moving else maxf(0.0, sin(phase * TAU * 2.0)) * 8.0
+			var step := sin(phase * TAU) * (4.0 if moving else 0.0)
+			ellipse(ci, Vector2(50, 90), 16, 4, Color(0, 0, 0, 0.25))
+			line(ci, Vector2(46 + step, 80), Vector2(46 + step, 89), Color("#e0a040"), 2.5)
+			line(ci, Vector2(54 - step, 80), Vector2(54 - step, 89), Color("#e0a040"), 2.5)
+			ellipse(ci, Vector2(48, 70), 17, 13, Color("#f2ece0"))
+			poly(ci, [Vector2(50 - 14 * flip, 66), Vector2(50 - 26 * flip, 54), Vector2(50 - 22 * flip, 70)], Color("#e8e0d0"))
+			ellipse(ci, Vector2(46, 72), 9, 6, Color("#ddd4c2"))
+			var head := Vector2(50 + 14 * flip, 54 + peck)
+			ci.draw_circle(head, 8, Color("#f2ece0"))
+			ci.draw_circle(head + Vector2(-1 * flip, -8), 3.5, Color("#d8483a"))
+			ci.draw_circle(head + Vector2(3 * flip, -8), 3, Color("#d8483a"))
+			poly(ci, [head + Vector2(7 * flip, -1), head + Vector2(13 * flip, 1), head + Vector2(7 * flip, 3)], Color("#e8a040"))
+			ci.draw_circle(head + Vector2(3 * flip, -2), 1.6, Color("#2a2a2a"))
+		"bird":
+			var up := Vector2(0, -lift * 30.0)
+			if lift < 0.2:
+				ellipse(ci, Vector2(50, 90), 7, 2, Color(0, 0, 0, 0.2))
+			var flap := sin(phase * TAU) * (12.0 if lift > 0.0 else 0.0)
+			var b := Vector2(50, 80) + up
+			ellipse(ci, b, 9, 6, Color("#7a6250"))
+			ci.draw_circle(b + Vector2(7 * flip, -4), 4.5, Color("#7a6250"))
+			poly(ci, [b + Vector2(11 * flip, -5), b + Vector2(15 * flip, -4), b + Vector2(11 * flip, -3)], Color("#e0a040"))
+			ellipse(ci, b + Vector2(1 * flip, 1), 5, 3, Color("#d8a078"))
+			poly(ci, [b + Vector2(-2 * flip, -2), b + Vector2(-10 * flip, -4 - flap), b + Vector2(4 * flip, -1)], Color("#5e4a3a"))
 
 ## Язык пламени: капля, узкая сверху.
 static func _flame(base: Vector2, w: float, h: float) -> PackedVector2Array:
@@ -380,4 +531,51 @@ static func item_icon(ci: CanvasItem, id: String, rect: Rect2) -> void:
 		"hand":
 			ci.draw_arc(Vector2(50, 50), 26, 0, TAU, 32, MUTED, 5, true)
 			ci.draw_circle(Vector2(50, 50), 8, MUTED)
+		"carrot":
+			var body := PackedVector2Array([Vector2(58, 30), Vector2(74, 44), Vector2(30, 90)])
+			ci.draw_colored_polygon(body, Color("#e8873a"))
+			ci.draw_circle(Vector2(66, 37), 11, Color("#e8873a"))
+			for p in [[Vector2(52, 58), Vector2(60, 62)], [Vector2(42, 72), Vector2(48, 76)]]:
+				line(ci, p[0], p[1], Color("#c96a28"), 3)
+			for a in [-0.5, 0.0, 0.5]:
+				line(ci, Vector2(70, 32), Vector2(70, 32) + Vector2(sin(a + 0.7), -cos(a + 0.7)) * 26, Color("#4f9a55"), 5)
+		"carrot_seed":
+			_packet(ci, Color("#d9b27a"))
+			ci.draw_colored_polygon(PackedVector2Array([Vector2(46, 46), Vector2(56, 52), Vector2(38, 76)]), Color("#e8873a"))
+			line(ci, Vector2(52, 48), Vector2(60, 36), Color("#4f9a55"), 4)
+		"sunflower_seed":
+			for p in [Vector2(34, 40), Vector2(62, 36), Vector2(46, 64), Vector2(70, 64), Vector2(28, 70)]:
+				var pts := PackedVector2Array()
+				for i in 16:
+					var t := TAU * i / 16.0
+					pts.append(p + Vector2(cos(t) * 8, sin(t) * 14 * (0.7 if sin(t) < 0 else 1.0)))
+				ci.draw_colored_polygon(pts, Color("#3a3230"))
+				line(ci, p + Vector2(0, -8), p + Vector2(0, 10), Color("#d8d0c0"), 2)
+		"egg":
+			ellipse(ci, Vector2(50, 56), 26, 32, Color("#f4ecdc"))
+			ellipse(ci, Vector2(42, 44), 7, 10, Color("#ffffff"))
+		"can":
+			_round_rect(ci, Rect2(24, 36, 44, 46), 8, Color("#6f8fa0"))
+			line(ci, Vector2(66, 50), Vector2(88, 30), Color("#6f8fa0"), 8)
+			ellipse(ci, Vector2(89, 29), 6, 4, Color("#8fb0c0"))
+			ci.draw_arc(Vector2(46, 38), 16, PI, TAU, 16, Color("#58778a"), 5, true)
+			ci.draw_rect(Rect2(24, 52, 44, 6), Color("#58778a"))
+		"bed":
+			ci.draw_rect(Rect2(10, 30, 80, 56), Color("#7a5636"))
+			ci.draw_rect(Rect2(16, 36, 68, 44), Color("#5a4230"))
+			for x in [32.0, 50.0, 68.0]:
+				line(ci, Vector2(x, 60), Vector2(x - 6, 46), Color("#6fb266"), 4)
+				line(ci, Vector2(x, 60), Vector2(x + 6, 46), Color("#6fb266"), 4)
+		"coop":
+			ci.draw_rect(Rect2(18, 44, 64, 44), Color("#b4905e"))
+			poly(ci, [Vector2(8, 48), Vector2(50, 12), Vector2(92, 48)], Color("#a8563c"))
+			ci.draw_rect(Rect2(40, 60, 20, 28), Color("#3a2618"))
+			ellipse(ci, Vector2(50, 60), 10, 7, Color("#3a2618"))
+		"sprout":
+			line(ci, Vector2(50, 84), Vector2(50, 46), Color("#4f9a55"), 6)
+			ellipse(ci, Vector2(34, 44), 16, 9, Color("#6fb266"))
+			ellipse(ci, Vector2(66, 36), 16, 9, Color("#6fb266"))
+			ellipse(ci, Vector2(50, 88), 26, 6, Color("#5a4230"))
+		"heart":
+			heart(ci, Vector2(50, 54), 30, Color("#e0788a"))
 	unpen(ci)

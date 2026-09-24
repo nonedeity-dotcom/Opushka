@@ -131,13 +131,16 @@ func refresh(v: Village) -> void:
 		goal_title.text = "%s  ·  %d/%d" % [goal.title, n, Content.GOALS.size()]
 		goal_hint.text = goal.hint
 		goal_hint.visible = not _landscape
-	var berries: int = v.bag.get("berries", 0)
-	eat_btn.visible = berries > 0 and v.food < 90.0
-	eat_btn.badge = str(berries)
+	var snack := v.snack()
+	eat_btn.visible = snack != "" and v.food < 90.0
+	if snack != "":
+		eat_btn.item = snack
+		eat_btn.tooltip_text = "Съесть: %s" % Content.ITEMS[snack].name.to_lower()
+		eat_btn.badge = str(v.bag.get(snack, 0))
 	eat_btn.queue_redraw()
 	var target_cell := v.cell(v.target())
 	pickup_btn.visible = not target_cell.is_empty() and target_cell.built != ""
-	hotbar.set_items(v.bag, _landscape)
+	hotbar.set_items(v.bag, _landscape, v.water)
 	_layout_side()
 
 
@@ -329,11 +332,12 @@ class Hotbar:
 		focus_mode = Control.FOCUS_NONE
 		visible = false
 
-	func set_items(bag: Dictionary, f: bool) -> void:
+	func set_items(bag: Dictionary, f: bool, water := 0) -> void:
 		var list: Array = []
 		for id in bag:
 			if bag[id] > 0:
-				list.append([id, bag[id]])
+				# У лейки вместо числа штук — сколько в ней воды.
+				list.append([id, water if id == "can" else bag[id]])
 		floating = f
 		if str(list) == str(items):
 			return
@@ -352,6 +356,8 @@ class Hotbar:
 		for i in mini(items.size(), 7):
 			var id: String = items[i][0]
 			Art.item_icon(self, id, Rect2(x, 14, 36, 36))
-			if not Content.ITEMS[id].get("tool", false):
+			if id == "can":
+				draw_string(font, Vector2(x + 40, 42), "%d/%d" % [items[i][1], Content.CAN_SIZE], HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color("#a9cfe0"))
+			elif not Content.ITEMS[id].get("tool", false):
 				draw_string(font, Vector2(x + 40, 42), str(items[i][1]), HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Art.TEXT)
 			x += 86

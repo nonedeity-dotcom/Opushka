@@ -9,7 +9,7 @@
 class_name Village
 extends RefCounted
 
-const VERSION := 1
+const VERSION := 2
 ## Первый день начинается утром, а не в полночь.
 const START_TIME := 8 * 60
 ## Сколько игровых минут стоит пройти одну клетку.
@@ -35,6 +35,17 @@ var built := {}
 ## Сколько чего собрано за всё время.
 var gathered := {}
 var goals_done: Array = []
+## Воды в лейке, 0–CAN_SIZE.
+var water := 0
+## Грядки: "x:y" → {crop, g — сколько минут уже росло, last — с какой минуты считать,
+## wet — до какой минуты земля влажная}. Пустая сухая грядка записи не имеет.
+var beds := {}
+## Курятники: "x:y" → {fed — в какой день насыпали семечек, eggs — сколько яиц лежит}.
+var coops := {}
+## Сколько зайцев приручено: они ходят следом.
+var pets := 0
+## Звери вокруг — живут на экране, в сохранение не идут. null — зверей нет (в тестах правил).
+var animals: Animals = null
 
 
 static func create(seed_: int) -> Village:
@@ -108,13 +119,21 @@ func cell(c: Vector2i) -> Dictionary:
 	var depleted := false
 	if nature != "" and used.has(k):
 		depleted = time - float(used[k]) < float(Content.NATURE[nature].regrow)
-	return {"ground": w.ground[i], "nature": nature, "depleted": depleted, "built": structure}
+	var look := ""
+	if structure == "bed":
+		var b := bed(c)
+		look = "%s:%d:%d" % [b.crop, b.stage, 1 if b.wet else 0]
+	elif structure == "coop":
+		look = "eggs:%d" % coop_eggs(c)
+	return {"ground": w.ground[i], "nature": nature, "depleted": depleted, "built": structure, "look": look}
 
 ## Мешает ли клетка пройти.
 func blocks(c: Vector2i) -> bool:
 	var info := cell(c)
-	if info.is_empty() or info.ground == WorldGen.Ground.WATER or info.built != "":
+	if info.is_empty() or info.ground == WorldGen.Ground.WATER:
 		return true
+	if info.built != "":
+		return not Content.STRUCTURES[info.built].get("walk", false)
 	if info.nature == "":
 		return false
 	if not info.depleted:
@@ -207,9 +226,22 @@ func _actionable(c: Vector2i) -> bool:
 # --- что сделает кнопка ---------------------------------------------------------------
 
 func action_label() -> String:
+	var a := _animal_for_button()
+	if a != null:
+		return _animal_label(a)
+	return _cell_label()
+
+func _cell_label() -> String:
 	var info := cell(target())
 	if info.is_empty():
 		return ""
+	if info.built == "bed":
+		return _bed_label(target())
+	if info.built == "coop":
+		var eggs := coop_eggs(target())
+		if eggs > 0:
+			return "Собрать яйца"
+		return "Насыпать семечек" if coops.get(key(target()), {}).get("fed", 0) != day() else "Курятник"
 	if info.built != "":
 		var s: Dictionary = Content.STRUCTURES[info.built]
 		if s.has("sleep") and is_night():
@@ -218,14 +250,27 @@ func action_label() -> String:
 	if info.nature != "" and not info.depleted:
 		return Content.NATURE[info.nature].verb
 	if info.ground == WorldGen.Ground.WATER:
-		return "Вода"
+		return "Набрать воды" if bag.get("can", 0) > 0 and water < Content.CAN_SIZE else "Вода"
 	return ""
 
 ## Значок для кнопки: вещь, которая нужна или получится, «sleep» или «water».
 func action_icon() -> String:
+	var a := _animal_for_button()
+	if a != null:
+		return "carrot" if a.kind == "hare" and not a.tame and bag.get("carrot", 0) > 0 else "heart"
 	var info := cell(target())
 	if info.is_empty():
 		return ""
+	if info.built == "bed":
+		var b := bed(target())
+		if b.crop == "":
+			var sd := _first_seed()
+			return sd if sd != "" else "bed"
+		if b.ripe:
+			return Content.CROPS[b.crop].gives.keys()[0]
+		return "sprout" if b.wet else "can"
+	if info.built == "coop":
+		return "egg" if coop_eggs(target()) > 0 else "sunflower_seed"
 	if info.built != "":
 		if Content.STRUCTURES[info.built].has("sleep") and is_night():
 			return "sleep"
@@ -244,10 +289,17 @@ static func _out(message: String, sound := "", goal := false) -> Dictionary:
 	return {"message": message, "sound": sound, "goal": goal}
 
 func act() -> Dictionary:
+	var a := _animal_for_button()
+	if a != null:
+		return _act_animal(a)
 	var c := target()
 	var info := cell(c)
 	if info.is_empty():
 		return {}
+	if info.built == "bed":
+		return _act_bed(c)
+	if info.built == "coop":
+		return _act_coop(c)
 	if info.built != "":
 		var s: Dictionary = Content.STRUCTURES[info.built]
 		if s.has("sleep"):
@@ -256,7 +308,13 @@ func act() -> Dictionary:
 			return _out("%s рядом — в «Сумке» открылись новые рецепты" % s.name, "ui")
 		return _out(s.name, "ui")
 	if info.ground == WorldGen.Ground.WATER and info.nature == "":
-		return _out("Тихая вода. Когда-нибудь здесь будет удочка", "water")
+		if bag.get("can", 0) <= 0:
+			return _out("Тихая вода. Будет лейка — будет чем поливать грядки", "water")
+		if water >= Content.CAN_SIZE:
+			return _out("Лейка и так полная", "water")
+		water = Content.CAN_SIZE
+		_pass(3)
+		return _out("Лейка полная — хватит на %d грядок" % Content.CAN_SIZE, "water")
 	if info.nature == "":
 		return {}
 	var def: Dictionary = Content.NATURE[info.nature]
@@ -315,6 +373,14 @@ func eat(id: String) -> Dictionary:
 	_pass(2)
 	return _out("Съел: %s" % item.name.to_lower(), "eat")
 
+## Что съесть по кнопке «съесть»: сначала то, что не нужно больше ни для чего. Семечки
+## не едим — они для грядок и кур.
+func snack() -> String:
+	for id in ["berries", "egg", "carrot"]:
+		if bag.get(id, 0) > 0:
+			return id
+	return ""
+
 ## Стоит ли рядом (в соседней клетке, включая углы) такая постройка.
 func near(structure: String) -> bool:
 	var here := tile_of(pos)
@@ -360,8 +426,13 @@ func place(item_id: String) -> Dictionary:
 	bag[item_id] -= 1
 	built[key(c)] = structure
 	_pass(15)
-	var out := _with_goals("Поставлено: %s" % Content.STRUCTURES[structure].name.to_lower(), "place")
+	var said := "Поставлено: %s" % Content.STRUCTURES[structure].name.to_lower()
+	if structure == "coop":
+		said = "Курятник готов — в нём поселились две курицы"
+	var out := _with_goals(said, "place")
 	out.cell = c
+	if animals:
+		animals.sync_chickens(self)
 	return out
 
 ## Разобрать постройку перед собой — она вернётся в сумку целиком.
@@ -372,11 +443,212 @@ func pick_up() -> Dictionary:
 		return {}
 	var structure: String = built[k]
 	built.erase(k)
+	beds.erase(k)
+	coops.erase(k)
 	var item := Content.item_for_structure(structure)
 	bag[item] = bag.get(item, 0) + 1
 	_pass(10)
 	var out := _out("Разобрано: %s" % Content.STRUCTURES[structure].name.to_lower(), "pickup")
 	out.cell = c
+	if animals:
+		animals.sync_chickens(self)
+	return out
+
+
+# --- огород ---------------------------------------------------------------------------
+
+## Что на грядке сейчас: {crop, stage 0–3, wet, ripe, grown}. Рост считается от времени:
+## сколько минут из прошедших земля была влажной.
+func bed(c: Vector2i) -> Dictionary:
+	var b: Dictionary = beds.get(key(c), {})
+	var crop: String = b.get("crop", "")
+	var wet: bool = time < float(b.get("wet", -1.0))
+	var out := {"crop": crop, "stage": 0, "wet": wet, "ripe": false, "grown": 0.0}
+	if crop == "":
+		return out
+	var grown := _grown(b)
+	var need: float = Content.CROPS[crop].grow
+	out.grown = grown
+	out.ripe = grown >= need
+	out.stage = 3 if out.ripe else (2 if grown >= need * 0.5 else (1 if grown >= need * 0.15 else 0))
+	return out
+
+func _grown(b: Dictionary) -> float:
+	var from: float = b.get("last", time)
+	var until: float = minf(time, float(b.get("wet", -1.0)))
+	return float(b.get("g", 0.0)) + maxf(0.0, until - from)
+
+func _first_seed() -> String:
+	for id in ["carrot_seed", "sunflower_seed"]:
+		if bag.get(id, 0) > 0:
+			return id
+	return ""
+
+func _bed_label(c: Vector2i) -> String:
+	var b := bed(c)
+	if b.crop == "":
+		return "Посадить" if _first_seed() != "" else "Грядка"
+	if b.ripe:
+		return "Собрать урожай"
+	return "Растёт" if b.wet else "Полить"
+
+func _act_bed(c: Vector2i) -> Dictionary:
+	var b := bed(c)
+	if b.crop == "":
+		var sd := _first_seed()
+		if sd == "":
+			return _out("Нужны семена: дикая морковь и подсолнухи растут на полянах", "nope")
+		return plant(sd)
+	if b.ripe:
+		return _harvest(c)
+	if b.wet:
+		var left := int(ceil((Content.CROPS[b.crop].grow - b.grown) / 60.0))
+		return _out("%s растёт. Земля влажная — до урожая ещё %d ч" % [Content.CROPS[b.crop].name, maxi(left, 1)], "ui")
+	return _water(c)
+
+## Посадить семя на грядку, к которой повернулся.
+func plant(seed_id: String) -> Dictionary:
+	var crop: String = Content.ITEMS.get(seed_id, {}).get("seed", "")
+	if crop == "" or bag.get(seed_id, 0) <= 0:
+		return {}
+	var c := target()
+	if built.get(key(c), "") != "bed":
+		return _out("Повернись к грядке — сажают в неё", "nope")
+	if bed(c).crop != "":
+		return _out("Здесь уже растёт %s" % Content.CROPS[bed(c).crop].name.to_lower(), "nope")
+	bag[seed_id] -= 1
+	var old: Dictionary = beds.get(key(c), {})
+	beds[key(c)] = {"crop": crop, "g": 0.0, "last": time, "wet": float(old.get("wet", -1.0))}
+	gathered.planted = gathered.get("planted", 0) + 1
+	_pass(5)
+	var said := "Посажено: %s" % Content.CROPS[crop].name.to_lower()
+	if not bed(c).wet:
+		said += ". Теперь полей"
+	var out := _with_goals(said, "plant")
+	out.cell = c
+	return out
+
+func _water(c: Vector2i) -> Dictionary:
+	if bag.get("can", 0) <= 0:
+		return _out("Нужна лейка: 2 бревна и 2 ветки", "nope")
+	if water <= 0:
+		return _out("Лейка пустая — набери воды у пруда", "nope")
+	var k := key(c)
+	var b: Dictionary = beds.get(k, {"crop": ""})
+	# Сначала записать, сколько уже выросло, потом начать новый отсчёт.
+	b.g = _grown(b) if b.get("crop", "") != "" else 0.0
+	b.last = time
+	b.wet = time + Content.WET_MINUTES
+	beds[k] = b
+	water -= 1
+	gathered.watered = gathered.get("watered", 0) + 1
+	_pass(3)
+	var out := _with_goals("Полито. В лейке осталось: %d" % water, "pour")
+	out.cell = c
+	return out
+
+func _harvest(c: Vector2i) -> Dictionary:
+	var k := key(c)
+	var def: Dictionary = Content.CROPS[beds[k].crop]
+	_add(def.gives)
+	beds[k] = {"crop": "", "g": 0.0, "last": time, "wet": float(beds[k].get("wet", -1.0))}
+	gathered.harvest = gathered.get("harvest", 0) + 1
+	_pass(5)
+	var out := _with_goals("Урожай! " + _describe(def.gives), "harvest")
+	out.cell = c
+	return out
+
+
+# --- курятник -------------------------------------------------------------------------
+
+## Сколько яиц лежит: если кур кормили в какой-то из прошлых дней — наутро они снеслись.
+func coop_eggs(c: Vector2i) -> int:
+	var cp: Dictionary = coops.get(key(c), {})
+	var eggs: int = cp.get("eggs", 0)
+	var fed: int = cp.get("fed", 0)
+	if fed > 0 and day() > fed:
+		eggs += Content.COOP_EGGS
+	return mini(eggs, Content.COOP_MAX_EGGS)
+
+func _act_coop(c: Vector2i) -> Dictionary:
+	var k := key(c)
+	var eggs := coop_eggs(c)
+	var fed_today: bool = coops.get(k, {}).get("fed", 0) == day()
+	if eggs > 0:
+		bag.egg = bag.get("egg", 0) + eggs
+		coops[k] = {"fed": day() if fed_today else 0, "eggs": 0}
+		gathered.eggs = gathered.get("eggs", 0) + eggs
+		_pass(3)
+		var out := _with_goals("+%d %s" % [eggs, Content.plural(eggs, Content.ITEMS.egg.forms)], "cluck")
+		out.cell = c
+		return out
+	if fed_today:
+		return _out("Куры сыты. Яйца будут завтра утром", "cluck")
+	if bag.get("sunflower_seed", 0) < Content.COOP_FEED:
+		return _out("Курам нужны семечки: %d штуки. Подсолнухи растут на полянах" % Content.COOP_FEED, "nope")
+	bag.sunflower_seed -= Content.COOP_FEED
+	coops[k] = {"fed": day(), "eggs": coop_eggs(c)}
+	_pass(3)
+	var out := _out("Насыпал семечек. Утром будут яйца", "cluck")
+	out.cell = c
+	return out
+
+
+# --- звери ----------------------------------------------------------------------------
+
+## Зверь рядом, к которому относится кнопка: совсем близко — в любую сторону, чуть дальше —
+## только тот, на кого смотришь.
+func animal_near() -> Animals.Animal:
+	if animals == null:
+		return null
+	var best: Animals.Animal = null
+	var best_d := INF
+	for a in animals.list:
+		if a.kind == "bird":
+			continue
+		var to: Vector2 = a.pos - pos
+		var d := to.length()
+		var ok := d <= 1.1 or (d <= 1.6 and to.normalized().dot(facing) > 0.5)
+		if ok and d < best_d:
+			best = a
+			best_d = d
+	return best
+
+## Зверь забирает кнопку себе, только если его можно покормить или перед тобой больше
+## ничего нет: ручной заяц вертится рядом и не должен мешать поливать грядку.
+func _animal_for_button() -> Animals.Animal:
+	var a := animal_near()
+	if a == null:
+		return null
+	if a.kind == "hare" and not a.tame and bag.get("carrot", 0) > 0:
+		return a
+	return a if _cell_label() == "" else null
+
+func _animal_label(a: Animals.Animal) -> String:
+	if a.kind == "hare" and not a.tame:
+		return "Покормить" if bag.get("carrot", 0) > 0 else "Заяц"
+	return "Погладить"
+
+func _act_animal(a: Animals.Animal) -> Dictionary:
+	face(a.pos - pos)
+	var out: Dictionary
+	if a.kind == "hare" and not a.tame:
+		if bag.get("carrot", 0) <= 0:
+			out = _out("Заяц принюхивается. Зайцы любят морковку", "nope")
+		else:
+			bag.carrot -= 1
+			a.tame = true
+			pets += 1
+			gathered.hare = gathered.get("hare", 0) + 1
+			_pass(2)
+			out = _with_goals("Заяц взял морковку и теперь ходит за тобой", "pet")
+			out.hearts = a.pos
+		return out
+	if a.kind == "hare":
+		out = _out("Заяц жмурится от удовольствия", "pet")
+	else:
+		out = _out("Курица довольно квохчет", "cluck")
+	out.hearts = a.pos
 	return out
 
 
@@ -443,8 +715,13 @@ func _goal_met(id: String) -> bool:
 			return bag.get("axe", 0) > 0
 		"chop":
 			return gathered.get("tree", 0) > 0
-		"campfire", "workbench", "house":
+		"campfire", "workbench", "house", "bed", "coop":
 			return _has_built(id)
+		"seeds":
+			return bag.get("carrot_seed", 0) > 0 or bag.get("sunflower_seed", 0) > 0 or gathered.has("wildcarrot") or gathered.has("sunflower")
+		"plant", "water", "harvest", "hare", "eggs":
+			var stat: String = {"plant": "planted", "water": "watered"}.get(id, id)
+			return gathered.get(stat, 0) > 0
 	return false
 
 ## Отметить выполненные задачи. Выполненная остаётся выполненной, даже если костёр потом
@@ -484,6 +761,10 @@ func to_dict() -> Dictionary:
 		"built": built.duplicate(),
 		"gathered": gathered.duplicate(),
 		"goals_done": goals_done.duplicate(),
+		"water": water,
+		"beds": beds.duplicate(true),
+		"coops": coops.duplicate(true),
+		"pets": pets,
 	}
 
 ## Сохранение, прочитанное с диска. Непонятное выбрасывается по кусочку: сломанная запись о
@@ -513,12 +794,27 @@ static func from_dict(d: Variant) -> Village:
 			v.built[k] = str(d.built[k])
 	for id in _dict(d.get("gathered")):
 		var n = d.gathered[id]
-		if Content.NATURE.has(id) and (n is int or n is float):
+		if (Content.NATURE.has(id) or Content.STATS.has(id)) and (n is int or n is float):
 			v.gathered[id] = int(n)
 	if d.get("goals_done") is Array:
 		for g in d.goals_done:
 			if g is String:
 				v.goals_done.append(g)
+	v.water = clampi(int(_num(d.get("water"), 0)), 0, Content.CAN_SIZE)
+	v.pets = clampi(int(_num(d.get("pets"), 0)), 0, 20)
+	for k in _dict(d.get("beds")):
+		var b = d.beds[k]
+		if v.built.get(k, "") != "bed" or not b is Dictionary:
+			continue
+		var crop := str(b.get("crop", ""))
+		if crop != "" and not Content.CROPS.has(crop):
+			continue
+		v.beds[k] = {"crop": crop, "g": _num(b.get("g"), 0.0), "last": _num(b.get("last"), v.time), "wet": _num(b.get("wet"), -1.0)}
+	for k in _dict(d.get("coops")):
+		var cp = d.coops[k]
+		if v.built.get(k, "") != "coop" or not cp is Dictionary:
+			continue
+		v.coops[k] = {"fed": int(_num(cp.get("fed"), 0)), "eggs": clampi(int(_num(cp.get("eggs"), 0)), 0, Content.COOP_MAX_EGGS)}
 	# Встал на занятую клетку (мир поменялся между версиями) — вернуть на поляну.
 	if v._collides(v.pos):
 		v.pos = Vector2(v.world().start) + Vector2(0.5, 0.5)

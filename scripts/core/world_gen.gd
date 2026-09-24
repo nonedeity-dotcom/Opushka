@@ -85,11 +85,30 @@ static func make(seed: int) -> Dictionary:
 			elif r < tree + 0.12:
 				nature[i] = "branch"
 
+	# Дикая морковь и подсолнухи — на свободной траве, по своему «случайному» числу клетки, а не
+	# из общего генератора: так прежние деревья и кусты остались на своих местах.
+	for y in SIZE:
+		for x in SIZE:
+			var i := y * SIZE + x
+			if nature[i] != "" or ground[i] != Ground.GRASS or x < 3 or y < 3 or x >= SIZE - 3 or y >= SIZE - 3:
+				continue
+			if Vector2(x, y).distance_to(Vector2(start)) < 4.0:
+				continue
+			var h := variant(seed ^ 0x5EED, x, y)
+			if h < 4:
+				nature[i] = "wildcarrot"
+			elif h < 7:
+				nature[i] = "sunflower"
+
 	# Поляна обещает начало: рядом всегда ветки, камешки и кусты — топор делается сразу.
 	var near := [[2, -1, "branch"], [-2, 1, "branch"], [1, 3, "branch"], [-3, -2, "branch"],
-		[3, 2, "pebble"], [-1, -3, "pebble"], [-3, 3, "pebble"], [4, -3, "bush"], [-4, 0, "bush"]]
+		[3, 2, "pebble"], [-1, -3, "pebble"], [-3, 3, "pebble"], [4, -3, "bush"], [-4, 0, "bush"],
+		[5, 2, "wildcarrot"], [-2, 5, "wildcarrot"], [-5, -3, "sunflower"]]
 	for n in near:
-		nature[(start.y + n[1]) * SIZE + start.x + n[0]] = n[2]
+		var i: int = (start.y + n[1]) * SIZE + start.x + n[0]
+		nature[i] = n[2]
+		if ground[i] == Ground.WATER or ground[i] == Ground.SHORE:
+			ground[i] = Ground.GRASS
 	for dir in [Vector2i.ZERO, Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
 		var c: Vector2i = start + dir
 		var i := c.y * SIZE + c.x
