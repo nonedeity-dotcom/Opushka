@@ -8,7 +8,7 @@ extends RefCounted
 
 ## Части, которые торчат наружу, — рисуются под телом, чтобы край их прикрывал.
 ## Рты рисуются поверх — у них видна сама пасть на краю тела.
-const OUTSIDE := ["proboscis", "cilia", "flagellum", "flagellum2", "spike", "spike2", "drill", "tentacle", "horn", "lantern", "jet"]
+const OUTSIDE := ["proboscis", "cilia", "flagellum", "flagellum2", "spike", "spike2", "drill", "tentacle", "horn", "lantern", "jet", "sac"]
 ## Части, что лежат дугой по краю тела.
 const RIM := ["shell", "membrane", "stone_skin", "plates", "thermo", "thorn_armor"]
 
@@ -346,6 +346,13 @@ static func part_shape(ci: CanvasItem, id: String, color: Color, t: float, bite 
 			ci.draw_circle(Vector2(2.5, 0), 4.2, dark)
 			ci.draw_circle(Vector2(2.5, 0), 2.6, Color("#e89aa8", alpha))
 			ci.draw_circle(Vector2(2.5, 0), 1.2, Color("#6a2a3a", alpha))
+		"sac":
+			# Толчковый пузырь: прозрачный мешочек с горлышком, мерно сжимается.
+			var sq := 1.0 + 0.08 * sin(t * 4.0)
+			Art.ellipse(ci, Vector2(3.5, 0), 5.0 * sq, 4.2 / sq, Color("#a8d8f0", 0.55 * alpha), 0.0, 16)
+			ci.draw_arc(Vector2(3.5, 0), 4.6, 0, TAU, 18, Color("#e8f8ff", 0.8 * alpha), 0.9, true)
+			ci.draw_rect(Rect2(Vector2(8.0, -1.3), Vector2(2.2, 2.6)), Color("#6a9ab8", alpha))
+			ci.draw_circle(Vector2(2.0, -1.5), 1.1, Color(1, 1, 1, 0.8 * alpha))
 		"jet":
 			Art.poly(ci, [Vector2(-1, -4), Vector2(7, -3), Vector2(9, 0), Vector2(7, 3), Vector2(-1, 4)], Color("#8aa0b8", alpha))
 			ci.draw_circle(Vector2(9, 0), 2.2, Color("#30404e", alpha))
@@ -409,6 +416,34 @@ static func capsule(ci: CanvasItem, cap: Dictionary, t: float, known: bool) -> v
 # --- камни и пара ---------------------------------------------------------------------
 
 ## Камень: грани, трещины тем больше, чем сильнее разбит, вспышка от удара.
+## Круг водорослей: плотная живая подстилка — её не съесть, еда растёт по краю.
+static func colony(ci: CanvasItem, col: Dictionary, t: float) -> void:
+	var r: float = col.r
+	var v: int = col.v
+	var c: Vector2 = col.pos
+	var pts := PackedVector2Array()
+	var n := 28
+	for i in n:
+		var a: float = TAU * i / n + col.spin
+		pts.append(c + Vector2.from_angle(a) * r * (0.94 + 0.06 * sin(v + i * 1.9 + t * 0.8)))
+	var shadow := PackedVector2Array()
+	for q in pts:
+		shadow.append(q + Vector2(r * 0.06, r * 0.09))
+	ci.draw_colored_polygon(shadow, Color(0, 0, 0, 0.22))
+	ci.draw_colored_polygon(pts, Color("#2f5a38"))
+	# Узор подстилки: кольца и завитки чуть светлее.
+	ci.draw_circle(c, r * 0.72, Color("#3a6e44"))
+	var spin: float = col.spin
+	ci.draw_arc(c, r * 0.5, spin, spin + TAU * 0.8, 24, Color("#4f8a58", 0.8), maxf(1.5, r * 0.05), true)
+	ci.draw_arc(c, r * 0.28, spin + 2.0, spin + 2.0 + TAU * 0.7, 16, Color("#4f8a58", 0.8), maxf(1.2, r * 0.04), true)
+	for i in 7:
+		var a: float = col.spin * 1.5 + TAU * i / 7.0 + v
+		var q := c + Vector2.from_angle(a) * r * (0.35 + 0.45 * fmod(float(v * (i + 3)) * 0.37, 1.0))
+		ci.draw_circle(q, r * 0.05, Color("#6aa872", 0.8))
+	var edge := pts.duplicate()
+	edge.append(pts[0])
+	ci.draw_polyline(edge, Color("#1d3a24"), maxf(2.0, r * 0.05), true)
+
 static func rock(ci: CanvasItem, k: Dictionary, t: float) -> void:
 	var def: Dictionary = Content.ROCKS[k.kind]
 	var col := Color(def.color)

@@ -165,6 +165,7 @@ func refresh(pond: Pond) -> void:
 	size_pill.set_state(evo.level(), evo.growth())
 	dna_pill.set_value(evo.dna_free())
 	hp_bar.set_state(pond.player.hp, pond.player.max_hp, pond.player.poison_t > 0.0)
+	dash.visible = pond.player.can_dash
 	dash.set_cooldown(pond.player.dash_cd / (Pond.DASH_CD * pond.player.dash_k))
 	var ab := pond.player.ability
 	if ability_btn.visible != (ab != ""):

@@ -34,7 +34,12 @@ var player: Creature
 var mobs: Array[Creature] = []
 var food: Array = []  # [{pos, kind: plant/meat, value, r, t, v, eaten}]
 var capsules: Array = []  # [{pos, part, t}]
-var rocks: Array = []  # [{pos, r, hp, max_hp, kind, v, uid, flash}]
+var rocks: Array = []  # [{pos, r, hp, max_hp, kind, v, uid, flash, vel, drift}]
+## Круги водорослей: сам круг не съесть, еда растёт по его краю и отрастает. Плывут.
+var colonies: Array = []  # [{pos, r, vel, drift, spin, v, uid, regrow}]
+var _colony_uid := 1
+const COLONY_BITS := 10
+const COLONY_REGROW := 3.5
 ## Пара: зовёшь кнопкой ♥, доплываешь — и можно менять тело. null — не звал.
 var mate: Creature = null
 var _rock_uid := -1
@@ -106,6 +111,9 @@ func fill() -> void:
 		_spawn_mob(true)
 	for i in _rock_target():
 		_spawn_rock(view_radius * 0.6, view_radius + 700.0)
+	for i in _colony_target():
+		# Первый круг — недалеко, чтобы было видно, что это такое.
+		_spawn_colony(vision() * 1.3 if i == 0 else view_radius * 0.6, view_radius * (0.8 if i == 0 else 1.0) + (0.0 if i == 0 else 700.0))
 	for i in evo.brood:
 		_spawn_ally()
 
@@ -135,8 +143,10 @@ func step(dt: float, input: Vector2, dash := false) -> void:
 	_parasites(dt)
 	_collide(all)
 	_rock_contacts(all)
+	_colony_contacts(all)
 	_zaps(all)
 	_mate_step(dt)
+	_floating(dt)
 	_rebuild_grid()
 	_eat(all)
 	_pickup()
@@ -197,7 +207,7 @@ func _move(c: Creature, dt: float) -> void:
 	c.phase += dt * (1.0 + c.vel.length() / 40.0)
 
 func do_dash(c: Creature) -> bool:
-	if c.dash_cd > 0.0 or not c.alive:
+	if c.dash_cd > 0.0 or not c.alive or (c.is_player and not c.can_dash):
 		return false
 	var dir := c.desire.normalized() if c.desire.length() > 0.1 else c.heading_vec()
 	c.vel += dir * c.dash_power
@@ -428,7 +438,7 @@ func _fed(c: Creature, f: Dictionary) -> void:
 	if f.kind == "plant":
 		c.hp = minf(c.max_hp, c.hp + f.value)
 	else:
-		c.hp = minf(c.max_hp, c.hp + 3.0)
+		c.hp = minf(c.max_hp, c.hp + 3.0 * f.value)
 	c.eat_anim = 1.0
 	if not c.is_player:
 		return
@@ -437,7 +447,7 @@ func _fed(c: Creature, f: Dictionary) -> void:
 		gain = f.value * c.mouth.eat_plant
 		evo.count("plants")
 	else:
-		gain = MEAT_DNA * c.mouth.eat_meat
+		gain = MEAT_DNA * f.value * c.mouth.eat_meat
 		evo.count("meat")
 	events.append({"t": "eat", "kind": f.kind, "pos": f.pos, "dna": gain})
 	_gain(gain)
@@ -463,7 +473,7 @@ func _age(dt: float) -> void:
 	var drift := _food_drift == 0
 	for f in food:
 		f.t += dt
-		if drift:
+		if drift and not f.has("col"):
 			f.pos += current_at(f.pos) * dt * 3.0
 		if f.get("suck", 0.0) > 0.0:
 			f.suck -= dt
@@ -492,9 +502,13 @@ func _deaths() -> void:
 	var dead := mobs.filter(func(m): return not m.alive)
 	for m: Creature in dead:
 		var def: Dictionary = Content.SPECIES[m.species]
-		for i in maxi(1, int(m.radius / 8.0)):
-			var off := Vector2.from_angle(rng.randf() * TAU) * rng.randf() * m.radius * 0.8
-			food.append({"pos": m.pos + off, "kind": "meat", "value": 1, "r": 5.0, "t": 0.0, "v": rng.randi() % 256, "eaten": false})
+		# Мясо — по размеру того, кто погиб: с мелочи — крошка, с крупного — большие куски.
+		var total := maxf(1.0, m.radius / 8.0)
+		var pieces := clampi(ceili(sqrt(total)), 1, 5)
+		var piece_r := clampf(m.radius * 0.55 / sqrt(float(pieces)), 4.0, 70.0)
+		for i in pieces:
+			var off := Vector2.from_angle(rng.randf() * TAU) * rng.randf() * m.radius * 0.6
+			food.append({"pos": m.pos + off, "kind": "meat", "value": total / pieces, "r": piece_r, "t": 0.0, "v": rng.randi() % 256, "eaten": false})
 		var by_player := m.player_hit_t < KILL_CREDIT
 		events.append({"t": "kill", "pos": m.pos, "species": m.species, "by_player": by_player, "radius": m.radius, "color": m.color, "golden": m.golden, "who": m})
 		if def.behavior == "lair":
@@ -716,7 +730,8 @@ func _plant_outer() -> float:
 	return view_radius * 1.8 + 200.0
 
 func _plant_target() -> int:
-	return 120
+	# Отдельных водорослей немного — основная еда травоядных растёт по краям кругов.
+	return 45
 
 func _mob_target() -> int:
 	# Кого ты только что съел, того место пустует ещё какое-то время: иначе хищник
@@ -768,7 +783,7 @@ func _species_pool(where := "") -> Array:
 func _spawn_mob(anywhere := false, at := Vector2.INF) -> Creature:
 	# Сначала место — ближе, чем раньше: сразу за краем видимого, — потом вода, потом кто в ней живёт.
 	if at == Vector2.INF:
-		var inner := maxf(player.vision * 1.15, 200.0)
+		var inner := maxf(vision() * 1.15, 200.0)
 		var outer := maxf(view_radius + 250.0, inner + 300.0)
 		at = player.pos + Vector2.from_angle(rng.randf() * TAU) * rng.randf_range(inner, outer + (500.0 if anywhere else 0.0))
 	var pool := _species_pool(biome_at(at))
@@ -810,7 +825,7 @@ func _manage() -> void:
 	var outer := _plant_outer()
 	var far_food := outer * 1.3
 	food = food.filter(func(f): return f.pos.distance_to(player.pos) < far_food)
-	var plants := food.filter(func(f): return f.kind == "plant").size()
+	var plants := food.filter(func(f): return f.kind == "plant" and not f.has("col")).size()
 	for i in mini(_plant_target() - plants, 12):
 		_spawn_plant(view_radius + 40.0, outer)
 	# Кто уплыл далеко — исчезает, а рядом появляются новые: так вокруг всегда кто-то есть.
@@ -826,8 +841,15 @@ func _manage() -> void:
 	rocks = rocks.filter(func(k): return k.pos.distance_to(player.pos) < far)
 	if rocks.size() < _rock_target():
 		_spawn_rock(view_radius + 60.0, view_radius + 700.0)
+	if mode != "arena":
+		var gone := colonies.filter(func(k): return k.pos.distance_to(player.pos) >= far)
+		for k in gone:
+			food = food.filter(func(f): return f.get("col", 0) != k.uid)
+		colonies = colonies.filter(func(k): return k.pos.distance_to(player.pos) < far)
+		if colonies.size() < _colony_target():
+			_spawn_colony(view_radius + 40.0, view_radius + 500.0)
 	for m in mobs:
-		var near := m.pos.distance_to(player.pos) < player.vision + m.radius
+		var near := m.pos.distance_to(player.pos) < vision() + m.radius
 		if near and not evo.seen.has(m.species) and not (m.invisible and player.eyes <= 0.0):
 			evo.seen[m.species] = true
 			events.append({"t": "seen", "species": m.species})
@@ -866,13 +888,15 @@ func _spawn_rock(inner: float, outer: float, kind := "") -> Dictionary:
 func add_rock(kind: String, at: Vector2) -> Dictionary:
 	var def: Dictionary = Content.ROCKS[kind]
 	var k := pow(player.size_r / 16.0, 0.8)
+	var drift := Vector2.from_angle(rng.randf() * TAU) * rng.randf_range(4.0, 10.0) * sqrt(k)
 	var rock := {"pos": at, "r": def.radius * k, "hp": def.hp * k * k, "max_hp": def.hp * k * k, "kind": kind,
-		"v": rng.randi() % 1000, "uid": _rock_uid, "flash": 0.0}
+		"v": rng.randi() % 1000, "uid": _rock_uid, "flash": 0.0, "vel": drift, "drift": drift}
 	_rock_uid -= 1
 	rocks.append(rock)
 	return rock
 
-## Камни не сдвинуть: кто в них упёрся — отодвигается сам. Ты можешь их крошить.
+## Камни тяжёлые: кто упёрся — отодвигается сам, а камень лишь чуть подаётся. Ты можешь
+## их крошить.
 func _rock_contacts(all: Array[Creature]) -> void:
 	var broken: Array = []
 	for rock in rocks:
@@ -892,6 +916,7 @@ func _rock_contacts(all: Array[Creature]) -> void:
 				_hit_rock(rock, c, into)
 			if into > 0.0:
 				c.vel += n * into
+				_nudge(rock, -n * into, c.radius)
 		if rock.hp <= 0.0:
 			broken.append(rock)
 	for rock in broken:
@@ -930,6 +955,85 @@ func _rock_broken(rock: Dictionary) -> void:
 			var at: Vector2 = rock.pos + Vector2.from_angle(rng.randf() * TAU) * rock.r * 0.4
 			capsules.append({"pos": at, "part": d[0], "t": 0.0})
 			events.append({"t": "drop", "part": d[0], "pos": at})
+
+
+# --- круги водорослей и всё, что плывёт само ---------------------------------------------
+
+func _colony_target() -> int:
+	return 0 if mode == "arena" else 4 + evo.level() / 4
+
+func _spawn_colony(inner: float, outer: float) -> Dictionary:
+	var at := player.pos + Vector2.from_angle(rng.randf() * TAU) * rng.randf_range(inner, outer)
+	return add_colony(at)
+
+## Круг: растёт вместе с тобой, по краю — места под еду, сначала все заняты.
+func add_colony(at: Vector2) -> Dictionary:
+	var k := pow(player.size_r / 16.0, 0.8)
+	var drift := Vector2.from_angle(rng.randf() * TAU) * rng.randf_range(6.0, 14.0) * sqrt(k)
+	var col := {"pos": at, "r": rng.randf_range(38.0, 60.0) * k, "vel": drift, "drift": drift,
+		"spin": rng.randf() * TAU, "v": rng.randi() % 1000, "uid": _colony_uid, "regrow": COLONY_REGROW}
+	_colony_uid += 1
+	colonies.append(col)
+	for i in COLONY_BITS:
+		_grow_bit(col, i)
+	return col
+
+## Кусочек еды на краю круга, на месте slot.
+func _grow_bit(col: Dictionary, slot: int) -> void:
+	var lvl := evo.level()
+	var value := 1 + (lvl - 1) / 4
+	var f := {"pos": col.pos, "kind": "plant", "value": value, "r": 6.0 + 2.5 * value, "t": 0.0,
+		"v": rng.randi() % 256, "eaten": false, "col": col.uid, "slot": slot}
+	food.append(f)
+	_place_bit(col, f)
+
+func _place_bit(col: Dictionary, f: Dictionary) -> void:
+	var a: float = col.spin + TAU * float(f.slot) / COLONY_BITS
+	f.pos = col.pos + Vector2.from_angle(a) * (col.r + f.r * 0.55)
+
+## Всё, что плывёт само: круги и камни. Течение несёт, толчок сдвигает, потом снова
+## своим ходом. Еда на кругах едет вместе с ними и отрастает.
+func _floating(dt: float) -> void:
+	for thing in colonies + rocks:
+		thing.vel = thing.vel.lerp(thing.drift, minf(1.0, dt * 0.6))
+		thing.pos += (thing.vel + current_at(thing.pos) * 0.4) * dt
+	if colonies.is_empty():
+		return
+	var by_uid := {}
+	for col in colonies:
+		col.spin += dt * 0.08
+		col.regrow -= dt
+		by_uid[col.uid] = {"col": col, "taken": {}}
+	for f in food:
+		if f.has("col") and by_uid.has(f.col):
+			var entry: Dictionary = by_uid[f.col]
+			_place_bit(entry.col, f)
+			entry.taken[f.slot] = true
+	for uid in by_uid:
+		var entry: Dictionary = by_uid[uid]
+		var col: Dictionary = entry.col
+		if col.regrow > 0.0:
+			continue
+		col.regrow = COLONY_REGROW
+		for i in COLONY_BITS:
+			if not entry.taken.has(i):
+				_grow_bit(col, i)
+				break
+
+## Толчок: чем крупнее толкающий относительно предмета, тем сильнее сдвиг.
+func _nudge(thing: Dictionary, push: Vector2, pusher_r: float) -> void:
+	var k := clampf(pow(pusher_r / float(thing.r), 2.0) * 0.35, 0.0, 0.8)
+	thing.vel += push * k
+
+## Над кругом можно проплыть — это мягкая подстилка, её не съесть. Круги и камни не
+## наезжают друг на друга.
+func _colony_contacts(_all: Array[Creature]) -> void:
+	for col in colonies:
+		for rock in rocks:
+			var d2: Vector2 = col.pos - rock.pos
+			var gap: float = col.r + rock.r
+			if d2.length_squared() < gap * gap and d2.length() > 0.001:
+				col.pos = rock.pos + d2.normalized() * gap
 
 
 # --- пара -----------------------------------------------------------------------------
@@ -1007,7 +1111,10 @@ func current_at(p: Vector2) -> Vector2:
 
 ## Сколько видно: глаза, вода и сложность.
 func vision() -> float:
-	var v: float = player.vision * float(Content.BIOMES[biome if biome != "" else "shallows"].vision) * float(evo.diff().vision)
+	# Глаз разгоняет туман по-настоящему: один — видно почти весь экран, два — весь.
+	var k := clampf(player.eyes / 2.0, 0.0, 1.0)
+	var v := lerpf(player.vision, maxf(player.vision, view_radius * 1.1), k)
+	v *= float(Content.BIOMES[biome if biome != "" else "shallows"].vision) * float(evo.diff().vision)
 	# На арене видно весь круг — прятаться там не в чем.
 	return maxf(v * 1.6, arena_radius * 1.15) if mode == "arena" else v
 
@@ -1029,7 +1136,7 @@ func _parasite_think(m: Creature) -> void:
 		return
 	var d := m.pos.distance_to(player.pos)
 	var attached := mobs.filter(func(o): return o.host == player).size()
-	if d < m.sight * 1.2 and attached < 4 and player.invuln <= 0.0 and player.hidden_t <= 0.0:
+	if d < m.sight * 1.2 and attached < 4 and player.invuln <= 0.0 and player.hidden_t <= 0.0 and m.resting <= 0.0:
 		m.ai_state = "chase"
 		m.desire = (player.pos - m.pos).normalized()
 	else:
@@ -1047,13 +1154,21 @@ func _parasites(dt: float) -> void:
 			if not m.host.alive:
 				m.host = null
 				continue
+			m.host_t += dt
+			if m.host_t > PARASITE_FULL:
+				# Насытился и отвалился — отдыхает, потом снова ищет, к кому прицепиться.
+				m.host = null
+				m.resting = 8.0
+				m.vel = Vector2.from_angle(m.heading) * 120.0
+				continue
 			var h := m.host
 			m.pos = h.pos + Vector2.from_angle(h.heading + m.host_angle) * (h.radius + m.radius * 0.2)
 			m.heading = h.heading + m.host_angle + PI
 			_hurt(h, 1.2 * m.size_k() * dt * 4.0, m, "drain", true)
 			m.hp = minf(m.max_hp, m.hp + dt)
-		elif player.alive and m.pos.distance_to(player.pos) < player.radius + m.radius and player.invuln <= 0.0:
+		elif player.alive and m.resting <= 0.0 and m.pos.distance_to(player.pos) < player.radius + m.radius and player.invuln <= 0.0:
 			m.host = player
+			m.host_t = 0.0
 			m.host_angle = player.rel_angle(m.pos)
 			events.append({"t": "parasite", "pos": m.pos})
 
@@ -1079,6 +1194,8 @@ func _shake_off() -> void:
 
 # --- логова ---------------------------------------------------------------------------
 
+## Через сколько секунд паразит насыщается и отпадает сам (рывком — сразу).
+const PARASITE_FULL := 12.0
 const LAIR_CELL := 2600.0
 ## Сколько отдыхает хозяин логова после погони; бьёт он слабее своего размера.
 const LAIR_REST := 3.0
@@ -1342,6 +1459,7 @@ func start_arena() -> void:
 	arena_radius = 370.0 * pow(player.size_k(), 0.6)
 	mobs.clear()
 	rocks.clear()
+	colonies.clear()
 	food.clear()
 	allies.clear()
 	for i in 40:

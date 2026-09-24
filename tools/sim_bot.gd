@@ -74,7 +74,9 @@ func _steer() -> Vector2:
 	for cap in pond.capsules:
 		if cap.pos.distance_to(p.pos) < 500.0:
 			return (cap.pos - p.pos).normalized()
-	if prey != null and (carnivore or randf() < 0.9):
+	# Нечем бить (ни рывка, ни укуса, ни шипов) — гоняться незачем.
+	var armed := p.can_dash or float(p.mouth.get("bite", 0.0)) > 0.0 or not p.spikes.is_empty()
+	if prey != null and armed and (carnivore or randf() < 0.9):
 		var to := prey.pos - p.pos
 		if to.length() < p.radius * 3.5 and p.dash_cd <= 0.0:
 			return to.normalized() * 2.0
@@ -96,14 +98,16 @@ func _edit() -> void:
 		want_mouth = "proboscis"
 	if evo.mouth() != want_mouth:
 		evo.place(want_mouth, 0)
-	var order := ["flagellum2", "flagellum", "spike2", "spike", "shell", "membrane", "thermo", "fat", "electro", "poison", "chloroplast", "eye", "cilia"]
+	var order := ["sac", "flagellum2", "flagellum", "spike2", "spike", "shell", "membrane", "thermo", "fat", "electro", "poison", "chloroplast", "eye", "cilia"]
 	var angles := [180, 90, -90, 135, -135, 45, -45, 60, -60, 150, -150, 30, -30, 120, -120, 105, -105, 165, -165, 75, -75]
+	# Пока нет толчкового пузыря — копить на него, остальное потом (как по задачам).
+	var has_sac := evo.body.any(func(q): return q.id == "sac")
 	for id in order:
-		if not evo.unlocked.has(id):
+		if not evo.unlocked.has(id) or (not has_sac and id != "sac"):
 			continue
 		for a in angles:
 			if evo.body.size() >= evo.slots():
 				break
-			if evo.can_place(id, a).ok and evo.body.filter(func(p): return p.id == id).size() < 2:
+			if evo.can_place(id, a).ok and evo.body.filter(func(p): return p.id == id).size() < (1 if id == "sac" else 2):
 				evo.place(id, a)
 	pond.player.sync_player(evo)

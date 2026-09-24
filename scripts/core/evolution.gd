@@ -256,7 +256,7 @@ func _goal_met(id: String) -> bool:
 		"part":
 			return unlocked.size() > Content.START_UNLOCKED.size()
 		"edit":
-			return stats.get("edits", 0) >= 1
+			return body.any(func(p): return Content.PARTS[p.id].get("dash", false))
 		"diet":
 			return mouth() != "" and mouth() != "filter"
 		"upgrade":
@@ -342,6 +342,13 @@ static func from_dict(d: Variant) -> Evolution:
 		# Сломанное или слишком дорогое тело — назад к стартовому, лишь бы клетка жила.
 		if e.body.size() > e.slots() or e.dna_free() < 0:
 			e.body = Content.START_PARTS.duplicate(true)
+	# Сохранение времён, когда рывок был у всех: ставим толчковый пузырь сами, если есть
+	# место и ДНК, — чтобы рывок не пропал.
+	if not _dict(d.get("unlocked")).has("sac") and not e.body.any(func(p): return Content.PARTS[p.id].get("dash", false)):
+		for a in [180, 150, -150, 120, -120, 90, -90, 135, -135, 165, -165, 60, -60, 45, -45]:
+			if e.can_place("sac", a).ok:
+				e.body.append({"id": "sac", "a": a, "d": 1.0})
+				break
 	if d.get("shape") is Array and d.shape.size() == Content.SHAPE_POINTS and d.shape.all(func(v): return v is int or v is float):
 		e.shape = d.shape.map(func(v): return clampf(float(v), Content.SHAPE_MIN, Content.SHAPE_MAX))
 	var c = d.get("color")

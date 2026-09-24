@@ -466,7 +466,7 @@ func _music(delta: float) -> void:
 	var danger := pond.boss_active != null or p.calm_t < 3.0 or pond.mode == "arena" and not pond.mobs.is_empty()
 	if not danger:
 		for m in pond.mobs:
-			if m.ai_target == p and m.ai_state == "chase" and m.pos.distance_to(p.pos) < p.vision * 1.5:
+			if m.ai_target == p and m.ai_state == "chase" and m.pos.distance_to(p.pos) < pond.vision() * 1.5:
 				danger = true
 				break
 	_danger_t = 0.0 if danger else _danger_t + delta
@@ -484,7 +484,7 @@ func _update_arrows() -> void:
 		list.append({"at": xf * cap.pos, "kind": "part", "part": cap.part})
 	var p := pond.player
 	if pond.mate != null:
-		list.append({"at": xf * pond.mate.pos, "kind": "mate", "hidden": pond.mate.pos.distance_to(p.pos) > p.vision})
+		list.append({"at": xf * pond.mate.pos, "kind": "mate", "hidden": pond.mate.pos.distance_to(p.pos) > pond.vision()})
 	if p.eyes > 0.0:
 		for m in pond.mobs:
 			if m.invisible and p.eyes < 1.0:
@@ -729,6 +729,11 @@ func _run_script() -> void:
 					m.hp = m.max_hp * float(p[1])
 		"ability":
 			pond.use_ability()
+		"kill":
+			# Все рядом погибают — посмотреть, какое остаётся мясо (для снимков).
+			for m in pond.mobs:
+				if m.pos.distance_to(pond.player.pos) < 400.0:
+					m.alive = false
 		"gen":
 			# Запомнить нынешнее тело как новое поколение (для снимков родословной).
 			evo.remember()

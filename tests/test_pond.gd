@@ -4,10 +4,15 @@ extends RefCounted
 
 ## Океан без самонаполнения: в нём только то, что поставили руками.
 func _pond(evo: Evolution = null) -> Pond:
-	var p := Pond.new(evo if evo else Evolution.create(), 12345)
+	var p := Pond.new(evo if evo else _with_sac(Evolution.create()), 12345)
 	p.spawning = false
 	p.nature = false
 	return p
+
+## Толчковый пузырь — чтобы был рывок.
+func _with_sac(e: Evolution) -> Evolution:
+	e.body.append({"id": "sac", "a": 150, "d": 1.0})
+	return e
 
 func _run(p: Pond, seconds: float, input := Vector2.ZERO) -> Array:
 	var all: Array = []
@@ -221,8 +226,13 @@ func test_туман_и_глаза(c) -> void:
 	var eyed := _pond(_evo_with([["filter", 0], ["eye", 0, 1]], 40.0))
 	eyed.evo.body[-1].d = 0.0
 	eyed.player.sync_player(eyed.evo)
-	c.ok("с глазом видно дальше", eyed.player.vision > blind.player.vision * 1.3)
-	c.ok("без глаз — только рядом", blind.player.vision < 200.0)
+	blind.view_radius = 400.0
+	eyed.view_radius = 400.0
+	c.ok("с глазом видно гораздо дальше", eyed.vision() > blind.vision() * 1.8)
+	c.ok("без глаз — только рядом", blind.vision() < 200.0)
+	var two := _pond(_evo_with([["filter", 0], ["eye", 30, 1], ["eye", -30, 1]], 40.0))
+	two.view_radius = 400.0
+	c.ok("с двумя глазами тумана на экране нет", two.vision() >= 400.0)
 
 func test_сияющая_особь(c) -> void:
 	var p := _pond()

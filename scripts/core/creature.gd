@@ -51,6 +51,8 @@ var drains: Array = []  # присоски: [{a, arc, dmg}]
 var camo := 0.0  # насколько позже замечают хищники, 0–1
 var thorns := 0.0  # какая доля удара возвращается обидчику
 var dash_k := 1.0  # перезарядка рывка — во столько раз
+## Рывок есть только с толчковым пузырём (или реактивным мешком).
+var can_dash := false
 var ability := ""  # умение по кнопке: ink, shield, pulse, suck
 var ability_cd := 10.0
 var ability_power := 1.0
@@ -63,6 +65,7 @@ var ally := false
 ## Паразит: к кому прицепился и где на нём сидит (угол от носа хозяина).
 var host: Creature = null
 var host_angle := 0.0
+var host_t := 0.0  # сколько уже сосёт: насытившись, отпадает сам
 var grabs: Array = []  # щупальца: [{a, arc, dmg}]
 var glow := false  # светится — видно сквозь туман
 
@@ -188,6 +191,7 @@ func rebuild() -> void:
 	camo = 0.0
 	thorns = 0.0
 	dash_k = 1.0
+	can_dash = false
 	ability = ""
 	regen = 0.0
 	dna_rate = 0.0
@@ -222,6 +226,8 @@ func rebuild() -> void:
 			drains.append({"a": p.a, "arc": arc, "dmg": def.drain * pw * dmg_k})
 		camo = maxf(camo, float(def.get("camo", 0.0)) * minf(pw, 1.6))
 		thorns = maxf(thorns, float(def.get("thorns", 0.0)) * pw)
+		if def.get("dash", false):
+			can_dash = true
 		if def.has("dash_k"):
 			dash_k = minf(dash_k, float(def.dash_k) / pw)
 		if def.has("ability") and ability == "":
@@ -244,7 +250,8 @@ func rebuild() -> void:
 	if not is_player and behavior() == "skittish":
 		sight *= 1.35
 	dash_power = 260.0 * pow(k, 0.3) / sqrt(dash_k)
-	vision = (95.0 + size_r * 1.6) * (1.0 + 0.45 * minf(eyes, 4.0))
+	# Без глаз — только рядом. С глазами обзор считает Pond.vision(): он зависит от экрана.
+	vision = 95.0 + size_r * 1.6
 	if golden:
 		speed *= 1.15
 		max_hp *= 1.5

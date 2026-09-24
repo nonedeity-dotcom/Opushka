@@ -107,8 +107,12 @@ func test_сохранение(c) -> void:
 	var copy := Evolution.from_dict(JSON.parse_string(JSON.stringify(e.to_dict())))
 	c.eq("туда-обратно без потерь", copy.to_dict(), e.to_dict())
 	c.eq("мусор — ничего", Evolution.from_dict("x"), null)
+	# Старое сохранение (рывок тогда был у всех): толчковый пузырь ставится сам.
+	var old := Evolution.from_dict({"dna_total": 60, "unlocked": {"filter": 1, "cilia": 1}, "body": [{"id": "filter", "a": 0}, {"id": "cilia", "a": 180}]})
+	c.ok("в старом сохранении рывок не пропал", old.body.any(func(p): return p.id == "sac"))
+	c.ok("а новая клетка начинает без него", not Evolution.create().body.any(func(p): return p.id == "sac"))
 	var odd := Evolution.from_dict({"dna_total": 0, "unlocked": {"rocket": 1, "spike": 9}, "body": [{"id": "rocket", "a": 0}, {"id": "spike", "a": 90}, {"id": "spike", "a": -90}, {"id": "spike", "a": 180}]})
-	c.eq("чужое выброшено, уровень в пределах", odd.unlocked, {"filter": 1, "cilia": 1, "spike": 5})
+	c.eq("чужое выброшено, уровень в пределах", odd.unlocked, {"filter": 1, "cilia": 1, "sac": 1, "spike": 5})
 	c.eq("слишком дорогое тело — стартовое", odd.body, Content.START_PARTS)
 
 func test_справочник(c) -> void:

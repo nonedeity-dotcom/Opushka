@@ -182,6 +182,9 @@ func _draw() -> void:
 	for l in pond.lairs_near(view.size.length()):
 		_lair(l)
 	var near := view.grow(30.0)
+	for col in pond.colonies:
+		if view.grow(col.r * 1.5).has_point(col.pos):
+			CellArt.colony(self, col, t)
 	for f in pond.food:
 		if near.has_point(f.pos):
 			if f.kind == "plant":

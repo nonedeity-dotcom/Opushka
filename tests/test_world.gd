@@ -3,10 +3,15 @@ extends RefCounted
 
 
 func _pond(evo: Evolution = null) -> Pond:
-	var p := Pond.new(evo if evo else Evolution.create(), 777)
+	var p := Pond.new(evo if evo else _with_sac(Evolution.create()), 777)
 	p.spawning = false
 	p.nature = false
 	return p
+
+## Толчковый пузырь — чтобы был рывок.
+func _with_sac(e: Evolution) -> Evolution:
+	e.body.append({"id": "sac", "a": 150, "d": 1.0})
+	return e
 
 func _run(p: Pond, seconds: float, input := Vector2.ZERO) -> Array:
 	var all: Array = []
@@ -22,7 +27,7 @@ func _evo_with(parts: Array, dna := 500.0) -> Evolution:
 	for p in parts:
 		e.unlocked[p[0]] = p[2] if p.size() > 2 else 1
 		e.body.append({"id": p[0], "a": p[1], "d": p[3] if p.size() > 3 else 1.0})
-	return e
+	return _with_sac(e)
 
 
 func test_воды(c) -> void:
@@ -255,9 +260,13 @@ func test_сверхсложность(c) -> void:
 	p._hurt(p.player, 50.0, null, "bite")
 	p._deaths()
 	c.ok("одна жизнь: событие «вид исчез»", p.events.any(func(e): return e.t == "permadeath"))
-	var hard := Pond.new(Evolution.create("insane"), 5)
+	var he := Evolution.create("insane")
+	he.add_dna(150.0)
+	var se := Evolution.create("easy")
+	se.add_dna(150.0)
+	var hard := Pond.new(he, 5)
 	hard._safe_t = 0.0
-	var soft := Pond.new(Evolution.create("easy"), 5)
+	var soft := Pond.new(se, 5)
 	soft._safe_t = 0.0
 	var pool: Array = hard._species_pool()
 	var calm: Array = soft._species_pool()
@@ -303,3 +312,56 @@ func test_океан_не_пустеет(c) -> void:
 			empty += 1
 	c.ok("за две минуты плавания рядом чаще кто-то есть (пусто %d раз из 120)" % empty, empty < 50)
 	c.ok("и пусто не дольше нескольких секунд (самое долгое %.1f с)" % longest, longest < 6.0)
+
+func test_круг_водорослей(c) -> void:
+	var p := _pond(_evo_with([["filter", 0], ["cilia", 180]], 0.0))
+	var col := p.add_colony(Vector2(300, 0))
+	var bits := p.food.filter(func(f): return f.get("col", 0) == col.uid)
+	c.eq("по краю — кусочки еды", bits.size(), Pond.COLONY_BITS)
+	c.ok("кусочки лежат на краю круга", bits.all(func(f): return absf(f.pos.distance_to(col.pos) - col.r) < f.r + 1.0))
+	var start: Vector2 = col.pos
+	_run(p, 3.0)
+	c.ok("круг не стоит на месте", col.pos.distance_to(start) > 5.0)
+	var first: Dictionary = p.food.filter(func(f): return f.get("col", 0) == col.uid)[0]
+	c.ok("еда едет вместе с кругом", absf(first.pos.distance_to(col.pos) - col.r) < first.r + 1.0)
+	# Проплыть сквозь середину круга: сам круг не съедается.
+	p.player.pos = col.pos
+	p.player.heading = 0.0
+	var dna := p.evo.dna_total
+	var before := p.food.size()
+	p.food = p.food.filter(func(f): return f.get("col", 0) != col.uid)
+	_run(p, 0.5)
+	c.eq("в середине круга есть нечего", p.evo.dna_total, dna)
+	_run(p, Pond.COLONY_REGROW * 2.0 + 0.5)
+	c.ok("съеденное отрастает", p.food.filter(func(f): return f.get("col", 0) == col.uid).size() >= 2 and before > 0)
+
+func test_камни_плывут(c) -> void:
+	var p := _pond()
+	var rock := p.add_rock("stone", Vector2(400, 0))
+	var start: Vector2 = rock.pos
+	_run(p, 3.0)
+	c.ok("камень медленно дрейфует", rock.pos.distance_to(start) > 5.0 and rock.pos.distance_to(start) < 100.0)
+
+func test_мясо_по_размеру(c) -> void:
+	var p := _pond()
+	var small := p.spawn("kroshka", Vector2(600, 0))
+	var big := p.spawn("velikan", Vector2(-600, 0))
+	for m in [small, big]:
+		m.alive = false
+	p._deaths()
+	var near_small := p.food.filter(func(f): return f.kind == "meat" and f.pos.distance_to(Vector2(600, 0)) < 200.0)
+	var near_big := p.food.filter(func(f): return f.kind == "meat" and f.pos.distance_to(Vector2(-600, 0)) < 400.0)
+	c.ok("с крупного — куски крупнее", near_big[0].r > near_small[0].r * 2.5)
+	var sum := 0.0
+	for f in near_big:
+		sum += f.value
+	c.ok("и сытнее вместе", sum > near_small[0].value * 5.0)
+
+func test_рывок_только_с_пузырём(c) -> void:
+	var p := Pond.new(Evolution.create(), 5)
+	p.spawning = false
+	c.ok("новая клетка без рывка", not p.player.can_dash and not p.do_dash(p.player))
+	p.evo.add_dna(20.0)
+	c.ok("пузырь можно поставить", p.evo.place("sac", 150).ok)
+	p.player.sync_player(p.evo)
+	c.ok("с пузырём рывок есть", p.player.can_dash and p.do_dash(p.player))

@@ -229,7 +229,8 @@ func _stats() -> HFlowContainer:
 		flow.add_child(_chip("Яд", Color("#8fe070")))
 	if c.zap > 0.0:
 		flow.add_child(_chip("Ток", Color("#f2e05a")))
-	flow.add_child(_chip("Обзор %d" % int(c.vision), Art.TEXT if c.eyes > 0.0 else Art.MUTED))
+	var sight := "только рядом" if c.eyes <= 0.0 else ("почти весь экран" if c.eyes < 2.0 else "весь экран")
+	flow.add_child(_chip("Обзор: " + sight, Art.TEXT if c.eyes > 0.0 else Art.MUTED))
 	if c.regen > 0.0:
 		flow.add_child(_chip("Свет", Color("#8ad07a")))
 	return flow
