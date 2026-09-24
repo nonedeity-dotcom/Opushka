@@ -574,3 +574,36 @@ func test_тяжёлая_хищники_хитрее(c) -> void:
 		m.pos = p.player.pos + Vector2(m.sight * 1.2, 0)
 	c.ok("на обычной — не видит", n._nearest_prey(n.mobs[-1]) != n.player)
 	c.ok("на тяжёлой — видит", h._nearest_prey(h.mobs[-1]) == h.player)
+
+func _gun_power(parts: Array) -> float:
+	var e := _evo_with(parts, 1100.0)
+	var c := Creature.of_player(e)
+	var sum := 0.0
+	for g in c.guns:
+		sum += float(g.dmg) / float(g.reload)
+	return sum
+
+func test_оружие_не_складывается_в_разы(c) -> void:
+	var one := _gun_power([["filter", 0], ["needle", 0]])
+	var eight := _gun_power([["filter", 0], ["needle", 0], ["needle", 45], ["needle", -45], ["needle", 90], ["needle", -90], ["needle", 135], ["needle", -135], ["needle", 180]])
+	c.ok("8 игломётов — не в 8 раз сильнее (%.1f против %.1f)" % [eight, one], eight < one * 3.5 and eight > one * 1.5)
+	var e1 := _evo_with([["filter", 0], ["electro", 0, 1, 0.5]], 1100.0)
+	var e4 := _evo_with([["filter", 0], ["electro", 0, 1, 0.5], ["electro", 90, 1, 0.5], ["electro", -90, 1, 0.5], ["electro", 180, 1, 0.5]], 1100.0)
+	var z1 := Creature.of_player(e1)
+	var z4 := Creature.of_player(e4)
+	c.ok("4 электроклетки — не вчетверо", z4.zap < z1.zap * 2.0 and z4.zap_targets > z1.zap_targets)
+
+func test_ток_не_убивает_сразу(c) -> void:
+	var p := _pond(_evo_with([["filter", 0]], 0.0))
+	p._safe_t = 0.0
+	var m := p.spawn("iskrun", p.player.pos + Vector2(p.player.radius + 5.0, 0), false, p.player.size_r * 3.0)
+	m.zap = 999.0
+	m.zap_targets = 1
+	var hp := p.player.hp
+	p._zaps([m, p.player] as Array[Creature])
+	c.ok("разряд снял не больше трети здоровья", p.player.hp >= hp - p.player.max_hp * Pond.ZAP_CAP - 0.01 and p.player.alive)
+
+func test_стая_слабее(c) -> void:
+	var p := _pond(_evo_with([["filter", 0], ["needle", 0]], 1100.0))
+	var a := p._spawn_ally()
+	c.ok("у потомка иглы слабее твоих", float(a.guns[0].dmg) < float(p.player.guns[0].dmg) * 0.5)

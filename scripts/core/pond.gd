@@ -18,7 +18,9 @@ const DASH_TIME := 0.35
 const DASH_CD := 1.6
 const RAM_DAMAGE := 4.0
 const POISON_TIME := 3.0
-const ZAP_CD := 2.2
+const ZAP_CD := 2.8
+## Разряд за раз снимает не больше этой доли здоровья цели — током не убивают мгновенно.
+const ZAP_CAP := 0.3
 ## Сколько секунд после твоего удара победа засчитывается тебе (яд тоже считается).
 const KILL_CREDIT := 3.0
 const REGEN_DELAY := 4.0
@@ -437,7 +439,8 @@ func _zaps(all: Array[Creature]) -> void:
 		for i in mini(c.zap_targets, near.size()):
 			var o: Creature = near[i][1]
 			events.append({"t": "zap", "from": c.pos, "to": o.pos, "by_player": c.is_player, "to_player": o.is_player})
-			_hurt(o, c.zap, c, "zap", true)
+			# Тебя — «видно»: вспышка и звук; остальных — тихо, их много.
+			_hurt(o, minf(c.zap, o.max_hp * ZAP_CAP), c, "zap", not o.is_player)
 			o.flash = 1.0
 
 

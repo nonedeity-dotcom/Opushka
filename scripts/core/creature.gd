@@ -203,8 +203,15 @@ func size_k() -> float:
 	return size_r / 16.0
 
 ## Посчитать, что умеет тело.
+## Одинаковое оружие не складывается в разы: первая стрелковая часть (электроклетка) —
+## в полную силу, каждая следующая — на эту долю.
+const STACK := 0.3
+## Оружие потомков в стае — слабее твоего.
+const ALLY_POWER := 0.5
+
 func rebuild() -> void:
 	var k := size_k()
+	var zaps: Array = []
 	var dmg_k := pow(k, 0.7)
 	var spd := 70.0
 	turn = 3.0
@@ -282,11 +289,25 @@ func rebuild() -> void:
 		if def.has("poison"):
 			glands.append({"a": p.a, "arc": arc, "dps": def.poison * pw * dmg_k})
 		if def.has("zap"):
-			zap += def.zap * pw * dmg_k
+			zaps.append(def.zap * pw * dmg_k)
 			zap_targets += 1
 		regen += float(def.get("regen", 0.0)) * pw
 		dna_rate += float(def.get("dna_rate", 0.0)) * pw
 		eyes += float(def.get("eyes", 0.0)) * pw
+	zaps.sort()
+	zaps.reverse()
+	for i in zaps.size():
+		zap += float(zaps[i]) * (1.0 if i == 0 else STACK)
+	if guns.size() > 1:
+		guns.sort_custom(func(a, b): return a.dmg + a.poison > b.dmg + b.poison)
+		for i in range(1, guns.size()):
+			guns[i].dmg *= STACK
+			guns[i].poison *= STACK
+	if ally:
+		zap *= ALLY_POWER
+		for g in guns:
+			g.dmg *= ALLY_POWER
+			g.poison *= ALLY_POWER
 	speed = maxf(30.0, spd) * pow(k, 0.3)
 	max_hp = 12.0 * pow(k, 1.5) + hp_bonus * k
 	sight = 190.0 * sqrt(k) * (1.0 + 0.3 * minf(eyes, 4.0))
