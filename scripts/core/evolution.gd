@@ -45,6 +45,10 @@ var played := 0.0
 var upgrades := {}
 ## Уровни, полученные даром (за части, которые раньше были на теле) — ДНК за них не списана.
 var gifts := {}
+## Тело на суше: место → часть (LandParts). Пусто — на сушу ещё не выходил.
+var land_body := {}
+## Вышел ли уже на сушу (была сцена выхода из воды).
+var land_ready := false
 
 
 static func create(diff := "normal") -> Evolution:
@@ -90,6 +94,56 @@ func cost_used() -> int:
 
 func dna_free() -> int:
 	return int(floor(dna_total)) + Content.START_DNA + (100000 if sandbox else 0) - cost_used() - shop_spent()
+
+
+# --- суша ----------------------------------------------------------------------------
+
+func land_cost() -> int:
+	return LandParts.cost(land_body)
+
+## Свободная ДНК на суше: общая ДНК минус тело суши (тело клетки здесь не в счёт).
+func land_free() -> int:
+	return int(floor(dna_total)) + Content.START_DNA + (100000 if sandbox else 0) - land_cost() - shop_spent()
+
+## Первый выход на сушу: тело собирается из тела клетки. Что не нужно — уходит.
+## {kept, gone, back} — back: сколько ДНК освободилось за ушедшие части.
+func land_start() -> Dictionary:
+	var conv := LandParts.from_sea(body)
+	land_body = conv.body
+	var back := 0
+	for g in conv.gone:
+		back += int(Content.PARTS[g[0]].cost)
+	conv.back = back
+	return conv
+
+## Поставить часть на её место (старая с этого места снимается, ДНК за неё возвращается).
+func land_put(id: String) -> Dictionary:
+	if not LandParts.PARTS.has(id):
+		return {"ok": false, "message": "Такой части нет"}
+	var slot: String = LandParts.PARTS[id].slot
+	if land_body.get(slot, "") == id:
+		return {"ok": true, "message": ""}
+	var cost: int = LandParts.PARTS[id].cost
+	var free := land_free()
+	if land_body.has(slot):
+		free += int(LandParts.PARTS[land_body[slot]].cost)
+	if cost > free:
+		return {"ok": false, "message": "Не хватает ДНК: нужно %d, свободно %d" % [cost, free]}
+	land_body[slot] = id
+	return {"ok": true, "message": "Поставлено: %s" % String(LandParts.PARTS[id].name).to_lower()}
+
+## Снять часть с места — ДНК возвращается. Ноги не снимаются: вместо них — лапки.
+func land_take(slot: String) -> Dictionary:
+	if not land_body.has(slot):
+		return {"ok": false, "message": ""}
+	var id: String = land_body[slot]
+	if slot == "legs":
+		if id == "stubs":
+			return {"ok": false, "message": "Без ног на суше никак"}
+		land_body.legs = "stubs"
+	else:
+		land_body.erase(slot)
+	return {"ok": true, "message": "Убрано: %s (+%d ДНК)" % [String(LandParts.PARTS[id].name).to_lower(), int(LandParts.PARTS[id].cost)]}
 
 
 # --- магазин --------------------------------------------------------------------------
@@ -442,6 +496,8 @@ func to_dict() -> Dictionary:
 		"achievements": achievements.duplicate(),
 		"upgrades": upgrades.duplicate(),
 		"gifts": gifts.duplicate(),
+		"land_body": land_body.duplicate(),
+		"land_ready": land_ready,
 	}
 
 ## Прочитанное с диска. Непонятное выбрасывается по кусочку. null — сохранения нет.
@@ -538,6 +594,13 @@ static func from_dict(d: Variant) -> Evolution:
 			e.lairs_beaten[b] = true
 	for a in _dict(d.get("achievements")):
 		e.achievements[a] = true
+	for slot in _dict(d.get("land_body")):
+		var id = d.land_body[slot]
+		if id is String and LandParts.PARTS.has(id) and LandParts.PARTS[id].slot == slot:
+			e.land_body[slot] = id
+	if not e.land_body.is_empty() and not e.land_body.has("legs"):
+		e.land_body.legs = "stubs"
+	e.land_ready = d.get("land_ready", false) == true and not e.land_body.is_empty()
 	var pl = d.get("played")
 	if pl is int or pl is float:
 		e.played = maxf(0.0, float(pl))

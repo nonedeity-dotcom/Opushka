@@ -30,6 +30,9 @@ var pause: Control
 ## Суша (второй этап): мир и её экран — пока открыта.
 var land_world: Node3D
 var land_hud: Control
+var land_editor: Control
+## Туман, виньетка, затемнение океана — на суше их нет.
+var _shade: CanvasLayer
 var _ui: Control
 var _back_layer: CanvasLayer
 var landscape := true
@@ -89,6 +92,7 @@ func _ready() -> void:
 	var shade := CanvasLayer.new()
 	shade.layer = 1
 	add_child(shade)
+	_shade = shade
 	fog = preload("res://scripts/view/fog.gd").new()
 	shade.add_child(fog)
 	shade.add_child(_vignette())
@@ -261,9 +265,19 @@ func _to_land() -> void:
 	menu.visible = false
 	hud.visible = false
 	fog.visible = false
+	_shade.visible = false
 	_back_layer.visible = false
 	view.visible = false
 	sound.set_music("calm")
+	# Первый раз — сначала тело для суши (из тела клетки), потом выход из воды.
+	if not evo.land_ready:
+		var conv := evo.land_start() if evo.land_body.is_empty() else {}
+		_open_land_editor(true, conv)
+	else:
+		_start_land(false)
+
+## Остров, ты на нём, экран суши. intro — начать со сцены выхода из воды.
+func _start_land(intro: bool) -> void:
 	var land := Land.new(evo, _seed if _seed != 0 else randi())
 	land_world = LandWorld.new()
 	add_child(land_world)
@@ -271,8 +285,43 @@ func _to_land() -> void:
 	land_hud = preload("res://scripts/land/land_hud.gd").new()
 	land_hud.world = land_world
 	land_hud.back.connect(_to_menu)
+	land_hud.edit.connect(func():
+		sound.play("ui")
+		_open_land_editor(false))
 	_ui.add_child(land_hud)
 	land_world.happened.connect(_land_event)
+	if intro:
+		land_world.start_intro()
+		land_world.intro_done.connect(func():
+			evo.land_ready = true
+			_save()
+			sound.play("levelup")
+			_buzz(60)
+			land_hud.say("%s — на суше!" % evo.name))
+
+## Редактор тела суши. first — первый выход: потом будет сцена выхода из воды.
+func _open_land_editor(first: bool, conv := {}) -> void:
+	land_editor = preload("res://scripts/land/land_editor.gd").new()
+	_ui.add_child(land_editor)
+	land_editor.open(evo, first, conv)
+	land_editor.changed.connect(func(ok, removed):
+		sound.play("remove" if removed else ("place" if ok else "nope"))
+		_buzz(10 if ok else 30))
+	if land_world:
+		land_world.process_mode = Node.PROCESS_MODE_DISABLED
+		land_hud.visible = false
+	land_editor.done.connect(func():
+		sound.play("ui")
+		land_editor.queue_free()
+		land_editor = null
+		_save()
+		if land_world:
+			land_world.land.apply_body()
+			land_world.rebuild_player()
+			land_world.process_mode = Node.PROCESS_MODE_INHERIT
+			land_hud.visible = true
+		else:
+			_start_land(first))
 
 ## Что случилось на суше — звук, дрожь, надпись.
 func _land_event(e: Dictionary) -> void:
@@ -280,6 +329,14 @@ func _land_event(e: Dictionary) -> void:
 		"eat":
 			sound.play("eat", randf_range(0.9, 1.1))
 			_buzz(10)
+		"intro_start":
+			sound.play("bubbles", 0.8)
+		"intro_splash":
+			sound.play("wave", 1.1)
+			sound.play("bubbles", 1.3)
+			_buzz(50)
+		"thorns":
+			sound.play("hit", randf_range(1.2, 1.4))
 		"egg":
 			sound.play("eat_meat", randf_range(0.9, 1.1))
 			_buzz(20)
@@ -313,6 +370,11 @@ func _land_event(e: Dictionary) -> void:
 			land_hud.say("Тебя одолели — снова у начала (−%d ДНК)" % int(e.lost))
 
 func _leave_land() -> void:
+	if land_world or land_editor:
+		_save()
+	if land_editor:
+		land_editor.queue_free()
+		land_editor = null
 	if land_world:
 		land_world.queue_free()
 		land_world = null
@@ -320,6 +382,7 @@ func _leave_land() -> void:
 		land_hud.queue_free()
 		land_hud = null
 	_back_layer.visible = true
+	_shade.visible = true
 	view.visible = true
 
 func _to_menu() -> void:
@@ -935,6 +998,17 @@ func _apply_debug_args() -> void:
 			var p: PackedStringArray = item.split("@")
 			evo.unlocked[p[0]] = evo.unlocked.get(p[0], 1)
 			evo.body.append({"id": p[0], "a": int(p[1]), "d": float(p[2]) if p.size() > 2 else 1.0})
+	if args.has("landbody"):
+		# Тело суши сразу, без редактора: --landbody=mouth:jaws,legs:legs4
+		evo.land_body = {"legs": "stubs"}
+		for pair in args.landbody.split(","):
+			var q: PackedStringArray = pair.split(":")
+			evo.land_body[q[0]] = q[1]
+		evo.land_ready = true
+	if args.has("pattern"):
+		evo.pattern = args.pattern
+	if args.has("color2"):
+		evo.color2 = int(args.color2)
 	if args.has("brood"):
 		evo.brood = int(args.brood)
 	if args.has("color"):
@@ -1129,6 +1203,19 @@ func _run_script() -> void:
 			land_world.cam_yaw = deg_to_rad(float(p[1]))
 		"landbite":
 			land_world.bite_pressed = true
+		"lput":
+			land_editor.put(p[1])
+		"lslot":
+			land_editor.slot = p[1]
+			land_editor._refresh()
+		"lclose":
+			land_editor.close_overlay()
+		"ldone":
+			land_editor.done.emit()
+		"ledit":
+			_open_land_editor(false)
+		"lskip":
+			land_world.finish_intro()
 		"landhp":
 			land_world.land.hp = land_world.land.max_hp * float(p[1])
 		"myhp":

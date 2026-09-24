@@ -3,6 +3,7 @@
 extends Control
 
 signal back
+signal edit
 
 const TouchPad := preload("res://scripts/ui/touch_pad.gd")
 const RoundButton := preload("res://scripts/ui/round_button.gd")
@@ -17,6 +18,8 @@ var bite_btn: Control
 var _red: ColorRect
 var _say: Label
 var _say_tw: Tween
+var _skip: Label
+var _intro := false
 var _cam_index := -1
 var _fps_t := 0.0
 ## Сценарий проверки ведёт клетку вместо пальца (только из командной строки).
@@ -57,6 +60,19 @@ func _ready() -> void:
 	b.pressed.connect(func(): back.emit())
 	b.name = "Back"
 	add_child(b)
+	var body := RoundButton.new()
+	body.setup("dna", "Тело", 64)
+	body.caption = "Тело"
+	body.floating = true
+	body.pressed.connect(func(): edit.emit())
+	body.name = "Body"
+	add_child(body)
+	_skip = Kit.label("Нажми, чтобы пропустить", 18, Color(1, 1, 1, 0.7))
+	_skip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_skip.add_theme_constant_override("outline_size", 6)
+	_skip.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.5))
+	_skip.visible = false
+	add_child(_skip)
 	bite_btn = DashButton.new()
 	bite_btn.icon = "bite"
 	bite_btn.caption = "Укус"
@@ -97,12 +113,15 @@ func _layout() -> void:
 	pad.position = Vector2(18, size.y - d - 18)
 	var b := get_node("Back") as Control
 	b.position = Vector2(size.x - 64 - 22, 18)
+	(get_node("Body") as Control).position = Vector2(size.x - 2 * (64 + 22) - 10, 18)
 	var hint := get_node("Hint") as Label
 	hint.size = Vector2(minf(620.0, size.x - 640), 0)
 	hint.position = Vector2((size.x - hint.size.x) / 2.0, size.y - 90)
 	var bd := 132.0
 	bite_btn.size = Vector2(bd, bd)
 	bite_btn.position = Vector2(size.x - bd - 60, size.y - bd - 70)
+	_skip.size = Vector2(size.x, 30)
+	_skip.position = Vector2(0, size.y - 50)
 	_say.size = Vector2(size.x, 40)
 	_say.position = Vector2(0, 110)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -111,9 +130,17 @@ func _process(delta: float) -> void:
 	if world == null:
 		return
 	world.input = override if override != Vector2.ZERO else pad.vector
+	# Пока идёт сцена выхода из воды — кнопок нет, только «пропустить».
+	var intro := world.intro_t >= 0.0
+	if intro != _intro:
+		_intro = intro
+		for ch in get_children():
+			if ch != _say and ch != _red:
+				(ch as CanvasItem).visible = not intro
+		_skip.visible = intro
 	_red.color.a = maxf(0.0, _red.color.a - delta * 0.6)
 	var l := world.land
-	_info.text = "ДНК суши: %d · плодов: %d" % [int(l.dna), l.eaten]
+	_info.text = "ДНК: %d · здесь добыто %d" % [l.evo.land_free(), int(l.dna)]
 	_hp.k = l.hp / l.max_hp
 	_hp.queue_redraw()
 	bite_btn.set_cooldown(l.bite_cd / Land.BITE_CD)
@@ -125,6 +152,10 @@ func _process(delta: float) -> void:
 ## Палец справа (не на кнопке) — крутит камеру вокруг тебя.
 func _input(e: InputEvent) -> void:
 	if not is_visible_in_tree() or world == null:
+		return
+	if _intro:
+		if e is InputEventScreenTouch and e.pressed:
+			world.finish_intro()
 		return
 	if e is InputEventScreenTouch:
 		var on_bite: bool = e.position.distance_to(bite_btn.get_global_rect().get_center()) < bite_btn.size.x * 0.7

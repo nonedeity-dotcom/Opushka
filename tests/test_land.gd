@@ -80,7 +80,7 @@ func test_гнездо_стерегут(c) -> void:
 	_face(l, nest.pos, 1.0)
 	var dna := l.dna
 	l.step(1.0 / 30.0, Vector2.ZERO)
-	c.ok("стащил яйцо — +ДНК", l.dna >= dna + 5.0 and nest.eggs == Land.EGGS - 1 and l.events.any(func(e): return e.t == "egg"))
+	c.ok("стащил яйцо — +ДНК", l.dna >= dna + 5.0 * l.st.meat - 0.01 and nest.eggs == Land.EGGS - 1 and l.events.any(func(e): return e.t == "egg"))
 	c.ok("стая злится", l.mobs.all(func(m): return m.angry > 0.0))
 	var dmg := 0.0
 	for i in 30 * 6:
@@ -137,7 +137,7 @@ func test_убить_отшельника(c) -> void:
 	var dna := l.dna
 	l.step(1.0 / 30.0, Vector2.ZERO, true)
 	c.ok("укус добил", l.events.any(func(e): return e.t == "kill" and e.kind == "hermit"))
-	c.eq("много ДНК", l.dna - dna, 25.0)
+	c.eq("много ДНК", l.dna - dna, 25.0 * l.st.meat)
 	c.ok("на его место придёт другой", l.mobs.size() == 1 and l.mobs[0].uid != h.uid and l.mobs[0].kind == "hermit")
 
 func test_кости(c) -> void:
