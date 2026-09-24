@@ -94,14 +94,14 @@ const PARTS := {
 	"horn": {"name": "Рог", "kind": "weapon", "cost": 0, "spike": 11.0, "arc": 25, "source": "mob",
 		"hint": "Бьёт с разгона. Не выбить"},
 	# Для разных вод.
-	"thermo": {"name": "Термооболочка", "kind": "defense", "cost": 20, "heatproof": true,
-		"hint": "Горячая вода не жжёт. У жителей горячих источников"},
-	"fat": {"name": "Жировая капля", "kind": "defense", "cost": 16, "coldproof": true, "hp": 5.0, "inner": true,
-		"hint": "В холодной воде не мёрзнешь. У жителей холодных течений"},
+	"thermo": {"name": "Термооболочка", "kind": "defense", "cost": 20, "heatproof": true, "source": "mob",
+		"hint": "Горячая вода не жжёт. Тебе — в магазине: «Термозащита»"},
+	"fat": {"name": "Жировая капля", "kind": "defense", "cost": 16, "coldproof": true, "hp": 5.0, "inner": true, "source": "mob",
+		"hint": "В холодной воде не мёрзнешь. Тебе — в магазине: «Жировой слой»"},
 	"sucker": {"name": "Присоска", "kind": "weapon", "cost": 24, "drain": 3.0, "arc": 40,
 		"hint": "Тянет здоровье из того, кого коснулась, и лечит тебя"},
-	"camo": {"name": "Хроматофоры", "kind": "special", "cost": 30, "camo": 0.45, "inner": true,
-		"hint": "Маскировка: хищники замечают тебя вдвое позже"},
+	"camo": {"name": "Хроматофоры", "kind": "special", "cost": 30, "camo": 0.45, "inner": true, "source": "mob",
+		"hint": "Маскировка: хищники замечают позже. Тебе — в магазине: «Маскировка»"},
 	# Умения — по отдельной кнопке. Работает одно: первое на теле.
 	"ink": {"name": "Чернильный мешок", "kind": "ability", "cost": 22, "ability": "ink", "cooldown": 12.0, "inner": true,
 		"hint": "Умение: облако чернил — враги теряют тебя из виду"},
@@ -129,9 +129,9 @@ const BIOMES := {
 		"top": "#1d5566", "bottom": "#071219"},
 	"deep": {"name": "Глубина", "hint": "Темно: видно хуже, водятся невидимки", "plants": 0.6, "vision": 0.7,
 		"top": "#0f2a44", "bottom": "#03070e"},
-	"hot": {"name": "Горячие источники", "hint": "Вода жжёт — нужна термооболочка", "plants": 0.8, "vision": 1.0, "burn": 0.5,
+	"hot": {"name": "Горячие источники", "hint": "Вода жжёт — купи «Термозащиту» в магазине", "plants": 0.8, "vision": 1.0, "burn": 0.5,
 		"top": "#5a3a28", "bottom": "#140806"},
-	"cold": {"name": "Холодное течение", "hint": "Клетка мёрзнет и медлит — нужна жировая капля", "plants": 0.9, "vision": 0.95, "chill": 0.75,
+	"cold": {"name": "Холодное течение", "hint": "Клетка мёрзнет и медлит — купи «Жировой слой» в магазине", "plants": 0.9, "vision": 0.95, "chill": 0.75,
 		"top": "#4a7a96", "bottom": "#0a1824"},
 }
 
@@ -274,7 +274,7 @@ const SPECIES := {
 	# Невидимка: без глаз его почти не видно.
 	"prizrak": {"name": "Призрак", "behavior": "hunter", "radius": 20.0, "color": "#b0c8e0", "shape": "drop", "tier": 4, "invisible": true, "aggro": true,
 		"parts": [["fangs", 0, 1], ["camo", 180, 1], ["cilia", 150, 1], ["cilia", -150, 1]], "levels": [3, 10], "weight": 1.6, "biomes": ["deep"],
-		"drops": [["camo", 0.25], ["fangs", 0.1]], "hint": "Прозрачный хищник глубин. Без глаз его почти не видно"},
+		"drops": [["fangs", 0.2], ["cilia", 0.15]], "hint": "Прозрачный хищник глубин. Без глаз его почти не видно"},
 	"chernilnik": {"name": "Чернильник", "behavior": "skittish", "radius": 16.0, "color": "#5a4a7a", "shape": "bean", "tier": 2,
 		"parts": [["ink", 90, 1], ["filter", 0, 1], ["flagellum", 180, 1], ["eye", -30, 1]], "levels": [3, 10], "weight": 1.5, "biomes": ["deep", "cold"],
 		"drops": [["ink", 0.3], ["eye", 0.2], ["flagellum", 0.1]], "hint": "Удирая, пускает чернила"},
@@ -284,17 +284,17 @@ const SPECIES := {
 	# Горячие источники.
 	"puzyrnik": {"name": "Пузырник", "behavior": "grazer", "radius": 14.0, "color": "#e8a060", "tier": 1,
 		"parts": [["filter", 0, 1], ["thermo", 180, 1], ["cilia", 90, 1]], "levels": [1, 8], "weight": 3.0, "biomes": ["hot"],
-		"drops": [["thermo", 0.25]], "hint": "Живёт в горячей воде — её термооболочка не жжётся"},
+		"drops": [["filter", 0.2], ["cilia", 0.2]], "hint": "Живёт в горячей воде — её термооболочка не жжётся"},
 	"ognevik": {"name": "Огневик", "behavior": "hunter", "radius": 19.0, "color": "#e06a3a", "shape": "star", "tier": 3, "aggro": true,
 		"parts": [["jaws", 0, 1], ["thermo", 180, 1], ["cilia", 120, 1], ["cilia", -120, 1]], "levels": [2, 10], "weight": 2.0, "biomes": ["hot"],
-		"drops": [["thermo", 0.3], ["jaws", 0.1]], "hint": "Злой хищник горячих источников"},
+		"drops": [["jaws", 0.25], ["cilia", 0.15]], "hint": "Злой хищник горячих источников"},
 	# Холодные течения.
 	"ledyanka": {"name": "Ледянка", "behavior": "grazer", "radius": 15.0, "color": "#a8d8f0", "shape": "oval", "tier": 1,
 		"parts": [["filter", 0, 1], ["fat", 180, 1], ["cilia", 180, 1]], "levels": [1, 9], "weight": 3.0, "biomes": ["cold"],
-		"drops": [["fat", 0.3]], "hint": "Жировая капля греет её в холодной воде"},
+		"drops": [["filter", 0.2], ["cilia", 0.2]], "hint": "Жировая капля греет её в холодной воде"},
 	"moroznik": {"name": "Морозник", "behavior": "hunter", "radius": 22.0, "color": "#7aa8d8", "shape": "star", "tier": 4, "aggro": true,
 		"parts": [["fangs", 0, 1], ["fat", 180, 1], ["spike", 120, 1], ["spike", -120, 1], ["cilia", 180, 1]], "levels": [3, 10], "weight": 1.6, "biomes": ["cold"],
-		"drops": [["fat", 0.2], ["fangs", 0.1]], "hint": "Хищник холодных течений"},
+		"drops": [["spike", 0.25], ["fangs", 0.1]], "hint": "Хищник холодных течений"},
 	# Хозяева логов: сидят в своём месте, бьются в несколько стадий, награда — особая часть.
 	"koroleva": {"name": "Королева глубин", "behavior": "lair", "radius": 16.0, "scale": 2.0, "color": "#6a4a9a", "shape": "blob", "tier": 9, "hunts": true,
 		"parts": [["fangs", 0, 1], ["life_core", 180, 1], ["tentacle", 60, 1], ["tentacle", -60, 1], ["membrane", 150, 2], ["membrane", -150, 2], ["eye", 30, 1], ["eye", -30, 1]],
@@ -366,7 +366,42 @@ static func radius_for(level: int) -> float:
 
 ## Сколько частей помещается на тело этого размера.
 static func slots_for(level: int) -> int:
-	return 2 + level
+	return 3 + level
+
+## Что даёт форма тела: площадь (1 — круг), обвод (1 — круг) и вытянутость вперёд.
+## Больше тело — больше места под части и здоровья, но тяжелее; вытянутое — быстрее.
+static func shape_stats(shape: Array) -> Dictionary:
+	if shape.is_empty():
+		return {"area": 1.0, "perim": 1.0, "elong": 1.0, "slots": 0, "hp": 1.0, "speed": 1.0}
+	var area := 0.0
+	var perim := 0.0
+	var n := shape.size()
+	for i in n:
+		var a0 := TAU * i / n
+		var a1 := TAU * (i + 1) / n
+		area += float(shape[i]) * float(shape[i])
+		perim += (Vector2.from_angle(a0) * float(shape[i])).distance_to(Vector2.from_angle(a1) * float(shape[(i + 1) % n]))
+	area /= n
+	perim /= 2.0 * n * sin(PI / n)
+	var along := shape_at(shape, 0.0) + shape_at(shape, PI)
+	var across := shape_at(shape, PI / 2.0) + shape_at(shape, -PI / 2.0)
+	var elong := along / maxf(across, 0.1)
+	return {"area": area, "perim": perim, "elong": elong,
+		"slots": clampi(int(floor((perim - 1.0) / 0.1)), 0, 4),
+		"hp": clampf(sqrt(area), 0.75, 1.4),
+		"speed": clampf((1.0 + 0.18 * clampf(elong - 1.0, -0.6, 1.2)) / pow(area, 0.12), 0.8, 1.25)}
+
+## Магазин: улучшения на весь вид, не части тела. Цена — за каждый следующий уровень.
+const UPGRADES := {
+	"heat": {"name": "Термозащита", "icon": "sun", "costs": [30], "hint": "Горячая вода больше не жжёт"},
+	"cold": {"name": "Жировой слой", "icon": "snow", "costs": [30], "hint": "В холодной воде не мёрзнешь и не медлишь"},
+	"room": {"name": "Лишнее место", "icon": "plus", "costs": [50, 120, 240], "hint": "+1 место под часть тела"},
+	"hp": {"name": "Крепкая оболочка", "icon": "heart", "costs": [30, 70, 140], "hint": "+15% здоровья"},
+	"regen": {"name": "Заживление", "icon": "leaf", "costs": [30, 70, 140], "hint": "Раны затягиваются быстрее"},
+	"stomach": {"name": "Большой желудок", "icon": "dna", "costs": [40, 100, 200], "hint": "+10% ДНК с любой еды"},
+	"camo": {"name": "Маскировка", "icon": "eye_off", "costs": [40, 90, 160], "hint": "Хищники замечают тебя позже"},
+	"dash": {"name": "Сильный рывок", "icon": "dash", "costs": [30, 70, 140], "hint": "Рывок перезаряжается быстрее (нужен толчковый пузырь)"},
+}
 
 static func is_mouth(id: String) -> bool:
 	return PARTS.get(id, {}).get("kind", "") == "mouth"

@@ -20,6 +20,7 @@ signal summon(species: String)
 const RoundButton := preload("res://scripts/ui/round_button.gd")
 const DragScroll := preload("res://scripts/ui/drag_scroll.gd")
 
+const TOO_SMALL := "Меньше не сжать: стоящие части в таком теле не поместятся. Сначала сними лишние."
 const PRESETS := [["round", "Круг"], ["oval", "Овал"], ["drop", "Капля"], ["wide", "Широкий"], ["star", "Звезда"], ["bean", "Боб"], ["blob", "Клякса"]]
 
 var evo: Evolution
@@ -37,6 +38,10 @@ var _info: Label
 var _info_row: HBoxContainer
 var _preview: Preview
 var _palette_scroll: ScrollContainer
+## Пока тянул форму, упёрся: меньше нельзя — скажем, когда отпустит палец.
+var _blocked := false
+## Только что поставленные части: «id|угол|глубина» → сколько ещё длится их появление (0–1).
+var pops := {}
 
 
 func _ready() -> void:
@@ -59,6 +64,7 @@ func open(e: Evolution, landscape_: bool, editable_ := true) -> void:
 	picked = -1
 	visible = true
 	rebuild()
+	Kit.pop_in(_sheet)
 
 func _place() -> void:
 	_sheet.position = Vector2.ZERO
@@ -271,6 +277,14 @@ func _shape_tools() -> ScrollContainer:
 	var col := Kit.vbox(12)
 	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(col)
+	# Что даёт форма — сразу видно, куда тянуть.
+	var st := Content.shape_stats(evo.shape)
+	var gives := Kit.hbox(8)
+	gives.add_child(_chip("Места +%d" % st.slots, Art.GOLD if st.slots > 0 else Art.MUTED))
+	gives.add_child(_chip("Здоровье %s" % _pct(st.hp), Art.GREEN if st.hp > 1.001 else (Art.ACCENT if st.hp < 0.999 else Art.MUTED)))
+	gives.add_child(_chip("Скорость %s" % _pct(st.speed), Art.GREEN if st.speed > 1.001 else (Art.ACCENT if st.speed < 0.999 else Art.MUTED)))
+	col.add_child(gives)
+	col.add_child(Kit.muted("Больше тело — больше мест под части и здоровья, но медленнее. Вытянутое вперёд — быстрее, широкое — медленнее. На большом теле частям просторнее.", 17))
 	col.add_child(Kit.label("Готовые формы", 22, Art.TEXT, true))
 	var flow := HFlowContainer.new()
 	flow.add_theme_constant_override("h_separation", 8)
@@ -278,7 +292,10 @@ func _shape_tools() -> ScrollContainer:
 	for pr in PRESETS:
 		var id: String = pr[0]
 		var b := _toggle(pr[1], false, func():
-			evo.set_shape(id)
+			if not evo.set_shape(id):
+				_say(TOO_SMALL)
+				_info.add_theme_color_override("font_color", Art.ACCENT)
+				return
 			changed.emit()
 			rebuild(), 56)
 		b.toggle_mode = false
@@ -330,7 +347,6 @@ func _shape_tools() -> ScrollContainer:
 				rebuild())
 			colors2.add_child(sw2)
 		col.add_child(colors2)
-	col.add_child(Kit.muted("Форма — для вида, а не для силы: драка идёт по кругу того же размера. Вытянутое тело чуть крупнее круглого.", 18))
 	return scroll
 
 func _update_info() -> void:
@@ -401,8 +417,13 @@ func _say(text: String) -> void:
 func place_at(angle: float, depth := 1.0) -> void:
 	if selected == "" or not evo.unlocked.has(selected):
 		return
+	var before := evo.body.map(func(p): return "%s|%d|%.1f" % [p.id, p.a, p.get("d", 1.0)])
 	var out := evo.place(selected, int(round(angle)), mirror, depth)
 	if out.ok:
+		for p in evo.body:
+			var key := "%s|%d|%.1f" % [p.id, p.a, p.get("d", 1.0)]
+			if not before.has(key):
+				pops[key] = 1.0
 		changed.emit()
 		rebuild()
 	_say(out.message)
@@ -419,6 +440,15 @@ func pick(index: int) -> void:
 func shape_done() -> void:
 	changed.emit()
 	rebuild()
+	if _blocked:
+		_blocked = false
+		_say(TOO_SMALL)
+		_info.add_theme_color_override("font_color", Art.ACCENT)
+
+## «+15%» / «−5%» / «как у круга».
+static func _pct(k: float) -> String:
+	var p := int(round((k - 1.0) * 100.0))
+	return "как у круга" if p == 0 else ("+%d%%" % p if p > 0 else "−%d%%" % -p)
 
 
 # --- атлас ----------------------------------------------------------------------------
@@ -687,7 +717,22 @@ class Preview:
 
 	func _process(delta: float) -> void:
 		t += delta
+		for key in editor.pops.keys():
+			editor.pops[key] -= delta * 1.6
+			if editor.pops[key] <= 0.0:
+				editor.pops.erase(key)
 		queue_redraw()
+
+	## Номер части на теле → множитель размера, пока она «вырастает»: 0 → 1,2 → 1.
+	func _pop_scales() -> Dictionary:
+		var out := {}
+		var body: Array = editor.evo.body
+		for i in body.size():
+			var key := "%s|%d|%.1f" % [body[i].id, body[i].a, body[i].get("d", 1.0)]
+			if editor.pops.has(key):
+				var q := 1.0 - float(editor.pops[key])
+				out[i] = (1.0 - pow(1.0 - q, 3.0)) + 0.3 * sin(PI * q)
+		return out
 
 	func _radius() -> float:
 		return minf(size.x, size.y) * 0.25
@@ -736,7 +781,8 @@ class Preview:
 	## Потянуть край туда, где палец.
 	func _pull(p: Vector2) -> void:
 		var pol := _polar(p)
-		editor.evo.reshape(pol.x, pol.y / _radius(), editor.mirror)
+		if not editor.evo.reshape(pol.x, pol.y / _radius(), editor.mirror):
+			editor._blocked = true
 
 	func _part_at(p: Vector2) -> int:
 		var evo: Evolution = editor.evo
@@ -762,8 +808,19 @@ class Preview:
 			draw_arc(c, r * Content.SHAPE_MIN, 0, TAU, 48, Color(1, 1, 1, 0.08), 1.5, true)
 			draw_arc(c, r * Content.SHAPE_MAX, 0, TAU, 64, Color(1, 1, 1, 0.08), 1.5, true)
 		var col := Color(Content.COLORS[evo.color])
+		var pops := _pop_scales()
 		CellArt.creature(self, c, r, -PI / 2.0, col, evo.body_parts(), t, {"pick": editor.picked, "shadow": false, "shape": evo.shape,
-			"pattern": evo.pattern, "color2": Color(Content.COLORS[evo.color2])})
+			"pattern": evo.pattern, "color2": Color(Content.COLORS[evo.color2]), "pop": pops})
+		# Кольцо и искры вокруг только что поставленной части.
+		var parts := evo.body_parts()
+		for i in pops:
+			var key := "%s|%d|%.1f" % [evo.body[i].id, evo.body[i].a, evo.body[i].get("d", 1.0)]
+			var q := 1.0 - float(editor.pops.get(key, 0.0))
+			var at := CellArt.part_anchor(parts[i], c, r, -PI / 2.0, evo.shape)
+			draw_arc(at, r * (0.15 + 0.45 * q), 0, TAU, 32, Color(Art.GOLD, 1.0 - q), 3.0, true)
+			for j in 6:
+				var d := Vector2.from_angle(TAU * j / 6.0 + q * 2.0)
+				draw_circle(at + d * r * (0.2 + 0.5 * q), 3.5 * (1.0 - q), Color(1, 1, 0.8, 1.0 - q))
 		# Нос — маленькая стрелка сверху, чтобы было видно, где перёд.
 		var nose := c + Vector2(0, -r * Content.shape_at(evo.shape, 0.0) - r * 0.55)
 		draw_colored_polygon(PackedVector2Array([nose, nose + Vector2(-9, 16), nose + Vector2(9, 16)]), Color(1, 1, 1, 0.35))

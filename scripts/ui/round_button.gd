@@ -5,6 +5,13 @@ var icon_name := ""
 var badge := ""
 var floating := false
 var accent := false
+var _t := 0.0
+
+func _process(delta: float) -> void:
+	# С меткой «!» кнопка дышит и светится — зовёт нажать.
+	if badge != "":
+		_t += delta
+		queue_redraw()
 
 func setup(icon_name_: String, tip: String, size_px: float) -> void:
 	icon_name = icon_name_
@@ -23,6 +30,9 @@ func _draw() -> void:
 		bg = Color(0.42, 0.2, 0.32, 0.92) if icon_name == "heart" else Color(0.2, 0.36, 0.3, 0.92)
 	if is_pressed() and get_draw_mode() == DRAW_PRESSED:
 		bg = Art.GREEN_DARK
+	if badge != "":
+		var glow := 0.5 + 0.5 * sin(_t * 4.0)
+		draw_circle(c, r * (1.12 + 0.1 * glow), Color(Art.ACCENT, 0.18 + 0.2 * glow))
 	draw_circle(c, r, bg)
 	draw_arc(c, r - 1, 0, TAU, 40, Color(1, 1, 1, 0.1), 2, true)
 	var inner := Rect2(c - Vector2(r, r) * 0.52, Vector2(r, r) * 1.04)

@@ -87,4 +87,34 @@ static func draw(ci: CanvasItem, name: String, rect: Rect2, col: Color) -> void:
 			ci.draw_line(Vector2(50, 50), Vector2(74, 26), col, 6)
 			for q in [Vector2(50, 30), Vector2(24, 28), Vector2(76, 20)]:
 				ci.draw_circle(q, 10, col)
+		"shop":
+			# Ракушка-кошелёк: полукруг с рёбрами и застёжка.
+			Art.poly(ci, [Vector2(14, 52), Vector2(86, 52), Vector2(78, 86), Vector2(22, 86)], col)
+			ci.draw_arc(Vector2(50, 52), 26, PI, TAU, 20, col, 8, true)
+			for x in [36.0, 50.0, 64.0]:
+				ci.draw_line(Vector2(x, 58), Vector2(x, 80), Art.BG, 4)
+		"sun":
+			ci.draw_circle(Vector2(50, 50), 20, col)
+			for i in 8:
+				var d := Vector2.from_angle(TAU * i / 8.0)
+				ci.draw_line(Vector2(50, 50) + d * 28, Vector2(50, 50) + d * 42, col, 7, true)
+		"snow":
+			for i in 3:
+				var d := Vector2.from_angle(PI * i / 3.0)
+				ci.draw_line(Vector2(50, 50) - d * 38, Vector2(50, 50) + d * 38, col, 7, true)
+				for s in [-1.0, 1.0]:
+					var tip: Vector2 = Vector2(50, 50) + d * 38 * s
+					ci.draw_line(tip - d * 14 * s + d.orthogonal() * 9, tip - d * 4 * s, col, 5, true)
+					ci.draw_line(tip - d * 14 * s - d.orthogonal() * 9, tip - d * 4 * s, col, 5, true)
+		"plus":
+			ci.draw_line(Vector2(50, 16), Vector2(50, 84), col, 12, true)
+			ci.draw_line(Vector2(16, 50), Vector2(84, 50), col, 12, true)
+		"leaf":
+			Art.poly(ci, [Vector2(18, 82), Vector2(24, 40), Vector2(50, 18), Vector2(84, 14), Vector2(80, 48), Vector2(58, 76)], col)
+			ci.draw_line(Vector2(18, 82), Vector2(70, 28), Art.BG, 4, true)
+		"eye_off":
+			Art.ellipse(ci, Vector2(50, 50), 38, 22, col)
+			ci.draw_circle(Vector2(50, 50), 12, Art.BG)
+			ci.draw_line(Vector2(18, 84), Vector2(82, 16), Art.BG, 12, true)
+			ci.draw_line(Vector2(18, 84), Vector2(82, 16), col, 6, true)
 	Art.unpen(ci)

@@ -40,6 +40,7 @@ func open(s: Settings, e: Evolution, landscape_: bool) -> void:
 	visible = true
 	_scroll_pos = 0
 	rebuild()
+	Kit.pop_in(_sheet)
 
 func _place() -> void:
 	if landscape:

@@ -41,6 +41,10 @@ var achievements := {}
 var generation := 1
 ## Сколько секунд сыграно — для меню сохранений.
 var played := 0.0
+## Покупки в магазине: улучшение → уровень. Это не части — на тело не ставятся.
+var upgrades := {}
+## Уровни, полученные даром (за части, которые раньше были на теле) — ДНК за них не списана.
+var gifts := {}
 
 
 static func create(diff := "normal") -> Evolution:
@@ -61,7 +65,7 @@ func radius() -> float:
 	return Content.radius_for(level())
 
 func slots() -> int:
-	return 12 if sandbox else Content.slots_for(level())
+	return (12 if sandbox else Content.slots_for(level())) + upgrade_level("room") + int(Content.shape_stats(shape).slots)
 
 ## Доля пути до следующего размера, 0–1. На последнем — 1.
 func growth() -> float:
@@ -85,7 +89,41 @@ func cost_used() -> int:
 	return sum
 
 func dna_free() -> int:
-	return int(floor(dna_total)) + Content.START_DNA + (100000 if sandbox else 0) - cost_used()
+	return int(floor(dna_total)) + Content.START_DNA + (100000 if sandbox else 0) - cost_used() - shop_spent()
+
+
+# --- магазин --------------------------------------------------------------------------
+
+func upgrade_level(id: String) -> int:
+	return int(upgrades.get(id, 0))
+
+## Цена следующего уровня; -1 — уже всё куплено.
+func upgrade_cost(id: String) -> int:
+	var costs: Array = Content.UPGRADES[id].costs
+	var lvl := upgrade_level(id)
+	return int(costs[lvl]) if lvl < costs.size() else -1
+
+## Сколько ДНК ушло в магазин — навсегда (в отличие от частей, её не вернуть).
+func shop_spent() -> int:
+	var sum := 0
+	for id in upgrades:
+		if Content.UPGRADES.has(id):
+			var costs: Array = Content.UPGRADES[id].costs
+			for i in range(int(gifts.get(id, 0)), mini(int(upgrades[id]), costs.size())):
+				sum += int(costs[i])
+	return sum
+
+func buy(id: String) -> Dictionary:
+	if not Content.UPGRADES.has(id):
+		return {"ok": false, "message": "Такого нет"}
+	var cost := upgrade_cost(id)
+	if cost < 0:
+		return {"ok": false, "message": "Уже куплено полностью"}
+	if cost > dna_free():
+		return {"ok": false, "message": "Не хватает ДНК: нужно %d, свободно %d" % [cost, dna_free()]}
+	upgrades[id] = upgrade_level(id) + 1
+	count("bought")
+	return {"ok": true, "message": "%s: уровень %d" % [Content.UPGRADES[id].name, upgrades[id]]}
 
 
 # --- тело -----------------------------------------------------------------------------
@@ -119,8 +157,9 @@ static func snap_depth(id: String, depth: float) -> float:
 	return clampf(round(depth / Content.DEPTH_STEP) * Content.DEPTH_STEP, 0.0, 1.0)
 
 ## Где часть сидит на теле — в радиусах тела, без учёта формы.
-static func anchor(a: float, d: float) -> Vector2:
-	return Vector2.from_angle(deg_to_rad(a)) * d
+## Где на теле стоит часть — по настоящей форме: на растянутом теле частям просторнее.
+func anchor(a: float, d: float) -> Vector2:
+	return Vector2.from_angle(deg_to_rad(a)) * d * Content.shape_at(shape, deg_to_rad(a))
 
 ## Можно ли поставить часть на этот угол и глубину. {ok, reason}. Рот ставится вместо старого.
 func can_place(id: String, angle: int, depth := 1.0) -> Dictionary:
@@ -192,7 +231,23 @@ func body_parts() -> Array:
 
 ## Потянуть край тела в направлении angle (градусы от носа) до value радиусов. Соседние
 ## точки подтягиваются мягче — край получается плавным, без зубцов.
-func reshape(angle: float, value: float, mirror := false) -> void:
+## Поменять форму можно, только если все стоящие части в новом теле поместятся.
+func _shape_fits(new_shape: Array) -> bool:
+	var old := shape
+	shape = new_shape
+	var ok := body.size() <= slots()
+	shape = old
+	return ok
+
+func reshape(angle: float, value: float, mirror := false) -> bool:
+	var before := shape.duplicate()
+	_reshape(angle, value, mirror)
+	if not _shape_fits(shape):
+		shape = before
+		return false
+	return true
+
+func _reshape(angle: float, value: float, mirror := false) -> void:
 	value = clampf(value, Content.SHAPE_MIN, Content.SHAPE_MAX)
 	var n := shape.size()
 	for i in n:
@@ -202,8 +257,12 @@ func reshape(angle: float, value: float, mirror := false) -> void:
 			if w > 0.0:
 				shape[i] = lerpf(shape[i], value, w * w)
 
-func set_shape(preset: String) -> void:
-	shape = Content.shape_preset(preset)
+func set_shape(preset: String) -> bool:
+	var s := Content.shape_preset(preset)
+	if not _shape_fits(s):
+		return false
+	shape = s
+	return true
 
 ## Сгладить: каждая точка — к среднему соседей.
 func smooth_shape() -> void:
@@ -211,7 +270,8 @@ func smooth_shape() -> void:
 	var out: Array = []
 	for i in n:
 		out.append((shape[(i - 1 + n) % n] + shape[i] * 2.0 + shape[(i + 1) % n]) / 4.0)
-	shape = out
+	if _shape_fits(out):
+		shape = out
 
 
 # --- находки --------------------------------------------------------------------------
@@ -317,6 +377,8 @@ func to_dict() -> Dictionary:
 		"biomes_seen": biomes_seen.duplicate(),
 		"lairs_beaten": lairs_beaten.duplicate(),
 		"achievements": achievements.duplicate(),
+		"upgrades": upgrades.duplicate(),
+		"gifts": gifts.duplicate(),
 	}
 
 ## Прочитанное с диска. Непонятное выбрасывается по кусочку. null — сохранения нет.
@@ -329,6 +391,25 @@ static func from_dict(d: Variant) -> Evolution:
 		var l = d.unlocked[id]
 		if Content.PARTS.has(id) and Content.obtainable(id) and (l is int or l is float):
 			e.unlocked[id] = clampi(int(l), 1, Content.PART_MAX_LEVEL)
+	# Форма и покупки — до тела: от них зависит, сколько частей на нём помещается.
+	if d.get("shape") is Array and d.shape.size() == Content.SHAPE_POINTS and d.shape.all(func(v): return v is int or v is float):
+		e.shape = d.shape.map(func(v): return clampf(float(v), Content.SHAPE_MIN, Content.SHAPE_MAX))
+	e.sandbox = d.get("sandbox", false) == true
+	for id in _dict(d.get("upgrades")):
+		var n = d.upgrades[id]
+		if Content.UPGRADES.has(id) and (n is int or n is float) and int(n) > 0:
+			e.upgrades[id] = mini(int(n), Content.UPGRADES[id].costs.size())
+	for id in _dict(d.get("gifts")):
+		var n = d.gifts[id]
+		if e.upgrades.has(id) and (n is int or n is float):
+			e.gifts[id] = clampi(int(n), 0, int(e.upgrades[id]))
+	# Термооболочка, жировая капля и хроматофоры раньше были частями — теперь это покупки.
+	# Кто их уже добыл, получает их даром.
+	var raw_unlocked := _dict(d.get("unlocked"))
+	for pair in [["thermo", "heat"], ["fat", "cold"], ["camo", "camo"]]:
+		if raw_unlocked.has(pair[0]) and not e.upgrades.has(pair[1]):
+			e.upgrades[pair[1]] = 1
+			e.gifts[pair[1]] = 1
 	for id in _dict(d.get("shards")):
 		var n = d.shards[id]
 		if e.unlocked.has(id) and (n is int or n is float) and int(n) > 0:
@@ -339,8 +420,11 @@ static func from_dict(d: Variant) -> Evolution:
 			if p is Dictionary and e.unlocked.has(str(p.get("id", ""))) and (p.get("a") is int or p.get("a") is float):
 				var dep = p.get("d", 1.0)
 				e.body.append({"id": str(p.id), "a": snap(float(p.a)), "d": snap_depth(str(p.id), float(dep) if (dep is int or dep is float) else 1.0)})
-		# Сломанное или слишком дорогое тело — назад к стартовому, лишь бы клетка жила.
-		if e.body.size() > e.slots() or e.dna_free() < 0:
+		# Лишнее не помещается или не по карману — снимаем последние части; совсем сломанное
+		# тело — назад к стартовому, лишь бы клетка жила.
+		while e.body.size() > 0 and (e.body.size() > e.slots() or e.dna_free() < 0):
+			e.body.pop_back()
+		if e.body.is_empty():
 			e.body = Content.START_PARTS.duplicate(true)
 	# Сохранение времён, когда рывок был у всех: ставим толчковый пузырь сами, если есть
 	# место и ДНК, — чтобы рывок не пропал.
@@ -349,8 +433,6 @@ static func from_dict(d: Variant) -> Evolution:
 			if e.can_place("sac", a).ok:
 				e.body.append({"id": "sac", "a": a, "d": 1.0})
 				break
-	if d.get("shape") is Array and d.shape.size() == Content.SHAPE_POINTS and d.shape.all(func(v): return v is int or v is float):
-		e.shape = d.shape.map(func(v): return clampf(float(v), Content.SHAPE_MIN, Content.SHAPE_MAX))
 	var c = d.get("color")
 	if (c is int or c is float) and int(c) >= 0 and int(c) < Content.COLORS.size():
 		e.color = int(c)
@@ -386,7 +468,6 @@ static func from_dict(d: Variant) -> Evolution:
 		var n = d.get(key)
 		if n is int or n is float:
 			e.set(key, clampi(int(n), 0, 3 if key == "brood" else 9999))
-	e.sandbox = d.get("sandbox", false) == true
 	for b in _dict(d.get("biomes_seen")):
 		if Content.BIOMES.has(b):
 			e.biomes_seen[b] = true

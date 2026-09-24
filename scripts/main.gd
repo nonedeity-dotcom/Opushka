@@ -11,6 +11,7 @@ const EditorPanel := preload("res://scripts/ui/editor_panel.gd")
 const SettingsPanel := preload("res://scripts/ui/settings_panel.gd")
 const SoundBank := preload("res://scripts/sound_bank.gd")
 const MenuPanel := preload("res://scripts/ui/menu_panel.gd")
+const ShopPanel := preload("res://scripts/ui/shop_panel.gd")
 
 var evo: Evolution
 var pond: Pond
@@ -23,6 +24,7 @@ var sound: Node
 var backdrop: Control
 var fog: ColorRect
 var menu: Control
+var shop: Control
 var landscape := true
 ## Ячейка сохранения, в которую играем. 0 — проверочный запуск: не сохраняется.
 var slot := 0
@@ -88,6 +90,7 @@ func _ready() -> void:
 		_fingers.clear()
 		editor.open(evo, landscape, false))
 	hud.settings_pressed.connect(_open_settings)
+	hud.shop_pressed.connect(_open_shop)
 
 	editor = EditorPanel.new()
 	editor.visible = false
@@ -119,6 +122,23 @@ func _ready() -> void:
 	setup.closed.connect(func(): setup.visible = false)
 	setup.changed.connect(_settings_changed)
 	setup.new_world.connect(_to_menu)
+
+	shop = ShopPanel.new()
+	shop.visible = false
+	ui.add_child(shop)
+	shop.closed.connect(func():
+		shop.visible = false
+		sound.play("ui")
+		_save())
+	shop.bought.connect(func(id):
+		if id == "":
+			sound.play("nope")
+			return
+		sound.play("levelup", 1.2)
+		_buzz(40)
+		pond.player.sync_player(evo)
+		Kit.bounce(hud.dna_pill, 1.2)
+		_dirty = true)
 
 	menu = MenuPanel.new()
 	menu.visible = false
@@ -189,6 +209,7 @@ func _to_menu() -> void:
 	sound.set_music("")
 	setup.visible = false
 	editor.visible = false
+	shop.visible = false
 	hud.visible = false
 	fog.visible = false
 	menu.open()
@@ -230,7 +251,7 @@ func _process(delta: float) -> void:
 	if pond == null:
 		return
 	evo.played += delta
-	var paused: bool = editor.visible or setup.visible
+	var paused: bool = editor.visible or setup.visible or shop.visible
 	fog.visible = not paused
 	if not paused:
 		pond.view_radius = view.view_radius()
@@ -308,6 +329,8 @@ func _handle(events: Array) -> void:
 					sound.play("bite" if e.kind == "bite" else "hit", randf_range(0.9, 1.1))
 					_buzz(12)
 			"kill":
+				if e.by_player and e.get("dna", 0.0) >= 5.0:
+					Kit.bounce(hud.dna_pill, 1.15)
 				if e.by_player:
 					sound.play("kill")
 					_buzz(25)
@@ -326,6 +349,7 @@ func _handle(events: Array) -> void:
 				if e.new:
 					sound.play("newpart")
 					hud.announce("Новая часть!", "%s — %s. Нажми ♥ и найди пару, чтобы поставить её" % [def.name, Content.lc_first(def.hint)])
+					hud.reveal_part(e.part)
 					hud.editor_btn.badge = "!"
 					hud.editor_btn.queue_redraw()
 					_buzz(40)
@@ -335,12 +359,14 @@ func _handle(events: Array) -> void:
 				elif e.up:
 					sound.play("newpart", 1.2)
 					hud.announce("%s: уровень %d" % [def.name, e.level], "Сильнее на %d%%, чем в начале" % int(round((Content.power(e.level) - 1.0) * 100.0)))
+					hud.reveal_part(e.part, true)
 					_buzz(30)
 				else:
 					sound.play("pickup")
 					hud.toast("%s: копия %d из %d до уровня %d" % [def.name, e.have, e.need, e.level + 1])
 			"levelup":
 				sound.play("levelup")
+				hud.grew()
 				_dirty = true
 				_buzz(50)
 				hud.editor_btn.badge = "!"
@@ -531,6 +557,14 @@ func _call_mate() -> void:
 		sound.play("ui")
 		hud.toast("Пара уже ждёт — плыви по розовой стрелке")
 
+func _open_shop() -> void:
+	if pond == null:
+		return
+	sound.play("ui")
+	hud.pad.release()
+	_fingers.clear()
+	shop.open(evo, landscape)
+
 func _open_settings() -> void:
 	sound.play("ui")
 	hud.pad.release()
@@ -562,6 +596,9 @@ func _on_resize() -> void:
 	if setup.visible:
 		setup.landscape = landscape
 		setup.rebuild()
+	if shop.visible:
+		shop.landscape = landscape
+		shop.rebuild()
 
 
 # --- сохранение -----------------------------------------------------------------------
@@ -661,6 +698,8 @@ func _run_script() -> void:
 		"open":
 			if p[1] == "settings":
 				_open_settings()
+			elif p[1] == "shop":
+				_open_shop()
 			elif p[1] == "atlas":
 				editor.open(evo, landscape, false)
 			else:
@@ -686,9 +725,15 @@ func _run_script() -> void:
 		"shape":
 			evo.set_shape(p[1])
 			pond.player.sync_player(evo)
+		"reveal":
+			hud.reveal_part(p[1], p.size() > 2)
+			hud.editor_btn.badge = "!"
+		"buy":
+			shop._buy(p[1])
 		"close":
 			editor.visible = false
 			setup.visible = false
+			shop.visible = false
 			pond.player.sync_player(evo)
 		"swipe":
 			# Провести пальцем: x,y — откуда, dy — насколько вверх/вниз (точки экрана).

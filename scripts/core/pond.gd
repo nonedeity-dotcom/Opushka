@@ -449,6 +449,8 @@ func _fed(c: Creature, f: Dictionary) -> void:
 	else:
 		gain = MEAT_DNA * f.value * c.mouth.eat_meat
 		evo.count("meat")
+	# Большой желудок из магазина: +10% за уровень.
+	gain *= 1.0 + 0.1 * evo.upgrade_level("stomach")
 	events.append({"t": "eat", "kind": f.kind, "pos": f.pos, "dna": gain})
 	_gain(gain)
 

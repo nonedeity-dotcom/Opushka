@@ -83,3 +83,21 @@ static func vbox(sep := 10) -> VBoxContainer:
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", sep)
 	return v
+
+
+## Лист появляется мягко: из прозрачного и чуть меньше — к обычному, с лёгким пружинящим
+## доводом.
+static func pop_in(node: Control) -> void:
+	node.pivot_offset = node.size / 2.0
+	node.modulate.a = 0.0
+	node.scale = Vector2(0.94, 0.94)
+	var tw := node.create_tween().set_parallel()
+	tw.tween_property(node, "modulate:a", 1.0, 0.16)
+	tw.tween_property(node, "scale", Vector2.ONE, 0.26).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+## Короткий «прыжок» элемента: вырос и вернулся.
+static func bounce(node: Control, k := 1.15) -> void:
+	node.pivot_offset = node.size / 2.0
+	var tw := node.create_tween()
+	tw.tween_property(node, "scale", Vector2(k, k), 0.09)
+	tw.tween_property(node, "scale", Vector2.ONE, 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)

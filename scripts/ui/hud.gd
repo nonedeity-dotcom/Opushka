@@ -17,6 +17,7 @@ signal ability_pressed
 signal editor_pressed
 signal atlas_pressed
 signal settings_pressed
+signal shop_pressed
 
 var pad: Control
 var dash: Control
@@ -24,6 +25,7 @@ var dash: Control
 var editor_btn: Button
 var atlas_btn: Button
 var settings_btn: Button
+var shop_btn: Button
 var size_pill: Control
 var dna_pill: Control
 var hp_bar: Control
@@ -37,6 +39,8 @@ var banner_title: Label
 var banner_sub: Label
 var indicators: Control
 var hurt_flash: ColorRect
+## Вспышка находки: крупный значок части посреди экрана.
+var reveal: Control
 ## Второе умение (чернила, щит, разряд, всасывание) — есть, только если есть такая часть.
 var ability_btn: Control
 var biome_chip: Control
@@ -73,6 +77,8 @@ func _ready() -> void:
 	settings_btn.pressed.connect(func(): settings_pressed.emit())
 	atlas_btn = _round("book", "Атлас", 64)
 	atlas_btn.pressed.connect(func(): atlas_pressed.emit())
+	shop_btn = _round("shop", "Магазин", 64)
+	shop_btn.pressed.connect(func(): shop_pressed.emit())
 
 	goal_title = Kit.label("", 22, Art.TEXT, true)
 	goal_hint = Kit.label("", 18, Art.MUTED)
@@ -136,6 +142,10 @@ func _ready() -> void:
 	editor_btn.accent = true
 	editor_btn.pressed.connect(func(): editor_pressed.emit())
 
+	reveal = PartReveal.new()
+	reveal.hud = self
+	add_child(reveal)
+
 	resized.connect(_layout)
 
 
@@ -152,7 +162,7 @@ func apply_settings(s: Settings, landscape: bool) -> void:
 	pad.visible = s.control == "stick"
 	if not pad.visible:
 		pad.release()
-	for n in [pad, dash, ability_btn, editor_btn, settings_btn, atlas_btn]:
+	for n in [pad, dash, ability_btn, editor_btn, settings_btn, atlas_btn, shop_btn]:
 		n.floating = true
 	indicators.enabled = s.arrows
 	pad.queue_redraw()
@@ -204,12 +214,24 @@ func refresh(pond: Pond) -> void:
 	hurt_flash.color.a = maxf(0.0, hurt_flash.color.a - get_process_delta_time() * 0.8)
 
 
+## Новая часть: значок вспыхивает посреди экрана, потом улетает к ♥.
+func reveal_part(id: String, level_up := false) -> void:
+	reveal.start(id, level_up)
+
+## Вырос: плашка размера подпрыгивает, экран на миг теплеет.
+func grew() -> void:
+	Kit.bounce(size_pill, 1.25)
+	hurt_flash.color = Color(0.5, 0.95, 0.6, 0.22)
+	var tw := create_tween()
+	tw.tween_property(hurt_flash, "color", Color(0.8, 0.1, 0.1, 0.0), 0.8)
+
 func hurt() -> void:
+	hurt_flash.color = Color(0.8, 0.1, 0.1, hurt_flash.color.a)
 	hurt_flash.color.a = 0.22
 
 ## Пришлось ли касание на что-то из интерфейса.
 func covers(p: Vector2) -> bool:
-	for n in [pad, dash, ability_btn, editor_btn, settings_btn, atlas_btn, size_pill, dna_pill, hp_bar, goal_card]:
+	for n in [pad, dash, ability_btn, editor_btn, settings_btn, atlas_btn, shop_btn, size_pill, dna_pill, hp_bar, goal_card]:
 		if n.visible and n.get_global_rect().grow(10).has_point(p):
 			return true
 	return false
@@ -274,9 +296,10 @@ func _layout() -> void:
 	biome_chip.size = Vector2(hp_bar.size.x, 30)
 	settings_btn.position = Vector2(right - 64, top)
 	atlas_btn.position = Vector2(right - 64 * 2 - 10, top)
+	shop_btn.position = Vector2(right - 64 * 3 - 20, top)
 	if _landscape:
 		goal_card.position = Vector2(dna_pill.position.x + dna_pill.size.x + 14, top)
-		goal_card.size = Vector2(minf(560.0, atlas_btn.position.x - goal_card.position.x - 14), 64)
+		goal_card.size = Vector2(minf(560.0, shop_btn.position.x - goal_card.position.x - 14), 64)
 	else:
 		goal_card.position = Vector2(left, top + 112)
 		goal_card.size = Vector2(right - left, 0)
@@ -498,3 +521,73 @@ class ArenaPill:
 		var font := get_theme_default_font()
 		draw_string(font, Vector2(62, 32), "Волна %d" % maxi(wave, 1), HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Art.TEXT)
 		draw_string(font, Vector2(62, 54), "рекорд: %d" % best, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Art.MUTED)
+
+
+## Находка крупно: лучи, пружинящий значок, потом полёт к кнопке ♥ — там её и ставят.
+class PartReveal:
+	extends Control
+	var hud: Control
+	var id := ""
+	var level_up := false
+	var t := -1.0
+	const SHOW := 1.5
+	const FLY := 0.55
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+
+	func start(part: String, up: bool) -> void:
+		id = part
+		level_up = up
+		t = 0.0
+
+	func _process(delta: float) -> void:
+		if t < 0.0:
+			return
+		t += delta
+		if t > SHOW + FLY:
+			t = -1.0
+			if hud and hud.editor_btn.visible:
+				Kit.bounce(hud.editor_btn, 1.3)
+		queue_redraw()
+
+	func _draw() -> void:
+		if t < 0.0 or id == "":
+			return
+		var center := Vector2(size.x / 2.0, size.y * 0.55)
+		var target: Vector2 = center
+		if hud and hud.editor_btn.visible:
+			target = hud.editor_btn.position + hud.editor_btn.size / 2.0
+		var at := center
+		var k := 1.0
+		if t < 0.35:
+			# Появление с перелётом через край: 0 → 1.2 → 1.
+			var q := t / 0.35
+			k = q * (1.0 + 0.35 * sin(PI * q))
+		elif t > SHOW:
+			var q := clampf((t - SHOW) / FLY, 0.0, 1.0)
+			at = center.lerp(target, q * q)
+			k = 1.0 - 0.75 * q
+		var r := 64.0 * k
+		var fade := 1.0 if t <= SHOW else 1.0 - (t - SHOW) / FLY
+		if t <= SHOW:
+			# Лучи вращаются, круг светится.
+			var col := Art.GOLD if not level_up else Art.GREEN
+			for i in 12:
+				var a := TAU * i / 12.0 + t * 0.8
+				var d := Vector2.from_angle(a)
+				var side := d.orthogonal() * r * 0.18
+				draw_colored_polygon(PackedVector2Array([at + d * r * 0.9 + side, at + d * r * 2.3, at + d * r * 0.9 - side]), Color(col, 0.22 * fade))
+			draw_circle(at, r * 1.35, Color(col, 0.12 * fade))
+			for i in 8:
+				var a := TAU * i / 8.0 - t * 2.0
+				var sp := at + Vector2.from_angle(a) * r * (1.5 + 0.2 * sin(t * 6.0 + i))
+				draw_circle(sp, 3.0 + 2.0 * sin(t * 8.0 + i), Color(1, 1, 0.8, 0.8 * fade))
+		draw_circle(at, r, Color(0.06, 0.12, 0.15, 0.92 * fade))
+		draw_arc(at, r, 0, TAU, 48, Color(Art.GOLD if not level_up else Art.GREEN, fade), 4.0, true)
+		CellArt.part_icon(self, id, Rect2(at - Vector2(r, r) * 0.75, Vector2(r, r) * 1.5), Color("#9fd4a0"), t, fade)
+		if level_up and t <= SHOW:
+			var font := get_theme_default_font()
+			draw_string_outline(font, at + Vector2(r * 0.55, -r * 0.55), "+1", HORIZONTAL_ALIGNMENT_LEFT, -1, 34, 6, Color(0, 0, 0, 0.6))
+			draw_string(font, at + Vector2(r * 0.55, -r * 0.55), "+1", HORIZONTAL_ALIGNMENT_LEFT, -1, 34, Art.GREEN)

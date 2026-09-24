@@ -68,6 +68,8 @@ var host_angle := 0.0
 var host_t := 0.0  # сколько уже сосёт: насытившись, отпадает сам
 var grabs: Array = []  # щупальца: [{a, arc, dmg}]
 var glow := false  # светится — видно сквозь туман
+## Покупки из магазина (только у игрока): улучшение → уровень.
+var bonus := {}
 
 # Что с ней сейчас.
 var desire := Vector2.ZERO  # куда и насколько сильно хочет плыть, длина 0–1
@@ -154,6 +156,7 @@ func sync_player(evo: Evolution) -> void:
 	radius = size_r * Content.shape_scale(shape)
 	color = Color(Content.COLORS[evo.color])
 	parts = evo.body_parts()
+	bonus = evo.upgrades.duplicate()
 	rebuild()
 	hp = clampf(max_hp * share, 1.0, max_hp)
 
@@ -256,6 +259,27 @@ func rebuild() -> void:
 		speed *= 1.15
 		max_hp *= 1.5
 	zap_targets = mini(zap_targets + 1, 3) if zap_targets > 0 else 0
+	# Твоя форма — не только для вида: больше тело — крепче, но тяжелее; вытянутое — быстрее.
+	if is_player or ally:
+		var st := Content.shape_stats(shape)
+		max_hp *= float(st.hp)
+		speed *= float(st.speed)
+	_apply_bonus()
+
+## Покупки из магазина.
+func _apply_bonus() -> void:
+	if bonus.is_empty():
+		return
+	var lvl := func(id: String) -> int: return int(bonus.get(id, 0))
+	max_hp *= 1.0 + 0.15 * lvl.call("hp")
+	regen += 0.35 * lvl.call("regen") * size_k()
+	if lvl.call("heat") > 0:
+		heatproof = true
+	if lvl.call("cold") > 0:
+		coldproof = true
+	camo = maxf(camo, [0.0, 0.25, 0.4, 0.55][mini(lvl.call("camo"), 3)])
+	dash_k *= [1.0, 0.85, 0.72, 0.6][mini(lvl.call("dash"), 3)]
+	dash_power = 260.0 * pow(size_k(), 0.3) / sqrt(dash_k)
 
 func eats(kind: String) -> bool:
 	var d: String = mouth.get("diet", "")

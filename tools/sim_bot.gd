@@ -98,8 +98,13 @@ func _edit() -> void:
 		want_mouth = "proboscis"
 	if evo.mouth() != want_mouth:
 		evo.place(want_mouth, 0)
-	var order := ["sac", "flagellum2", "flagellum", "spike2", "spike", "shell", "membrane", "thermo", "fat", "electro", "poison", "chloroplast", "eye", "cilia"]
+	var order := ["sac", "flagellum2", "flagellum", "spike2", "spike", "shell", "membrane", "electro", "poison", "chloroplast", "eye", "cilia"]
 	var angles := [180, 90, -90, 135, -135, 45, -45, 60, -60, 150, -150, 30, -30, 120, -120, 105, -105, 165, -165, 75, -75]
+	# Магазин: защита от жары и холода, когда есть лишняя ДНК (после пузыря).
+	if evo.body.any(func(q): return q.id == "sac"):
+		for up in ["heat", "cold"]:
+			if evo.upgrade_level(up) == 0 and evo.upgrade_cost(up) <= evo.dna_free() - 20:
+				evo.buy(up)
 	# Пока нет толчкового пузыря — копить на него, остальное потом (как по задачам).
 	var has_sac := evo.body.any(func(q): return q.id == "sac")
 	for id in order:

@@ -20,6 +20,8 @@ static func creature(ci: CanvasItem, at: Vector2, r: float, heading: float, colo
 	var alpha: float = opts.get("ghost", 1.0)
 	var bite: float = opts.get("bite", 0.0)
 	var pick: int = opts.get("pick", -1)
+	# Только что поставленные части «вырастают»: номер части → множитель размера.
+	var pops: Dictionary = opts.get("pop", {})
 	var shape: Array = opts.get("shape", [])
 	# Живость: плывёт — тело вытягивается по ходу; вырос — вздрагивает; всё время чуть дышит.
 	var stretch: float = opts.get("stretch", 0.0)
@@ -51,7 +53,7 @@ static func creature(ci: CanvasItem, at: Vector2, r: float, heading: float, colo
 	var gulp: float = opts.get("gulp", 0.0)
 	for i in parts.size():
 		if parts[i].id in OUTSIDE:
-			_part(ci, parts[i], at, r, heading, color, t + w, bite, alpha, i == pick, shape, gulp)
+			_part(ci, parts[i], at, r, heading, color, t + w, bite, alpha, i == pick, shape, gulp, float(pops.get(i, 1.0)))
 	ci.draw_colored_polygon(body, Color(color, alpha))
 	_pattern(ci, opts.get("pattern", "none"), opts.get("color2", color), at, r, heading, shape, t + w, alpha)
 	var edge := body.duplicate()
@@ -68,7 +70,7 @@ static func creature(ci: CanvasItem, at: Vector2, r: float, heading: float, colo
 		ci.draw_circle(at + Vector2.from_angle(heading + a) * r * 0.55 * Content.shape_at(shape, a), r * 0.07, Color(color.lightened(0.35), 0.8 * alpha))
 	for i in parts.size():
 		if not parts[i].id in OUTSIDE:
-			_part(ci, parts[i], at, r, heading, color, t + w, bite, alpha, i == pick, shape, gulp)
+			_part(ci, parts[i], at, r, heading, color, t + w, bite, alpha, i == pick, shape, gulp, float(pops.get(i, 1.0)))
 	var flash: float = opts.get("flash", 0.0)
 	if flash > 0.0:
 		ci.draw_colored_polygon(body, Color(1, 0.85, 0.8, 0.55 * flash))
@@ -128,9 +130,9 @@ const INNER_CENTER := {"eye": Vector2(-2.5, 0), "chloroplast": Vector2(-6.0, 0),
 	"suction": Vector2(-4.0, 0), "life_core": Vector2(-4.0, 0)}
 
 ## Одна часть. Годится и для «примерки» в редакторе.
-static func _part(ci: CanvasItem, p: Dictionary, at: Vector2, r: float, heading: float, color: Color, t: float, bite: float, alpha: float, picked: bool, shape: Array, gulp := 0.0) -> void:
+static func _part(ci: CanvasItem, p: Dictionary, at: Vector2, r: float, heading: float, color: Color, t: float, bite: float, alpha: float, picked: bool, shape: Array, gulp := 0.0, grow_k := 1.0) -> void:
 	var ang: float = heading + p.a
-	var s := r / 20.0 * (1.0 + 0.08 * (int(p.get("lvl", 1)) - 1))
+	var s := r / 20.0 * (1.0 + 0.08 * (int(p.get("lvl", 1)) - 1)) * grow_k
 	# Глоток: рот на миг раздувается.
 	if gulp > 0.0 and Content.is_mouth(p.id):
 		s *= 1.0 + 0.35 * sin(PI * gulp)
