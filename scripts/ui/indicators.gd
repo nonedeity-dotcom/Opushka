@@ -12,9 +12,14 @@ var t := 0.0
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
+var _had := false
+
 func _process(delta: float) -> void:
 	t += delta
-	queue_redraw()
+	# Перерисовывать, только пока есть стрелки (и ещё раз, чтобы стереть последние).
+	if not targets.is_empty() or _had:
+		queue_redraw()
+	_had = not targets.is_empty()
 
 func _draw() -> void:
 	if not enabled or margin.size.x <= 0:

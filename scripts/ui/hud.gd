@@ -103,6 +103,7 @@ func _ready() -> void:
 	toast_box = Kit.card(toast_label, Color(0.04, 0.07, 0.09, 0.88), 20, 16)
 	toast_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	toast_box.modulate.a = 0.0
+	toast_box.visible = false
 	add_child(toast_box)
 
 	banner = Kit.vbox(4)
@@ -118,6 +119,7 @@ func _ready() -> void:
 	banner.add_child(banner_title)
 	banner.add_child(banner_sub)
 	banner.modulate.a = 0.0
+	banner.visible = false
 	add_child(banner)
 
 	pad = TouchPad.new()
@@ -245,10 +247,13 @@ func toast(text: String) -> void:
 	if _toast_tween:
 		_toast_tween.kill()
 	toast_box.modulate.a = 0.0
+	toast_box.visible = true
 	_toast_tween = create_tween()
 	_toast_tween.tween_property(toast_box, "modulate:a", 1.0, 0.15)
 	_toast_tween.tween_interval(2.6)
 	_toast_tween.tween_property(toast_box, "modulate:a", 0.0, 0.5)
+	# Невидимое тоже рисуется, если не спрятать: прячем, когда растаяло.
+	_toast_tween.tween_callback(func(): toast_box.visible = false)
 
 ## Крупная надпись посередине: вырос, новая часть.
 func announce(title: String, sub := "") -> void:
@@ -258,12 +263,14 @@ func announce(title: String, sub := "") -> void:
 	if _banner_tween:
 		_banner_tween.kill()
 	banner.modulate.a = 0.0
+	banner.visible = true
 	banner.scale = Vector2(0.9, 0.9)
 	_banner_tween = create_tween().set_parallel()
 	_banner_tween.tween_property(banner, "modulate:a", 1.0, 0.25)
 	_banner_tween.tween_property(banner, "scale", Vector2.ONE, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	_banner_tween.chain().tween_interval(2.0)
 	_banner_tween.chain().tween_property(banner, "modulate:a", 0.0, 0.6)
+	_banner_tween.chain().tween_callback(func(): banner.visible = false)
 
 
 # --- раскладка ------------------------------------------------------------------------

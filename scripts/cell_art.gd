@@ -383,25 +383,67 @@ static func part_icon(ci: CanvasItem, id: String, rect: Rect2, color: Color, t :
 
 # --- еда и находки --------------------------------------------------------------------
 
+# Водоросли и мясо — готовыми картинками: их на экране десятки, и картинки одной текстуры
+# видеокарта рисует разом, а не по 12 кружков на каждую (на телефоне из-за этого лагало).
+static var _plant_tex: Array = []
+static var _meat_tex: Texture2D
+
+## Мягкий круг в картинку: край сглажен на полтора пикселя.
+static func _paint_circle(img: Image, c: Vector2, r: float, col: Color) -> void:
+	var s := img.get_width()
+	for y in range(maxi(0, int(c.y - r - 2)), mini(s, int(c.y + r + 2))):
+		for x in range(maxi(0, int(c.x - r - 2)), mini(s, int(c.x + r + 2))):
+			var d := Vector2(x + 0.5, y + 0.5).distance_to(c)
+			var a := clampf(r - d + 0.75, 0.0, 1.5) / 1.5 * col.a
+			if a <= 0.0:
+				continue
+			var under := img.get_pixel(x, y)
+			var out := Color(col.r, col.g, col.b, 1.0).lerp(under, 1.0 - a) if under.a > 0.0 else Color(col.r, col.g, col.b, a)
+			out.a = maxf(under.a, a)
+			img.set_pixel(x, y, out)
+
+static func plant_texture(v: int) -> Texture2D:
+	if _plant_tex.is_empty():
+		for n in [3, 4]:
+			var s := 64
+			var img := Image.create(s, s, false, Image.FORMAT_RGBA8)
+			var c := Vector2(s, s) / 2.0
+			var r := s * 0.5 / 1.0
+			var pts: Array = []
+			for i in n:
+				pts.append(c + Vector2.from_angle(TAU * i / n - PI / 2.0) * r * 0.45)
+			for p in pts:
+				_paint_circle(img, p, r * 0.52, Color("#4f9a4a"))
+			for p in pts:
+				_paint_circle(img, p, r * 0.4, Art.PLANT)
+			for p in pts:
+				_paint_circle(img, p - Vector2(r * 0.12, r * 0.12), r * 0.13, Color("#c8f0b0"))
+			_plant_tex.append(ImageTexture.create_from_image(img))
+	return _plant_tex[v % 2]
+
+static func meat_texture() -> Texture2D:
+	if _meat_tex == null:
+		var s := 64
+		var img := Image.create(s, s, false, Image.FORMAT_RGBA8)
+		var c := Vector2(s, s) / 2.0
+		var poly := PackedVector2Array()
+		for i in 6:
+			poly.append(c + Vector2.from_angle(TAU * i / 6.0 + 0.4) * s * 0.46 * (0.8 + 0.2 * sin(i * 1.7)))
+		for y in s:
+			for x in s:
+				if Geometry2D.is_point_in_polygon(Vector2(x + 0.5, y + 0.5), poly):
+					img.set_pixel(x, y, Art.MEAT)
+		_paint_circle(img, c + Vector2(2, -2), s * 0.14, Color("#f09a9a"))
+		_meat_tex = ImageTexture.create_from_image(img)
+	return _meat_tex
+
 static func plant(ci: CanvasItem, f: Dictionary, t: float) -> void:
-	var v: int = f.v
 	var r: float = f.r
-	var spin := t * 0.3 + v
-	var n := 3 + v % 2
-	for i in n:
-		var p: Vector2 = f.pos + Vector2.from_angle(spin + TAU * i / n) * r * 0.45
-		ci.draw_circle(p, r * 0.52, Color("#4f9a4a"))
-		ci.draw_circle(p, r * 0.4, Art.PLANT)
-		ci.draw_circle(p - Vector2(r * 0.12, r * 0.12), r * 0.13, Color("#c8f0b0"))
+	ci.draw_texture_rect(plant_texture(f.v), Rect2(f.pos - Vector2(r, r), Vector2(r, r) * 2.0), false)
 
 static func meat(ci: CanvasItem, f: Dictionary, t: float) -> void:
-	var v: int = f.v
-	var pts := PackedVector2Array()
-	for i in 6:
-		var a := TAU * i / 6.0 + v * 0.3 + t * 0.2
-		pts.append(f.pos + Vector2.from_angle(a) * f.r * (0.8 + 0.35 * sin(v + i * 1.7)))
-	ci.draw_colored_polygon(pts, Art.MEAT)
-	ci.draw_circle(f.pos + Vector2(1, -1), f.r * 0.3, Color("#f09a9a"))
+	var r: float = f.r * 1.1
+	ci.draw_texture_rect(meat_texture(), Rect2(f.pos - Vector2(r, r), Vector2(r, r) * 2.0), false)
 
 ## Выпавшая часть: светящаяся капсула со значком внутри.
 static func capsule(ci: CanvasItem, cap: Dictionary, t: float, known: bool) -> void:

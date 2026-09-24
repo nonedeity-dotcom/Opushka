@@ -173,12 +173,24 @@ func _text(at: Vector2, s: String, col: Color) -> void:
 
 # --- рисование ------------------------------------------------------------------------
 
+## Замер рисования (читает main при --profile): часть → мкс за кадр.
+var prof := {}
+var _pt := 0
+
+func _mark(name: String) -> void:
+	var now := Time.get_ticks_usec()
+	prof[name] = prof.get(name, 0) + now - _pt
+	_pt = now
+
 func _draw() -> void:
 	if pond == null:
 		return
+	_pt = Time.get_ticks_usec()
 	var view := view_rect()
 	_water(view)
+	_mark("вода")
 	_currents(view)
+	_mark("течения")
 	for l in pond.lairs_near(view.size.length()):
 		_lair(l)
 	var near := view.grow(30.0)
@@ -191,15 +203,18 @@ func _draw() -> void:
 				CellArt.plant(self, f, t)
 			else:
 				CellArt.meat(self, f, t)
+	_mark("логова, круги, еда")
 	for cap in pond.capsules:
 		if near.has_point(cap.pos):
 			CellArt.capsule(self, cap, t, pond.evo.unlocked.has(cap.part))
 	for k in pond.rocks:
 		if view.grow(k.r * 2.0).has_point(k.pos):
 			CellArt.rock(self, k, t)
+	_mark("находки, камни")
 	for m in pond.mobs:
 		if view.grow(m.radius * 3.0).has_point(m.pos):
 			_creature(m)
+	_mark("существа")
 	if pond.mate != null and view.grow(pond.mate.radius * 3.0).has_point(pond.mate.pos):
 		CellArt.mate(self, pond.mate, t)
 	for a in pond.allies:
@@ -215,7 +230,9 @@ func _draw() -> void:
 	if p.invuln > 0.0:
 		draw_arc(p.pos, p.radius * 1.35, 0, TAU, 32, Color(1, 1, 1, 0.3 + 0.3 * sin(t * 12.0)), 2.0, true)
 	_creature(p)
+	_mark("ты и свита")
 	_draw_fx()
+	_mark("эффекты")
 
 func _creature(c: Creature) -> void:
 	var ghost := 1.0 if c.is_player else clampf(c.age / 0.6, 0.0, 1.0)
@@ -249,6 +266,8 @@ func _creature(c: Creature) -> void:
 
 ## Вода: два слоя пылинок с разной глубиной — ближние плывут быстрее дальних.
 func _water(view: Rect2) -> void:
+	# Пылинки воды: два слоя с разной глубиной. Каждый слой — одна команда рисования
+	# (короткие толстые штрихи вместо кружков): кружков были сотни, и на телефоне лагало.
 	var z := camera.zoom.x
 	for layer in [[0.45, 110.0, 0.10, 1.2], [0.75, 150.0, 0.16, 1.8]]:
 		var k: float = layer[0]
@@ -259,12 +278,18 @@ func _water(view: Rect2) -> void:
 		var y0 := floori(area.position.y / cell)
 		var x1 := floori(area.end.x / cell)
 		var y1 := floori(area.end.y / cell)
+		var w := float(layer[3]) * 2.2 / z
+		var pts := PackedVector2Array()
 		for gy in range(y0, y1 + 1):
 			for gx in range(x0, x1 + 1):
 				var h := _hash(gx, gy, int(k * 100.0))
 				var p := Vector2(gx + (h & 255) / 255.0, gy + ((h >> 8) & 255) / 255.0) * cell + shift
 				var drift := Vector2(sin(t * 0.3 + h), cos(t * 0.25 + h * 0.5)) * 6.0 / z
-				draw_circle(p + drift, float(layer[3]) / z * (1.0 + ((h >> 16) & 3) * 0.4), Color(0.75, 0.9, 1.0, float(layer[2])))
+				var len := w * (1.0 + ((h >> 16) & 3) * 0.4)
+				pts.append(p + drift - Vector2(len * 0.5, 0))
+				pts.append(p + drift + Vector2(len * 0.5, 0))
+		if not pts.is_empty():
+			draw_multiline(pts, Color(0.75, 0.9, 1.0, float(layer[2])), w)
 
 static func _hash(x: int, y: int, s: int) -> int:
 	var h := (x * 374761393 + y * 668265263 + s * 2246822519) & 0x7FFFFFFF
@@ -324,10 +349,13 @@ func _draw_fx() -> void:
 
 ## Течения — бегущие штрихи вдоль потока.
 func _currents(view: Rect2) -> void:
+	# Все штрихи течений — одной командой: по отдельности их сотни, и телефон лагал.
 	var z := camera.zoom.x
 	var cell := 70.0 / z
 	var x0 := floori(view.position.x / cell)
 	var y0 := floori(view.position.y / cell)
+	var pts := PackedVector2Array()
+	var cols := PackedColorArray()
 	for gy in range(y0, floori(view.end.y / cell) + 1):
 		for gx in range(x0, floori(view.end.x / cell) + 1):
 			var p := Vector2(gx + 0.5, gy + 0.5) * cell
@@ -338,7 +366,11 @@ func _currents(view: Rect2) -> void:
 			var dir := f / sp
 			var k := fposmod(t * sp / cell + float(_hash(gx, gy, 3) % 100) / 100.0, 1.0)
 			var a := p + dir * (k - 0.5) * cell
-			draw_line(a, a + dir * cell * 0.35, Color(0.8, 0.95, 1.0, 0.18 * minf(1.0, sp / 60.0) * sin(PI * k)), 2.0 / z, true)
+			pts.append(a)
+			pts.append(a + dir * cell * 0.35)
+			cols.append(Color(0.8, 0.95, 1.0, 0.18 * minf(1.0, sp / 60.0) * sin(PI * k)))
+	if not pts.is_empty():
+		draw_multiline_colors(pts, cols, 2.0 / z)
 
 ## Логово: тёмное пятно со светящимся кругом; пустое — если хозяина уже победили.
 func _lair(l: Dictionary) -> void:

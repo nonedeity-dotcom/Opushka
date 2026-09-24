@@ -45,6 +45,10 @@ var _after_mate := false
 var _ach_t := 1.0
 ## Сколько секунд назад было опасно — пока недавно, играет музыка боя.
 var _danger_t := 99.0
+## Замер времени частей кадра (только с --profile): имя → [сумма мкс, раз].
+var _prof := {}
+var _prof_on := false
+var _prof_frames := 0
 
 
 func _ready() -> void:
@@ -250,20 +254,40 @@ func _process(delta: float) -> void:
 	_run_script()
 	if pond == null:
 		return
+	if _prof_on:
+		_prof_frames += 1
+		_prof_add("кадр целиком (delta)", int(delta * 1_000_000.0))
+		for k in view.prof:
+			_prof_add("рисование: " + k, view.prof[k])
+		view.prof.clear()
+		if _prof_frames % 300 == 0:
+			var keys := _prof.keys()
+			keys.sort_custom(func(a, b): return _prof[a][0] > _prof[b][0])
+			for k in keys:
+				print("ЗАМЕР %-28s %7.2f мс" % [k, float(_prof[k][0]) / maxf(1.0, float(_prof[k][1])) / 1000.0])
+			print("ЗАМЕР клеток %d еды %d кругов %d камней %d fps %d" % [pond.mobs.size(), pond.food.size(), pond.colonies.size(), pond.rocks.size(), Engine.get_frames_per_second()])
+			print("ЗАМЕР вызовов рисования %d, примитивов %d, объектов %d, скрипты %.1f мс" % [Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME), Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME), Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME), Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0])
+			_prof.clear()
+	var t0 := Time.get_ticks_usec()
 	evo.played += delta
 	var paused: bool = editor.visible or setup.visible or shop.visible
-	fog.visible = not paused
 	if not paused:
 		pond.view_radius = view.view_radius()
 		pond.step(minf(delta, 0.05), _steer(), _dash)
+		_prof_add("pond.step", Time.get_ticks_usec() - t0)
+		t0 = Time.get_ticks_usec()
 		_dash = false
 		view.effects(pond.events)
 		_handle(pond.events)
+		_prof_add("события", Time.get_ticks_usec() - t0)
+	t0 = Time.get_ticks_usec()
 	hud.refresh(pond)
+	_prof_add("hud.refresh", Time.get_ticks_usec() - t0)
 	if pond == null:
 		return
 	backdrop.drift = pond.player.pos
 	backdrop.biome = pond.biome if pond.biome != "" else "shallows"
+	t0 = Time.get_ticks_usec()
 	_music(delta)
 	_ach_t -= delta
 	if _ach_t <= 0.0:
@@ -276,8 +300,14 @@ func _process(delta: float) -> void:
 	for m in pond.mobs:
 		if m.glow and lights.size() < 8:
 			lights.append(Vector3((xf * m.pos).x, (xf * m.pos).y, m.radius * 3.0 * z))
-	fog.update(xf * pond.player.pos, pond.vision() * (1.25 if pond.player.glow else 1.0) * z, delta, lights)
+	var fog_r := pond.vision() * (1.25 if pond.player.glow else 1.0) * z
+	# Обзор шире экрана — тумана не видно, и незачем считать его на каждом пикселе.
+	var screen_r := get_viewport().get_visible_rect().size.length() / 2.0
+	fog.visible = not paused and fog_r < screen_r * 1.15
+	if fog.visible:
+		fog.update(xf * pond.player.pos, fog_r, delta, lights)
 	_update_arrows()
+	_prof_add("музыка, туман, стрелки", Time.get_ticks_usec() - t0)
 	if _save_in > 0.0:
 		_save_in -= delta
 		if _save_in <= 0.0:
@@ -498,6 +528,14 @@ func _music(delta: float) -> void:
 	_danger_t = 0.0 if danger else _danger_t + delta
 	sound.set_music("fight" if _danger_t < 4.0 else "calm")
 
+func _prof_add(name: String, us: int) -> void:
+	if not _prof_on:
+		return
+	var e: Array = _prof.get(name, [0, 0])
+	e[0] += us
+	e[1] += 1
+	_prof[name] = e
+
 func _buzz(ms: int) -> void:
 	if settings.vibration:
 		Input.vibrate_handheld(ms)
@@ -633,6 +671,7 @@ func _apply_debug_args() -> void:
 		return
 	_debug = true
 	_show_menu = args.has("menu")
+	_prof_on = args.has("profile")
 	evo = Evolution.create(args.get("difficulty", "normal"))
 	_seed = int(args.get("seed", "0"))
 	if args.has("dna"):
