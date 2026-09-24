@@ -211,7 +211,7 @@ func _move(c: Creature, dt: float) -> void:
 		spd *= float(evo.diff().hunt)
 	if c.slow_t > 0.0:
 		spd *= 0.6
-	var want_dir := c.desire if c.is_player else avoid(c, c.desire)
+	var want_dir := c.desire if c.is_player or c.behavior() == "colossus" else avoid(c, c.desire)
 	var goal := want_dir * spd
 	# Во время рывка вода тормозит слабее — разгон доносит до цели.
 	var k := 0.8 if c.dash_t > 0.0 else 4.0
@@ -246,6 +246,7 @@ func _timers(c: Creature, dt: float) -> void:
 	c.invuln -= dt
 	c.calm_t += dt
 	c.scared_t -= dt
+	c.bored_t -= dt
 	c.player_hit_t += dt
 	c.flash = maxf(0.0, c.flash - dt * 4.0)
 	c.bite_anim = maxf(0.0, c.bite_anim - dt * 3.0)
@@ -358,6 +359,8 @@ func _wants_bite(x: Creature, y: Creature) -> bool:
 	if x.is_player or x.ally:
 		return true
 	var def: Dictionary = Content.SPECIES[x.species]
+	if def.behavior == "colossus":
+		return false
 	if def.behavior == "roamer" and not x.giant:
 		return _hunts(x) or y == x.last_attacker
 	return def.behavior == "hunter" or def.get("hunts", false) or y == x.last_attacker
@@ -740,6 +743,10 @@ func _think(m: Creature, dt: float) -> void:
 	if b == "roamer":
 		_roamer_think(m)
 		return
+	if b == "colossus":
+		# Плывёт своей дорогой, ни на кого не смотрит.
+		m.desire = (m.ai_goal - m.pos).normalized() if m.pos.distance_to(m.ai_goal) > 50.0 else Vector2.ZERO
+		return
 	if b == "ambush" and m.revealed_t <= 0.0:
 		_ambush_wait(m)
 		return
@@ -973,10 +980,13 @@ func _manage() -> void:
 	# Хозяева логов дома ждут дольше, но если уплыл совсем далеко — исчезают и они
 	# (вернёшься — логово снова занято, хозяин целый).
 	# Хозяева логов и бродячие гиганты уплывают из памяти позже остальных.
-	mobs = mobs.filter(func(m): return m.pos.distance_to(player.pos) < (far if not is_giant(m) else far + 3000.0))
+	# Гиганты уплывают из памяти чуть позже; колосс — когда совсем скрылся из виду.
+	mobs = mobs.filter(func(m): return m.pos.distance_to(player.pos) < (far + 2.0 * m.radius + 1200.0 if is_colossus(m) else (far if not is_giant(m) else far + 600.0)))
+	if colossus != null and not mobs.has(colossus):
+		colossus = null
 	capsules = capsules.filter(func(c): return c.pos.distance_to(player.pos) < far)
 	if mode != "arena":
-		for i in mini(_mob_target() - mobs.size(), 5):
+		for i in mini(_mob_target() - mobs.size() + (1 if colossus != null else 0), 5):
 			_spawn_mob()
 	rocks = rocks.filter(func(k): return k.pos.distance_to(player.pos) < far)
 	if rocks.size() < _rock_target():
@@ -1343,19 +1353,25 @@ func _do_splits() -> void:
 
 # --- бродячие гиганты -----------------------------------------------------------------
 
-var _roam_t := 45.0
+var _roam_t := 15.0
+## Колосс рядом (или null): огромный, неуязвимый, проплывает мимо.
+var colossus: Creature = null
+var _colossus_t := 90.0
 
 ## Гиганты плавают поодиночке: вокруг не больше одного. Раз в минуту-две проплывает новый —
 ## чаще тот, что появился на твоём размере, реже старые знакомые.
 func _roamers(dt: float) -> void:
 	if mode == "arena":
 		return
-	if mobs.any(func(m): return is_giant(m)):
+	_colossi(dt)
+	# Гигант, что уплыл за край и дальше, новому не мешает.
+	var near := view_radius + 800.0
+	if mobs.any(func(m): return is_giant(m) and m.pos.distance_to(player.pos) < near + m.radius):
 		return
 	_roam_t -= dt
 	if _roam_t > 0.0:
 		return
-	_roam_t = rng.randf_range(60.0, 120.0)
+	_roam_t = rng.randf_range(25.0, 45.0)
 	var pick := pick_giant()
 	if pick == "":
 		return
@@ -1389,15 +1405,20 @@ func pick_giant() -> String:
 func _roamer_think(m: Creature) -> void:
 	var def: Dictionary = Content.SPECIES[m.species]
 	var close := player.alive and player.hidden_t <= 0.0 and player.pos.distance_to(m.pos) < m.sight * 1.1
+	# Охотиться гигант начинает, только если ты совсем рядом и он ещё не наскучил погоней.
+	var hunt_close := player.alive and player.hidden_t <= 0.0 and player.pos.distance_to(m.pos) < m.sight * 0.75 + m.radius
 	# Полоса здоровья сверху — пока гигант бьётся с тобой.
 	var engaged := close and (m.ai_state == "chase" or (m.last_attacker == player and m.calm_t < 6.0))
 	if engaged:
 		boss_active = m
 	elif boss_active == m:
 		boss_active = null
-	if (def.get("hunts", false) or m.aggro) and close and m.resting <= 0.0:
+	var hunting := m.ai_state == "chase" and close
+	if (def.get("hunts", false) or m.aggro) and (hunt_close or hunting) and m.resting <= 0.0 and m.bored_t <= 0.0:
 		if m.stamina <= 0.0:
+			# Выдохся — отстаёт и надолго теряет интерес: плывёт дальше своей дорогой.
 			m.resting = REST_TIME
+			m.bored_t = GIANT_BORED
 			m.ai_state = "rest"
 			m.desire *= 0.2
 			return
@@ -1658,9 +1679,44 @@ func _shake_off() -> void:
 ## Через сколько секунд паразит насыщается и отпадает сам (рывком — сразу).
 const PARASITE_FULL := 12.0
 ## Гиганты бьют слабее своего размера — иначе одолеть их было бы нельзя.
-const GIANT_DAMAGE := 0.35
+const GIANT_DAMAGE := 0.28
+## Сколько секунд гигант не охотится после погони.
+const GIANT_BORED := 25.0
 ## Бывшие гиганты (ты их перерос) — стаей, но бьют слабее обычного.
 const FORMER_GIANT_DAMAGE := 0.6
+
+## Колосс ли это — огромный и неуязвимый.
+static func is_colossus(m: Creature) -> bool:
+	return not m.is_player and not m.ally and Content.SPECIES.get(m.species, {}).get("behavior", "") == "colossus"
+
+## Раз в несколько минут мимо проплывает колосс: наискось, недалеко от тебя, медленно.
+func _colossi(dt: float) -> void:
+	if colossus != null:
+		# «Ого!» — когда он и правда вплывает в кадр, а не когда появился за краем.
+		if not colossus.announced and colossus.pos.distance_to(player.pos) - colossus.radius < view_radius * 0.85:
+			colossus.announced = true
+			events.append({"t": "colossus", "species": colossus.species, "pos": colossus.pos})
+		return
+	_colossus_t -= dt
+	if _colossus_t > 0.0:
+		return
+	_colossus_t = rng.randf_range(150.0, 240.0)
+	var ids: Array = Content.SPECIES.keys().filter(func(id): return Content.SPECIES[id].behavior == "colossus")
+	spawn_colossus(ids[rng.randi() % ids.size()])
+
+## Выпустить колосса (и для проверок): из-за края, путь — мимо тебя сбоку.
+func spawn_colossus(id: String) -> Creature:
+	var def: Dictionary = Content.SPECIES[id]
+	var size: float = def.size
+	var dir := Vector2.from_angle(rng.randf() * TAU)
+	var side := dir.orthogonal() * (view_radius * rng.randf_range(0.25, 0.6) + size * 0.5) * (1.0 if rng.randf() < 0.5 else -1.0)
+	var m := spawn(id, player.pos + dir * (view_radius + size * 1.6) + side, false, size)
+	m.invuln = 1e9
+	m.speed = 42.0
+	m.ai_goal = player.pos - dir * (view_radius + size * 2.0 + 4000.0) + side
+	m.heading = (m.ai_goal - m.pos).angle()
+	colossus = m
+	return m
 
 ## Гигант ли это (бродячий, один на всю округу).
 static func is_giant(m: Creature) -> bool:

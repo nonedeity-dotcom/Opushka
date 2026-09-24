@@ -900,11 +900,11 @@ func _atlas_fits(id: String) -> bool:
 	var danger: bool = def.behavior == "hunter" or def.get("hunts", false) or def.behavior == "shooter" or def.behavior == "parasite" or def.behavior == "ambush"
 	match atlas_filter:
 		"calm":
-			return not danger and def.behavior != "roamer"
+			return not danger and def.behavior != "roamer" and def.behavior != "colossus"
 		"danger":
-			return danger and def.behavior != "roamer"
+			return danger and def.behavior != "roamer" and def.behavior != "colossus"
 		"giant":
-			return def.behavior == "roamer"
+			return def.behavior == "roamer" or def.behavior == "colossus"
 	return true
 
 ## Кого ещё не встречал: тёмный силуэт и с какого размера он водится.
@@ -924,6 +924,8 @@ func _unknown_card(id: String) -> PanelContainer:
 	var when := "Живёт рядом — поищи" if lvl <= evo.level() else "Встречается с размера %d" % lvl
 	if def.behavior == "roamer":
 		when = ("Бродячий гигант · " + when.to_lower())
+	elif def.behavior == "colossus":
+		when = "Колосс — проплывает изредка, на любом размере"
 	text.add_child(Kit.muted(when, 17))
 	row.add_child(text)
 	var card := Kit.card(row, Color(0.07, 0.09, 0.11), 20, 12)
@@ -942,7 +944,7 @@ func _species_card(id: String) -> PanelContainer:
 	text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var kind: String = {"grazer": "мирный", "skittish": "пугливый", "drifter": "дрейфует", "hunter": "хищник", "boss": "великан",
 		"giant": "гигант", "parasite": "паразит", "shooter": "стрелок", "ambush": "обманка",
-		"roamer": "бродячий гигант"}.get(def.behavior, "")
+		"roamer": "бродячий гигант", "colossus": "колосс — не ранить"}.get(def.behavior, "")
 	if def.get("splits", false):
 		kind += ", делится"
 	if def.has("school"):

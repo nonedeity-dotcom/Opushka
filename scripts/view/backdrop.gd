@@ -5,7 +5,7 @@ extends Control
 var t := 0.0
 ## Смещение камеры — лучи чуть сдвигаются, когда плывёшь, и вода не кажется картинкой.
 var drift := Vector2.ZERO
-## Цвет воды плавно меняется с размером: чем больше клетка, тем глубже и темнее океан.
+## Цвет воды плавно меняется с размером: на каждом — свой оттенок, яркость та же.
 var _top := Color("#1d5566")
 var _bottom := Color("#071219")
 var _light := 1.0
@@ -81,7 +81,7 @@ func _process(delta: float) -> void:
 	var k := 1.0 - exp(-0.8 * delta)
 	_top = _top.lerp(Color(water[0]), k)
 	_bottom = _bottom.lerp(Color(water[1]), k)
-	_light = lerpf(_light, lerpf(1.0, 0.45, (level - 1) / 9.0), k)
+	_light = lerpf(_light, 1.0, k)
 	_shade = lerpf(_shade, shade, 1.0 - exp(-2.0 * delta))
 	# События: цветение — вода зеленеет и светлеет, мёртвая зона — тускнеет.
 	if event == "bloom":
@@ -90,8 +90,8 @@ func _process(delta: float) -> void:
 	elif event == "dead":
 		_top = _top.lerp(Color("#15202a"), 0.7 * event_k * k * 3.0)
 		_bottom = _bottom.lerp(Color("#03060a"), 0.7 * event_k * k * 3.0)
-	# Блики: у поверхности сильнее, в глубине гаснут; тень гиганта и мёртвая зона их гасят.
-	var glint := clampf(1.0 - (level - 1) / 6.0, 0.0, 1.0) * 0.4
+	# Блики на любом размере; тень гиганта и мёртвая зона их гасят.
+	var glint := 0.32
 	if event == "bloom":
 		glint = maxf(glint, 0.2 * event_k)
 	if event == "dead":

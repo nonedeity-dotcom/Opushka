@@ -522,3 +522,39 @@ func test_волна_роста(c) -> void:
 	c.ok("паразит отвалился", par.host == null)
 	_run(p, 1.0)
 	c.ok("хищника отбросило, он держится подальше", h.pos.distance_to(p.player.pos) > d0 + 60.0 and h.scared_t > 0.0)
+
+func test_колосс(c) -> void:
+	var p := _pond(_evo_with([["jaws", 0], ["spike", 90]], 0.0))
+	p._safe_t = 0.0
+	var m := p.spawn_colossus("bezdonny_kit")
+	c.ok("за краем — ещё не объявлен", not p.events.any(func(e): return e.t == "colossus"))
+	m.pos = p.player.pos + Vector2(m.radius + 100.0, 0)
+	p._colossi(0.1)
+	c.ok("вплыл в кадр — «ого!»", p.events.any(func(e): return e.t == "colossus"))
+	c.ok("огромный — во много раз больше тебя", m.size_r > p.player.size_r * 12.0)
+	var hp := m.hp
+	p._hurt(m, 999.0, p.player, "bite")
+	c.ok("его не ранить", m.hp == hp and m.alive)
+	c.ok("сам не кусает", not p._wants_bite(m, p.player))
+	var start := m.pos
+	_run(p, 3.0)
+	c.ok("плывёт своей дорогой", m.pos.distance_to(start) > 60.0)
+	var big := _pond(_evo_with([["jaws", 0]], 3000.0))
+	var m2 := big.spawn_colossus("bezdonny_kit")
+	c.ok("выросшему он «меньше»: размер свой, не от тебя", is_equal_approx(m2.size_r, m.size_r) and m2.size_r / big.player.size_r < m.size_r / p.player.size_r)
+	c.ok("в общий счёт существ не идёт", p.colossus == m)
+
+func test_гиганты_чаще(c) -> void:
+	var p := _pond(_evo_with([["jaws", 0]], 40.0))
+	p.spawning = true
+	var seen := 0
+	for i in 20 * 90:
+		p.step(0.05, Vector2.ZERO)
+		for e in p.events:
+			if e.t == "roamer":
+				seen += 1
+		# Уплывший гигант — далеко, как будто проплыл.
+		for m in p.mobs:
+			if Pond.is_giant(m) and m.age > 20.0:
+				m.pos = p.player.pos + Vector2(p.view_radius + 5000.0, 0)
+	c.ok("за полторы минуты — хотя бы два гиганта (%d)" % seen, seen >= 2)

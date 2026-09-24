@@ -522,6 +522,11 @@ func _handle(events: Array) -> void:
 				if e.to_player:
 					_buzz(30)
 					hud.toast("Это была не водоросль — обманка! С двумя глазами их видно")
+			"colossus":
+				sound.play("deep", 0.7, 0.3)
+				sound.play("whale", 0.6, 0.6)
+				_buzz(60)
+				hud.announce("Ого! " + Content.SPECIES[e.species].name, "Колосс проплывает мимо. Его не ранить — просто смотри. Можно прилипнуть и прокатиться")
 			"roamer":
 				sound.play("whale" if e.species == "kit" else "boom", 1.0, 0.5)
 				hud.announce(Content.SPECIES[e.species].name, "Бродячий гигант проплывает рядом. " + Content.SPECIES[e.species].hint)
@@ -701,7 +706,7 @@ func _update_minimap() -> void:
 		if (m.invisible and p.eyes < 1.0) or (m.behavior() == "ambush" and m.revealed_t <= 0.0 and p.eyes < 2.0):
 			continue
 		# Гигантов на карте нет — их замечаешь сам, по теням и голосу.
-		if Pond.is_giant(m):
+		if Pond.is_giant(m) or Pond.is_colossus(m):
 			continue
 		if pond._hunts(m) and m.radius >= p.radius * 0.8:
 			put.call(m.pos, Art.DANGER, 3.5)
@@ -977,6 +982,9 @@ func _run_script() -> void:
 			up.position = from + Vector2(0, float(q[2]))
 			up.pressed = false
 			Input.parse_input_event(up)
+		"colossus":
+			var cm := pond.spawn_colossus(p[1])
+			cm.pos = pond.player.pos + Vector2(cm.radius * 0.9 + 150.0, -cm.radius * 0.3)
 		"giant":
 			# Позвать гиганта рядом (для снимков).
 			var g := pond.spawn(p[1], pond.player.pos + Vector2(320, 0))

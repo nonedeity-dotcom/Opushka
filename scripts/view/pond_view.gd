@@ -34,7 +34,19 @@ func setup(p: Pond) -> void:
 ## Глазки отодвигают ещё немного.
 func target_zoom() -> float:
 	var p := pond.player
-	return 2.3 * pow(16.0 / p.size_r, 0.85) / (1.0 + 0.06 * minf(p.eyes, 4.0))
+	var z := 2.3 * pow(16.0 / p.size_r, 0.85) / (1.0 + 0.06 * minf(p.eyes, 4.0))
+	# Колосс рядом — камера отъезжает, чтобы он влез в кадр и было видно, какой он большой.
+	var c := pond.colossus
+	if c != null:
+		var near := clampf(1.0 - (c.pos.distance_to(p.pos) - c.radius) / (view_radius_at(z) * 1.2), 0.0, 1.0)
+		# Чем больше он для тебя, тем дальше отъезд (маленькому — почти вдвое).
+		var k := clampf(c.radius / (p.radius * 8.0), 0.45, 1.1)
+		z /= 1.0 + k * near
+	return z
+
+## Полдиагонали экрана в точках мира при таком зуме.
+func view_radius_at(z: float) -> float:
+	return (get_viewport_rect().size / z).length() / 2.0
 
 func view_rect() -> Rect2:
 	var size := get_viewport_rect().size / camera.zoom
