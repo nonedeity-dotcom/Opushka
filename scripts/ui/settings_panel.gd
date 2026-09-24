@@ -1,5 +1,5 @@
-## Настройки игры. Всё меняется сразу, без кнопки «сохранить»: переключил джойстик на
-## крестовину — закрыл — играешь.
+## Настройки игры. Всё меняется сразу, без кнопки «сохранить»: переключил управление —
+## закрыл — играешь.
 extends Control
 
 signal closed
@@ -7,7 +7,7 @@ signal changed(settings: Settings)
 signal new_world
 
 var settings: Settings
-var village: Village
+var evo: Evolution
 var landscape := false
 var _arming := false
 
@@ -32,9 +32,9 @@ func _ready() -> void:
 	resized.connect(_place)
 
 
-func open(s: Settings, v: Village, landscape_: bool) -> void:
+func open(s: Settings, e: Evolution, landscape_: bool) -> void:
 	settings = s
-	village = v
+	evo = e
 	landscape = landscape_
 	_arming = false
 	visible = true
@@ -66,8 +66,7 @@ func rebuild() -> void:
 	_place()
 
 	var head := Kit.hbox(12)
-	var gear := preload("res://scripts/ui/bag_panel.gd").Icon.new()
-	gear.icon = "settings"
+	var gear := Gear.new()
 	gear.custom_minimum_size = Vector2(44, 44)
 	head.add_child(gear)
 	var title := Kit.label("Настройки игры", 32, Art.TEXT, true)
@@ -89,37 +88,33 @@ func rebuild() -> void:
 	scroll.set_deferred("scroll_vertical", _scroll_pos)
 
 	_section(col, "Управление")
-	_choice(col, "Как ходить", "control", [["stick", "Джойстик"], ["dpad", "Крестовина"], ["tap", "Касанием"]])
+	_choice(col, "Как плыть", "control", [["stick", "Джойстик"], ["follow", "За пальцем"]])
 	var hint := {
-		"stick": "Держи палец на круге и веди куда нужно — в любую сторону, чем дальше, тем быстрее. Другим пальцем можно жать «Срубить».",
-		"dpad": "Четыре стрелки на одном круге: палец можно переводить со стрелки на стрелку.",
-		"tap": "Кнопок для ходьбы нет: нажми на клетку карты, и персонаж дойдёт сам.",
+		"stick": "Держи палец на круге и веди куда нужно — чем дальше от середины, тем быстрее. Другим пальцем жми «Рывок».",
+		"follow": "Держи палец где угодно на экране — клетка плывёт к нему. «Рывок» — другим пальцем.",
 	}
 	col.add_child(Kit.muted(hint[settings.control], 20))
-	if settings.control != "tap":
+	if settings.control == "stick":
 		_choice(col, "Где джойстик", "pad_side", [["left", "Слева"], ["right", "Справа"]])
-		_toggle(col, "Ходить нажатием на карту", "Нажал на клетку — дошёл сам, нажал на дерево — подошёл к нему", "tap_to_walk")
-	_choice(col, "Скорость ходьбы", "speed", [["slow", "Спокойно"], ["normal", "Обычно"], ["fast", "Быстро"]])
+	else:
+		_choice(col, "Где «Рывок»", "pad_side", [["left", "Справа"], ["right", "Слева"]])
 	_choice(col, "Размер кнопок", "buttons", [["small", "Меньше"], ["normal", "Обычные"], ["large", "Крупнее"]])
 
 	_section(col, "Звук")
-	_toggle(col, "Звуки", "Шаги, топор, ягоды, ремесло, сон", "sound")
-	_toggle(col, "Звуки леса", "Днём ветер и птицы, ночью сверчки", "ambience")
+	_toggle(col, "Звуки", "Еда, укусы, находки, рост", "sound")
+	_toggle(col, "Звуки воды", "Тихий гул глубины", "ambience")
 	if settings.sound or settings.ambience:
 		_choice(col, "Громкость", "volume", [["quiet", "Тихо"], ["normal", "Средне"], ["loud", "Громко"]])
-	_toggle(col, "Вибрация", "Лёгкий отклик, когда что-то собрал или построил", "vibration")
+	_toggle(col, "Вибрация", "Отклик на укусы, победы и находки", "vibration")
 
 	_section(col, "Экран")
 	_choice(col, "Как держать телефон", "landscape", [[false, "Вертикально"], [true, "Горизонтально"]])
 	_toggle(col, "Показывать задачу", "Строка с подсказкой, что делать дальше", "show_goal")
-	_toggle(col, "Рамка перед персонажем", "Подсвечивает клетку, к которой относится кнопка действия", "show_target")
+	_toggle(col, "Стрелки к находкам", "У края экрана — куда уплыла выпавшая часть; с глазками — откуда плывёт хищник", "arrows")
 
-	_section(col, "Мир")
+	_section(col, "Твой вид")
 	var stats := Kit.hbox(10)
-	var gathered := 0
-	for k in village.gathered:
-		gathered += village.gathered[k]
-	for pair in [["День", str(village.day())], ["Задачи", "%d/%d" % [village.goals_done.size(), Content.GOALS.size()]], ["Собрано", str(gathered)], ["Построек", str(village.built.size())]]:
+	for pair in [["Размер", str(evo.level())], ["Частей", "%d/%d" % [evo.unlocked.size(), Content.PARTS.size()]], ["Побед", str(evo.stats.get("kills", 0))], ["Задачи", "%d/%d" % [evo.goals_done.size(), Content.GOALS.size()]]]:
 		var box := Kit.vbox(0)
 		box.alignment = BoxContainer.ALIGNMENT_CENTER
 		var v := Kit.label(pair[1], 30, Art.TEXT, true)
@@ -136,7 +131,7 @@ func rebuild() -> void:
 	var danger := Button.new()
 	danger.focus_mode = Control.FOCUS_NONE
 	danger.custom_minimum_size = Vector2(0, 64)
-	danger.text = "Точно? Нажми ещё раз — этот мир пропадёт" if _arming else "Начать новый мир"
+	danger.text = "Точно? Нажми ещё раз — вид пропадёт" if _arming else "Начать с одной клетки"
 	var bg := Art.ACCENT if _arming else Color(0, 0, 0, 0)
 	danger.add_theme_stylebox_override("normal", Kit.box(bg, 18, Art.ACCENT))
 	danger.add_theme_stylebox_override("hover", Kit.box(bg, 18, Art.ACCENT))
@@ -148,8 +143,8 @@ func rebuild() -> void:
 			_arming = false
 			new_world.emit()
 		else:
-			# Новый мир — только со второго нажатия: одним случайным касанием месяцы игры
-			# не стираются.
+			# Начать заново — только со второго нажатия: одним случайным касанием месяцы
+			# игры не стираются.
 			_arming = true
 			rebuild()
 			get_tree().create_timer(4.0).timeout.connect(func():
@@ -157,7 +152,7 @@ func rebuild() -> void:
 					_arming = false
 					rebuild()))
 	col.add_child(danger)
-	col.add_child(Kit.muted("Новый лес, новая поляна, пустая сумка. Настройки остаются.", 20))
+	col.add_child(Kit.muted("Снова крошечная клетка: вся ДНК, части и задачи — с нуля. Настройки остаются.", 20))
 	var pad := Control.new()
 	pad.custom_minimum_size = Vector2(0, 30)
 	col.add_child(pad)
@@ -225,3 +220,10 @@ class Switch:
 		var r := Rect2(Vector2(0, 6), Vector2(84, 36))
 		draw_style_box(Kit.box(Art.GREEN_DARK if on else Art.CARD_BORDER, 18, Color(0, 0, 0, 0), 0), r)
 		draw_circle(Vector2(66 if on else 18, 24), 15, Art.GREEN if on else Art.MUTED)
+
+class Gear:
+	extends Control
+
+	func _draw() -> void:
+		Icons.draw(self, "settings", Rect2(Vector2.ZERO, size), Art.GREEN)
+

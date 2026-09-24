@@ -1,0 +1,123 @@
+## Твой вид: рост, ДНК, редактор тела, находки, задачи, сохранение.
+extends RefCounted
+
+
+func test_старт(c) -> void:
+	var e := Evolution.create()
+	c.eq("первый размер", e.level(), 1)
+	c.eq("фильтр и реснички", e.body.map(func(p): return p.id), ["filter", "cilia"])
+	c.eq("травоядный", e.diet(), "plant")
+	c.eq("свободной ДНК — остаток стартовой", e.dna_free(), Content.START_DNA - _cost("filter") - _cost("cilia"))
+	c.eq("мест на теле", e.slots(), 3)
+
+func _cost(id: String) -> int:
+	return Content.PARTS[id].cost
+
+func test_рост(c) -> void:
+	var e := Evolution.create()
+	var two: float = Content.LEVELS[1].dna
+	var three: float = Content.LEVELS[2].dna
+	c.ok("чуть меньше порога — ещё не вырос", not e.add_dna(two - 1))
+	c.ok("порог — вырос", e.add_dna(1))
+	c.eq("второй размер", e.level(), 2)
+	c.ok("и клетка больше", e.radius() > Content.radius_for(1))
+	c.eq("в начале размера полоска пустая", e.growth(), 0.0)
+	e.add_dna((three - two) / 2.0)
+	c.eq("полпути до третьего", e.growth(), 0.5)
+	e.add_dna(10000)
+	c.eq("выше десятого не растёт", e.level(), Content.LEVELS.size())
+	c.eq("полоска полная", e.growth(), 1.0)
+
+func test_редактор(c) -> void:
+	var e := Evolution.create()
+	c.eq("неоткрытую часть не поставить", e.place("spike", 90).ok, false)
+	e.unlocked.spike = 1
+	c.ok("не хватает ДНК", e.place("spike", 90).message.contains("Не хватает ДНК"))
+	var dna: float = Content.LEVELS[1].dna
+	e.add_dna(dna)
+	var base := int(dna) + Content.START_DNA - _cost("filter") - _cost("cilia")
+	var put := e.place("spike", 90)
+	c.ok("шип поставлен", put.ok and e.body.size() == 3)
+	c.eq("ДНК потрачена", e.dna_free(), base - _cost("spike"))
+	c.ok("рядом тесно", e.can_place("spike", 105).reason.begins_with("Тесно"))
+	c.ok("второй размер — четыре места", e.place("spike", -90).ok)
+	c.ok("пятой части места нет", e.can_place("spike", 45).reason.begins_with("Нет места"))
+	var off := e.remove(3)
+	c.ok("убрал — ДНК вернулась", off.ok and e.dna_free() == base - _cost("spike"))
+	e.remove(2)
+	c.eq("углы по сетке", e.place("spike", 97).ok and e.body[-1].a == 90, true)
+
+func test_один_рот(c) -> void:
+	var e := Evolution.create()
+	e.unlocked.jaws = 1
+	e.add_dna(40)
+	var put := e.place("jaws", 0)
+	c.ok("челюсти вместо фильтра", put.ok)
+	c.eq("рот один", e.body.filter(func(p): return Content.is_mouth(p.id)).size(), 1)
+	c.eq("теперь хищник", e.diet(), "meat")
+	c.ok("задача «кем быть»", e.check_goals().any(func(g): return g.id == "diet"))
+
+func test_зеркало(c) -> void:
+	var e := Evolution.create()
+	e.unlocked.spike = 1
+	e.add_dna(100)
+	var put := e.place("spike", 60, true)
+	c.ok("поставлено два", put.ok and e.body.filter(func(p): return p.id == "spike").size() == 2)
+	c.eq("второй — зеркально", e.body[-1].a, -60)
+
+func test_находки(c) -> void:
+	var e := Evolution.create()
+	var first := e.collect("spike")
+	c.ok("новая часть", first.new and e.unlocked.spike == 1)
+	var again := e.collect("spike")
+	c.ok("первая копия — сразу второй уровень", not again.new and again.up and e.unlocked.spike == 2)
+	var shard := e.collect("spike")
+	c.ok("дальше копии копятся: 1 из 2", not shard.up and shard.have == 1 and shard.need == 2 and e.unlocked.spike == 2)
+	c.ok("вторая — третий уровень", e.collect("spike").up and e.unlocked.spike == 3)
+	var copies := 1  # та, что открыла часть
+	copies += 1 + 2
+	while e.unlocked.spike < Content.PART_MAX_LEVEL:
+		e.collect("spike")
+		copies += 1
+	c.eq("до пятого — десять копий после первой", copies - 1, 1 + 2 + 3 + 4)
+	var bonus := e.collect("spike")
+	c.eq("на пятом — ДНК вместо уровня", bonus.dna, 10)
+	c.ok("сила растёт с уровнем", Content.power(3) > Content.power(1))
+
+func test_задачи(c) -> void:
+	var e := Evolution.create()
+	c.eq("первая — поесть", e.current_goal().id, "eat")
+	e.stats.plants = 10
+	c.eq("съел — отмечено", e.check_goals().map(func(g): return g.id), ["eat"])
+	c.eq("второй раз не отмечается", e.check_goals(), [])
+
+func test_сохранение(c) -> void:
+	var e := Evolution.create()
+	e.add_dna(123)
+	e.unlocked.spike = 3
+	e.shards.spike = 2
+	e.place("spike", 90, true)
+	e.color = 3
+	e.name = "Колобок"
+	e.seen.kusaka = true
+	e.kills_by.kusaka = 2
+	e.stats.kills = 2
+	var copy := Evolution.from_dict(JSON.parse_string(JSON.stringify(e.to_dict())))
+	c.eq("туда-обратно без потерь", copy.to_dict(), e.to_dict())
+	c.eq("мусор — ничего", Evolution.from_dict("x"), null)
+	var odd := Evolution.from_dict({"dna_total": 0, "unlocked": {"rocket": 1, "spike": 9}, "body": [{"id": "rocket", "a": 0}, {"id": "spike", "a": 90}, {"id": "spike", "a": -90}, {"id": "spike", "a": 180}]})
+	c.eq("чужое выброшено, уровень в пределах", odd.unlocked, {"filter": 1, "cilia": 1, "spike": 5})
+	c.eq("слишком дорогое тело — стартовое", odd.body, Content.START_PARTS)
+
+func test_справочник(c) -> void:
+	for sid in Content.SPECIES:
+		var def: Dictionary = Content.SPECIES[sid]
+		var has: Array = def.parts.map(func(p): return p[0])
+		c.ok("%s роняет только своё" % def.name, def.drops.all(func(d): return has.has(d[0])))
+		c.ok("%s: части настоящие" % def.name, has.all(func(p): return Content.PARTS.has(p)))
+	var found := {}
+	for sid in Content.SPECIES:
+		for d in Content.SPECIES[sid].drops:
+			found[d[0]] = true
+	var missing := Content.PARTS.keys().filter(func(p): return not found.has(p) and not Content.START_UNLOCKED.has(p))
+	c.eq("каждую часть можно где-то добыть", missing, [])

@@ -1,40 +1,33 @@
-## Настройки «Опушки» — этого телефона: управление, звук, экран. Хранятся в user://.
+## Настройки этого телефона: управление, звук, экран. Хранятся в user://.
 class_name Settings
 extends RefCounted
 
 const PATH := "user://settings.json"
 
-## Джойстик, крестовина или ходьба только касанием по карте.
+## Джойстик или «плыть за пальцем»: держишь палец на экране — клетка плывёт к нему.
 var control := "stick"
 var pad_side := "left"
 var buttons := "normal"
-var speed := "normal"
-var tap_to_walk := true
 var sound := true
 var volume := "normal"
 var ambience := true
 var vibration := true
 var landscape := false
 var show_goal := true
-var show_target := true
+## Стрелки у края экрана: к выпавшим частям, а с глазками — и к хищникам.
+var arrows := true
 
-## Клеток в секунду.
-const SPEED := {"slow": 2.3, "normal": 3.1, "fast": 4.1}
 const BUTTON_SCALE := {"small": 0.85, "normal": 1.0, "large": 1.18}
 ## Громкость в децибелах: эффекты и фон. Фон заметно тише — он не должен спорить с делом.
 const VOLUME := {"quiet": [-14.0, -24.0], "normal": [-6.0, -16.0], "loud": [0.0, -10.0]}
 
 const CHOICES := {
-	"control": ["stick", "dpad", "tap"],
+	"control": ["stick", "follow"],
 	"pad_side": ["left", "right"],
 	"buttons": ["small", "normal", "large"],
-	"speed": ["slow", "normal", "fast"],
 	"volume": ["quiet", "normal", "loud"],
 }
-const FLAGS := ["tap_to_walk", "sound", "ambience", "vibration", "landscape", "show_goal", "show_target"]
-
-func can_tap_walk() -> bool:
-	return control == "tap" or tap_to_walk
+const FLAGS := ["sound", "ambience", "vibration", "landscape", "show_goal", "arrows"]
 
 func to_dict() -> Dictionary:
 	var d := {}

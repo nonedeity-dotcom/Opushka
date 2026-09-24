@@ -1,9 +1,9 @@
-; Опушка — спокойная игра про лес и деревню.
+; Эволюция — от одной клетки: ешь, расти, добывай части и собирай себе тело.
 config_version=5
 
 [application]
 
-config/name="Опушка"
+config/name="Эволюция"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.3", "GL Compatibility")
 config/icon="res://icon.svg"
@@ -26,4 +26,4 @@ textures/vram_compression/import_etc2_astc=true
 
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
-environment/defaults/default_clear_color=Color(0.07, 0.08, 0.1, 1)
+environment/defaults/default_clear_color=Color(0.043, 0.11, 0.15, 1)

@@ -1,50 +1,63 @@
-## Всё, что поверх мира: день и время, сытость, задача, сообщения, вещи и кнопки.
+## Всё, что поверх океана: размер и рост, ДНК, здоровье, задача, сообщения и кнопки.
 ##
 ## Раскладка считается от размера экрана, а не якорями: джойстик может стоять слева или
 ## справа, экран — лежать или стоять, и одна функция расставляет всё под любой случай.
 extends Control
 
 const TouchPad := preload("res://scripts/ui/touch_pad.gd")
-const ActionButton := preload("res://scripts/ui/action_button.gd")
+const DashButton := preload("res://scripts/ui/dash_button.gd")
 const RoundButton := preload("res://scripts/ui/round_button.gd")
+const Indicators := preload("res://scripts/ui/indicators.gd")
 
-signal act_pressed
-signal bag_pressed
+signal dash_pressed
+signal editor_pressed
 signal settings_pressed
 signal rotate_pressed
-signal eat_pressed
-signal pickup_pressed
-signal pad_moved(vector: Vector2)
 
 var pad: Control
-var action: Control
-var bag_btn: Button
-var eat_btn: Button
-var pickup_btn: Button
+var dash: Control
+var editor_btn: Button
 var rotate_btn: Button
 var settings_btn: Button
-var day_pill: Control
-var food_pill: Control
+var size_pill: Control
+var dna_pill: Control
+var hp_bar: Control
 var goal_card: PanelContainer
 var goal_title: Label
 var goal_hint: Label
 var toast_box: PanelContainer
 var toast_label: Label
-var hotbar: Button
+var banner: VBoxContainer
+var banner_title: Label
+var banner_sub: Label
+var indicators: Control
+var hurt_flash: ColorRect
 
 var _settings: Settings
 var _landscape := false
 var _toast_tween: Tween
+var _banner_tween: Tween
 
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
-	day_pill = DayPill.new()
-	add_child(day_pill)
-	food_pill = FoodPill.new()
-	add_child(food_pill)
+	hurt_flash = ColorRect.new()
+	hurt_flash.color = Color(0.8, 0.1, 0.1, 0.0)
+	hurt_flash.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hurt_flash.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(hurt_flash)
+
+	indicators = Indicators.new()
+	add_child(indicators)
+
+	size_pill = SizePill.new()
+	add_child(size_pill)
+	dna_pill = DnaPill.new()
+	add_child(dna_pill)
+	hp_bar = HpBar.new()
+	add_child(hp_bar)
 
 	rotate_btn = _round("rotate", "Повернуть экран", 64)
 	rotate_btn.pressed.connect(func(): rotate_pressed.emit())
@@ -53,47 +66,52 @@ func _ready() -> void:
 
 	goal_title = Kit.label("", 22, Art.TEXT, true)
 	goal_hint = Kit.label("", 18, Art.MUTED)
+	goal_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	var goal_text := Kit.vbox(0)
+	goal_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	goal_text.add_child(goal_title)
 	goal_text.add_child(goal_hint)
 	var goal_row := Kit.hbox(12)
 	var flag := IconBox.new()
 	flag.icon = "flag"
-	flag.color = Art.GREEN
 	flag.custom_minimum_size = Vector2(34, 34)
 	goal_row.add_child(flag)
 	goal_row.add_child(goal_text)
-	goal_card = Kit.card(goal_row, Color(0.11, 0.125, 0.157, 0.9), 18, 14)
+	goal_card = Kit.card(goal_row, Color(0.06, 0.1, 0.13, 0.82), 18, 14)
 	goal_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(goal_card)
 
 	toast_label = Kit.label("", 22)
 	toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	toast_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	toast_box = Kit.card(toast_label, Color(0.07, 0.08, 0.1, 0.88), 20, 16)
+	toast_box = Kit.card(toast_label, Color(0.04, 0.07, 0.09, 0.88), 20, 16)
 	toast_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	toast_box.modulate.a = 0.0
 	add_child(toast_box)
 
-	hotbar = Hotbar.new()
-	hotbar.pressed.connect(func(): bag_pressed.emit())
-	add_child(hotbar)
+	banner = Kit.vbox(4)
+	banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	banner_title = Kit.label("", 48, Art.GOLD, true)
+	banner_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	banner_sub = Kit.label("", 24, Art.TEXT)
+	banner_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	banner_sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	for l in [banner_title, banner_sub]:
+		l.add_theme_constant_override("outline_size", 8)
+		l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.6))
+	banner.add_child(banner_title)
+	banner.add_child(banner_sub)
+	banner.modulate.a = 0.0
+	add_child(banner)
 
 	pad = TouchPad.new()
-	pad.moved.connect(func(v): pad_moved.emit(v))
 	add_child(pad)
-
-	action = ActionButton.new()
-	action.pressed.connect(func(): act_pressed.emit())
-	add_child(action)
-
-	bag_btn = _round("bag", "Сумка", 76)
-	bag_btn.pressed.connect(func(): bag_pressed.emit())
-	eat_btn = _round("", "Съесть ягоды", 76)
-	eat_btn.item = "berries"
-	eat_btn.pressed.connect(func(): eat_pressed.emit())
-	pickup_btn = _round("undo", "Разобрать", 76)
-	pickup_btn.pressed.connect(func(): pickup_pressed.emit())
+	dash = DashButton.new()
+	dash.pressed.connect(func(): dash_pressed.emit())
+	add_child(dash)
+	editor_btn = _round("dna", "Эволюция", 92)
+	editor_btn.accent = true
+	editor_btn.pressed.connect(func(): editor_pressed.emit())
 
 	resized.connect(_layout)
 
@@ -108,46 +126,40 @@ func _round(icon: String, tip: String, px: float) -> Button:
 func apply_settings(s: Settings, landscape: bool) -> void:
 	_settings = s
 	_landscape = landscape
-	pad.mode = "dpad" if s.control == "dpad" else "stick"
-	pad.visible = s.control != "tap"
+	pad.visible = s.control == "stick"
 	if not pad.visible:
 		pad.release()
-	for n in [pad, action, bag_btn, eat_btn, pickup_btn, rotate_btn, settings_btn]:
-		n.floating = landscape
+	for n in [pad, dash, editor_btn, rotate_btn, settings_btn]:
+		n.floating = true
+	indicators.enabled = s.arrows
 	pad.queue_redraw()
 	_layout()
 
 
-## Показать то, что сейчас в мире.
-func refresh(v: Village) -> void:
-	day_pill.set_time(v.day(), v.clock(), v.is_night(), _landscape)
-	food_pill.set_food(v.food, _landscape)
-	action.floating = _landscape
-	action.set_action(v.action_label(), v.action_icon())
-	var goal := v.current_goal()
+## Показать то, что сейчас в океане.
+func refresh(pond: Pond) -> void:
+	var evo := pond.evo
+	size_pill.set_state(evo.level(), evo.growth())
+	dna_pill.set_value(evo.dna_free())
+	hp_bar.set_state(pond.player.hp, pond.player.max_hp, pond.player.poison_t > 0.0)
+	dash.set_cooldown(pond.player.dash_cd / Pond.DASH_CD)
+	var goal := evo.current_goal()
 	goal_card.visible = _settings != null and _settings.show_goal and not goal.is_empty()
 	if goal_card.visible:
 		var n := Content.GOALS.find(goal) + 1
 		goal_title.text = "%s  ·  %d/%d" % [goal.title, n, Content.GOALS.size()]
 		goal_hint.text = goal.hint
 		goal_hint.visible = not _landscape
-	var snack := v.snack()
-	eat_btn.visible = snack != "" and v.food < 90.0
-	if snack != "":
-		eat_btn.item = snack
-		eat_btn.tooltip_text = "Съесть: %s" % Content.ITEMS[snack].name.to_lower()
-		eat_btn.badge = str(v.bag.get(snack, 0))
-	eat_btn.queue_redraw()
-	var target_cell := v.cell(v.target())
-	pickup_btn.visible = not target_cell.is_empty() and target_cell.built != ""
-	hotbar.set_items(v.bag, _landscape, v.water)
-	_layout_side()
+	hurt_flash.color.a = maxf(0.0, hurt_flash.color.a - get_process_delta_time() * 0.8)
 
 
-## Пришлось ли касание на что-то из интерфейса — тогда это не касание карты.
+func hurt() -> void:
+	hurt_flash.color.a = 0.22
+
+## Пришлось ли касание на что-то из интерфейса.
 func covers(p: Vector2) -> bool:
-	for n in [pad, action, bag_btn, eat_btn, pickup_btn, rotate_btn, settings_btn, day_pill, food_pill, goal_card, hotbar]:
-		if n.visible and n.get_global_rect().grow(8).has_point(p):
+	for n in [pad, dash, editor_btn, rotate_btn, settings_btn, size_pill, dna_pill, hp_bar, goal_card]:
+		if n.visible and n.get_global_rect().grow(10).has_point(p):
 			return true
 	return false
 
@@ -164,6 +176,21 @@ func toast(text: String) -> void:
 	_toast_tween.tween_property(toast_box, "modulate:a", 1.0, 0.15)
 	_toast_tween.tween_interval(2.6)
 	_toast_tween.tween_property(toast_box, "modulate:a", 0.0, 0.5)
+
+## Крупная надпись посередине: вырос, новая часть.
+func announce(title: String, sub := "") -> void:
+	banner_title.text = title
+	banner_sub.text = sub
+	_layout_banner()
+	if _banner_tween:
+		_banner_tween.kill()
+	banner.modulate.a = 0.0
+	banner.scale = Vector2(0.9, 0.9)
+	_banner_tween = create_tween().set_parallel()
+	_banner_tween.tween_property(banner, "modulate:a", 1.0, 0.25)
+	_banner_tween.tween_property(banner, "scale", Vector2.ONE, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	_banner_tween.chain().tween_interval(2.0)
+	_banner_tween.chain().tween_property(banner, "modulate:a", 0.0, 0.6)
 
 
 # --- раскладка ------------------------------------------------------------------------
@@ -188,176 +215,131 @@ func _layout() -> void:
 	var bottom := minf(safe.end.y, size.y) - m
 	var scale: float = Settings.BUTTON_SCALE[_settings.buttons]
 
-	# Верх: день, сытость; справа — поворот и настройки.
-	day_pill.position = Vector2(left, top)
-	food_pill.position = Vector2(left + day_pill.size.x + 10, top)
+	size_pill.position = Vector2(left, top)
+	dna_pill.position = Vector2(left + size_pill.size.x + 10, top)
+	hp_bar.position = Vector2(left, top + 74)
+	hp_bar.size = Vector2(size_pill.size.x + 10 + dna_pill.size.x, 26)
 	settings_btn.position = Vector2(right - 64, top)
 	rotate_btn.position = Vector2(right - 64 * 2 - 10, top)
-	var goal_w := minf(size.x - left * 2, 560.0)
 	if _landscape:
-		goal_card.position = Vector2(food_pill.position.x + food_pill.size.x + 14, top)
-		goal_card.size = Vector2(minf(goal_w, rotate_btn.position.x - goal_card.position.x - 14), 64)
+		goal_card.position = Vector2(dna_pill.position.x + dna_pill.size.x + 14, top)
+		goal_card.size = Vector2(minf(560.0, rotate_btn.position.x - goal_card.position.x - 14), 64)
 	else:
-		goal_card.position = Vector2(left, top + 76)
+		goal_card.position = Vector2(left, top + 112)
 		goal_card.size = Vector2(right - left, 0)
 
-	# Низ: джойстик с одной стороны, кнопка действия — с другой.
-	var pad_d := (260.0 if _landscape else 280.0) * scale
-	var act_d := 150.0 * scale
+	var pad_d := (250.0 if _landscape else 270.0) * scale
+	var dash_d := 150.0 * scale
 	pad.size = Vector2(pad_d, pad_d)
-	action.size = Vector2(act_d, act_d)
+	dash.size = Vector2(dash_d, dash_d)
 	var pad_right := _settings.pad_side == "right"
-	var pad_x := right - pad_d if pad_right else left
-	var act_x := left if pad_right else right - act_d
-	pad.position = Vector2(pad_x, bottom - pad_d)
-	action.position = Vector2(act_x, bottom - act_d - 44)
-	if _settings.control == "tap":
-		action.position.x = right - act_d if not pad_right else left
-	for b in [bag_btn, eat_btn, pickup_btn]:
-		b.custom_minimum_size = Vector2(76, 76) * scale
-		b.size = b.custom_minimum_size
-	_layout_side()
-
+	pad.position = Vector2(right - pad_d if pad_right else left, bottom - pad_d)
+	dash.position = Vector2(left if pad_right else right - dash_d, bottom - dash_d - 40)
+	var e := 92.0 * scale
+	editor_btn.custom_minimum_size = Vector2(e, e)
+	editor_btn.size = editor_btn.custom_minimum_size
+	var toward_center := 1.0 if dash.position.x < size.x / 2.0 else -1.0
+	editor_btn.position = Vector2(dash.position.x + (dash_d + 20 if toward_center > 0 else -e - 20), dash.position.y + dash_d - e)
+	indicators.position = Vector2.ZERO
+	indicators.size = size
+	indicators.margin = Rect2(Vector2(left, top + 120), Vector2(right - left, bottom - top - 120 - pad_d))
 	_layout_toast()
-
-## Маленькие кнопки — столбиком рядом с кнопкой действия, со стороны середины экрана.
-func _layout_side() -> void:
-	if _settings == null:
-		return
-	var toward_center := 1.0 if action.position.x < size.x / 2.0 else -1.0
-	var d := bag_btn.size.x
-	var x := action.position.x + (action.size.x + 18 if toward_center > 0 else -d - 18)
-	var y := action.position.y + action.size.y - d
-	var top := minf(pad.position.y if pad.visible else size.y, action.position.y)
-	for b in [bag_btn, eat_btn, pickup_btn]:
-		if not b.visible:
-			continue
-		b.position = Vector2(x, y)
-		top = minf(top, y)
-		y -= d + 14
-
-	# Вещи — посередине: лёжа — у нижнего края, стоя — над всеми кнопками. Ширина полоски
-	# меняется с каждой новой вещью, поэтому место считается здесь, каждый кадр.
-	var bottom := size.y - 18
-	var y_bar := bottom - hotbar.size.y if _landscape else top - hotbar.size.y - 20
-	var new_pos := Vector2(roundf((size.x - hotbar.size.x) / 2.0), y_bar)
-	if new_pos != hotbar.position:
-		hotbar.position = new_pos
-		_layout_toast()
+	_layout_banner()
 
 func _layout_toast() -> void:
 	var w := minf(size.x - 60, 600.0)
-	# Перенос строк считается от ширины подписи: без неё каждое слово встало бы в свою строку.
 	toast_label.custom_minimum_size.x = w - 32
 	toast_box.reset_size()
-	var above := hotbar.position.y if hotbar.visible and hotbar.position.y > 0 else size.y - 360
+	var above := dash.position.y - 30.0 if dash else size.y - 300.0
 	toast_box.position = Vector2((size.x - w) / 2.0, above - toast_box.size.y - 16)
+
+func _layout_banner() -> void:
+	var w := minf(size.x - 40, 680.0)
+	banner_sub.custom_minimum_size.x = w
+	banner.reset_size()
+	banner.size.x = w
+	banner.pivot_offset = banner.size / 2.0
+	banner.position = Vector2((size.x - w) / 2.0, size.y * (0.2 if _landscape else 0.26))
 
 
 # --- части ----------------------------------------------------------------------------
 
-## Плашка «солнце/луна · День 3 · 14:20».
-class DayPill:
+## «Размер 3» и полоска роста до следующего.
+class SizePill:
 	extends Control
-	var day := 1
-	var clock := ""
-	var night := false
-	var floating := false
+	var level := 0
+	var growth := -1.0
 
 	func _ready() -> void:
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
-		size = Vector2(230, 64)
+		size = Vector2(210, 64)
 
-	func set_time(d: int, c: String, n: bool, f: bool) -> void:
-		if d == day and c == clock and n == night and f == floating:
+	func set_state(l: int, g: float) -> void:
+		if l == level and absf(g - growth) < 0.004:
 			return
-		day = d
-		clock = c
-		night = n
-		floating = f
+		level = l
+		growth = g
 		queue_redraw()
 
 	func _draw() -> void:
-		var bg := Color(0.07, 0.08, 0.1, 0.62) if floating else Art.CARD
-		draw_style_box(Kit.box(bg, 32), Rect2(Vector2.ZERO, size))
-		Icons.draw(self, "moon" if night else "sun", Rect2(18, 18, 28, 28), Color("#b9c4e8") if night else Art.GOLD)
+		draw_style_box(Kit.box(Color(0.05, 0.1, 0.13, 0.72), 32), Rect2(Vector2.ZERO, size))
 		var font := get_theme_default_font()
-		draw_string(font, Vector2(58, 42), "День %d" % day, HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Art.TEXT)
-		draw_string(font, Vector2(152, 42), clock, HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Art.MUTED)
+		draw_string(font, Vector2(22, 34), "Размер %d" % level, HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Art.TEXT)
+		var bar := Rect2(22, 44, size.x - 44, 8)
+		draw_style_box(Kit.box(Color(1, 1, 1, 0.1), 4, Color(0, 0, 0, 0), 0), bar)
+		if growth > 0.0:
+			draw_style_box(Kit.box(Art.GREEN, 4, Color(0, 0, 0, 0), 0), Rect2(bar.position, Vector2(maxf(8.0, bar.size.x * growth), bar.size.y)))
 
-## Плашка сытости: ягода и полоска.
-class FoodPill:
+## Свободная ДНК.
+class DnaPill:
 	extends Control
-	var food := 100.0
-	var floating := false
+	var value := -99999
 
 	func _ready() -> void:
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
 		size = Vector2(150, 64)
 
-	func set_food(f: float, fl: bool) -> void:
-		if absf(f - food) < 0.5 and fl == floating:
+	func set_value(v: int) -> void:
+		if v != value:
+			value = v
+			queue_redraw()
+
+	func _draw() -> void:
+		draw_style_box(Kit.box(Color(0.05, 0.1, 0.13, 0.72), 32), Rect2(Vector2.ZERO, size))
+		Icons.draw(self, "dna", Rect2(16, 14, 36, 36), Art.GREEN)
+		draw_string(get_theme_default_font(), Vector2(62, 42), str(value), HORIZONTAL_ALIGNMENT_LEFT, -1, 28, Art.TEXT)
+
+## Здоровье: сердечко и полоса. Отравлен — полоса зеленеет.
+class HpBar:
+	extends Control
+	var hp := -1.0
+	var max_hp := 1.0
+	var poisoned := false
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func set_state(h: float, m: float, p: bool) -> void:
+		if absf(h - hp) < 0.05 and m == max_hp and p == poisoned:
 			return
-		food = f
-		floating = fl
+		hp = h
+		max_hp = m
+		poisoned = p
 		queue_redraw()
 
 	func _draw() -> void:
-		var bg := Color(0.07, 0.08, 0.1, 0.62) if floating else Art.CARD
-		draw_style_box(Kit.box(bg, 32), Rect2(Vector2.ZERO, size))
-		Art.item_icon(self, "berries", Rect2(14, 16, 32, 32))
-		var bar := Rect2(56, 28, 78, 10)
-		draw_style_box(Kit.box(Color(1, 1, 1, 0.1), 5, Color(0, 0, 0, 0), 0), bar)
-		var fill := Rect2(bar.position, Vector2(maxf(6.0, bar.size.x * food / 100.0), bar.size.y))
-		draw_style_box(Kit.box(Art.ACCENT if food < 25 else Art.GREEN, 5, Color(0, 0, 0, 0), 0), fill)
+		Icons.draw(self, "heart", Rect2(0, 0, 26, 26), Art.DANGER)
+		var bar := Rect2(34, 7, size.x - 34, 12)
+		draw_style_box(Kit.box(Color(0, 0, 0, 0.45), 6, Color(0, 0, 0, 0), 0), bar)
+		var k := clampf(hp / max_hp, 0.0, 1.0)
+		var col := Color("#8fe070") if poisoned else (Art.DANGER if k < 0.3 else Color("#e8a0a0"))
+		if k > 0.0:
+			draw_style_box(Kit.box(col, 6, Color(0, 0, 0, 0), 0), Rect2(bar.position, Vector2(maxf(10.0, bar.size.x * k), bar.size.y)))
 
-## Значок в строке — для флажка задачи.
 class IconBox:
 	extends Control
 	var icon := ""
-	var color := Art.TEXT
 
 	func _draw() -> void:
-		draw_circle(size / 2.0, size.x / 2.0, Color(0.56, 0.72, 0.6, 0.15))
-		Icons.draw(self, icon, Rect2(size * 0.22, size * 0.56), color)
-
-## Полоска вещей из сумки: значки с числами. Нажатие открывает сумку.
-class Hotbar:
-	extends Button
-	var items: Array = []
-	var floating := false
-
-	func _ready() -> void:
-		flat = true
-		focus_mode = Control.FOCUS_NONE
-		visible = false
-
-	func set_items(bag: Dictionary, f: bool, water := 0) -> void:
-		var list: Array = []
-		for id in bag:
-			if bag[id] > 0:
-				# У лейки вместо числа штук — сколько в ней воды.
-				list.append([id, water if id == "can" else bag[id]])
-		floating = f
-		if str(list) == str(items):
-			return
-		items = list
-		visible = not items.is_empty()
-		var shown := mini(items.size(), 7)
-		custom_minimum_size = Vector2(shown * 86 + 24, 64)
-		size = custom_minimum_size
-		queue_redraw()
-
-	func _draw() -> void:
-		var bg := Color(0.07, 0.08, 0.1, 0.62) if floating else Art.CARD
-		draw_style_box(Kit.box(bg, 32), Rect2(Vector2.ZERO, size))
-		var font := get_theme_default_font()
-		var x := 18.0
-		for i in mini(items.size(), 7):
-			var id: String = items[i][0]
-			Art.item_icon(self, id, Rect2(x, 14, 36, 36))
-			if id == "can":
-				draw_string(font, Vector2(x + 40, 42), "%d/%d" % [items[i][1], Content.CAN_SIZE], HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color("#a9cfe0"))
-			elif not Content.ITEMS[id].get("tool", false):
-				draw_string(font, Vector2(x + 40, 42), str(items[i][1]), HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Art.TEXT)
-			x += 86
+		draw_circle(size / 2.0, size.x / 2.0, Color(0.56, 0.82, 0.7, 0.15))
+		Icons.draw(self, icon, Rect2(size * 0.22, size * 0.56), Art.GREEN)

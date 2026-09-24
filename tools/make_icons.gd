@@ -2,29 +2,30 @@
 ## Растеризатора SVG в системе нет, а у Godot он свой — им и пользуемся.
 extends SceneTree
 
-const TREE := """
+const CELL := """
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <ellipse cx="50" cy="86" rx="30" ry="6" fill="#000" opacity="0.25"/>
-  <rect x="45" y="56" width="10" height="30" rx="3" fill="#6b4b2e"/>
-  <circle cx="50" cy="42" r="28" fill="#3a6a44"/>
-  <circle cx="38" cy="38" r="17" fill="#44794e"/>
-  <circle cx="62" cy="31" r="14" fill="#4f8a59"/>
-  <circle cx="45" cy="26" r="9" fill="#5a9663"/>
-  <circle cx="36" cy="46" r="3.4" fill="#d86a4a"/>
-  <circle cx="60" cy="48" r="3.4" fill="#d86a4a"/>
-  <path d="M74 84 L74 66 L86 58 L98 66 L98 84 Z" fill="#b08a5a"/>
-  <path d="M70 67 L86 54 L102 67 Z" fill="#8e4f3a"/>
-  <rect x="83" y="72" width="6" height="12" fill="#5a3a24"/>
+  <path d="M22 60 Q14 52 8 58 Q2 64 -4 56" stroke="#3f8a5a" stroke-width="4" fill="none" stroke-linecap="round"/>
+  <path d="M22 60 Q14 52 8 58 Q2 64 -4 56" stroke="#a8e8b8" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+  <polygon points="50,14 54,28 46,28" fill="#efdfa8"/>
+  <polygon points="50,86 54,72 46,72" fill="#efdfa8"/>
+  <ellipse cx="54" cy="52" rx="32" ry="30" fill="#8fd07a"/>
+  <ellipse cx="54" cy="52" rx="32" ry="30" fill="none" stroke="#3f6a38" stroke-width="3"/>
+  <ellipse cx="62" cy="44" rx="17" ry="12" fill="#ffffff" opacity="0.18"/>
+  <circle cx="46" cy="56" r="10" fill="#5f9a52"/>
+  <circle cx="47" cy="54" r="3.4" fill="#3d6a36"/>
+  <circle cx="74" cy="44" r="6.5" fill="#f4f4ec"/>
+  <circle cx="76" cy="44" r="3.2" fill="#1e1e28"/>
+  <path d="M84 56 L94 51 L92 58 L94 64 L84 60 Z" fill="#e9dcc6"/>
 </svg>
 """
 
 func _init() -> void:
-	var bg := "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='#2a4231'/><circle cx='50' cy='120' r='70' fill='#34503a'/></svg>"
-	var full := "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='#2a4231'/><circle cx='50' cy='120' r='70' fill='#34503a'/>" + TREE.get_slice(">", 1).substr(0, 0) + _inner(TREE, 0.78) + "</svg>"
+	var bg := "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='#123a48'/><circle cx='50' cy='-20' r='70' fill='#1d5566'/></svg>"
+	var full := "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='#123a48'/><circle cx='50' cy='-20' r='70' fill='#1d5566'/>" + CELL.get_slice(">", 1).substr(0, 0) + _inner(CELL, 0.78) + "</svg>"
 	_save(full, 192, "res://art/icon_192.png")
 	_save(bg, 432, "res://art/icon_bg_432.png")
 	# Передний план адаптивной иконки: всё важное — в середине, края система обрежет.
-	_save("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>" + _inner(TREE, 0.6) + "</svg>", 432, "res://art/icon_fg_432.png")
+	_save("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>" + _inner(CELL, 0.6) + "</svg>", 432, "res://art/icon_fg_432.png")
 	quit()
 
 ## Содержимое SVG, уменьшенное к центру.

@@ -78,19 +78,19 @@ jobs:
           GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD: opushka-release
         run: |
           mkdir -p build
-          godot --headless --export-release "Android" build/opushka.apk
+          godot --headless --export-release "Android" build/evolution.apk
           ls -la build
 
       - uses: actions/upload-artifact@v4
         with:
-          name: opushka-apk
-          path: build/opushka.apk
+          name: evolution-apk
+          path: build/evolution.apk
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: Опушка — сборка ${{ github.run_number }}
+          name: Эволюция — сборка ${{ github.run_number }}
           body: |
             Коммит ${{ github.sha }}.
-          files: build/opushka.apk
+          files: build/evolution.apk

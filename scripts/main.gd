@@ -1,61 +1,62 @@
-## «Опушка» — спокойная игра про лес и деревню.
+## Эволюция — этап клетки.
 ##
-## Этот узел связывает всё: правила (Village), мир на экране (WorldView), интерфейс (Hud,
-## сумка, настройки), звуки и сохранение. Сам он ничего не решает — только передаёт.
-##
-## Время идёт только от действий: пока стоишь, в мире ничего не происходит. Сохраняется само,
-## через пару секунд после перемен и при сворачивании игры.
+## Этот узел связывает всё: правила (Pond, Evolution), океан на экране (PondView),
+## интерфейс (Hud, редактор, настройки), звуки и сохранение. Сам он ничего не решает —
+## только передаёт.
 extends Node2D
 
-const WorldView := preload("res://scripts/world/world_view.gd")
+const PondView := preload("res://scripts/view/pond_view.gd")
 const Hud := preload("res://scripts/ui/hud.gd")
-const BagPanel := preload("res://scripts/ui/bag_panel.gd")
+const EditorPanel := preload("res://scripts/ui/editor_panel.gd")
 const SettingsPanel := preload("res://scripts/ui/settings_panel.gd")
 const SoundBank := preload("res://scripts/sound_bank.gd")
 
-const SAVE_PATH := "user://save.json"
-## Как далеко идти между звуками шагов, в клетках.
-const STEP_SOUND_EVERY := 0.55
-## Короче этого (в точках и секундах) касание считается нажатием, а не мазком.
-const TAP_SLOP := 24.0
-const TAP_TIME := 0.4
+const SAVE_PATH := "user://evolution.json"
 
-var village: Village
+var evo: Evolution
+var pond: Pond
 var settings: Settings
-var world: Node2D
+var view: Node2D
 var hud: Control
-var bag: Control
+var editor: Control
 var setup: Control
 var sound: Node
+var backdrop: Control
 var landscape := false
 
-var _route: Array[Vector2i] = []
-var _route_face := Vector2i.ZERO
-var _stuck := 0.0
-var _step_acc := 0.0
-var _was_night := false
+var _seed := 0
+var _dash := false
 var _dirty := false
 var _save_in := 0.0
-var _regrow_in := 1.0
-var _touch_start := {}
+var _fingers := {}  # номер пальца → точка: для «плыть за пальцем»
 var _script: Array = []  # сценарий для проверки — только из командной строки
 var _script_wait := 0
 var _script_pad := Vector2.ZERO
+var _spawns: Array = []
 
 
 func _ready() -> void:
 	settings = Settings.load_saved()
-	var fresh := false
-	village = _load()
-	if village == null:
-		village = Village.create(randi() & 0x7FFFFFFF)
-		fresh = true
+	evo = _load()
+	var fresh := evo == null
+	if fresh:
+		evo = Evolution.create()
 	_apply_debug_args()
-	village.animals = Animals.new(village)
 
-	world = WorldView.new()
-	add_child(world)
-	world.build(village)
+	var back := CanvasLayer.new()
+	back.layer = -1
+	add_child(back)
+	backdrop = preload("res://scripts/view/backdrop.gd").new()
+	back.add_child(backdrop)
+
+	view = PondView.new()
+	add_child(view)
+	_new_pond()
+
+	var shade := CanvasLayer.new()
+	shade.layer = 1
+	add_child(shade)
+	shade.add_child(_vignette())
 
 	var layer := CanvasLayer.new()
 	layer.layer = 2
@@ -68,38 +69,32 @@ func _ready() -> void:
 
 	hud = Hud.new()
 	ui.add_child(hud)
-	hud.act_pressed.connect(_act)
-	hud.bag_pressed.connect(_open_bag)
+	hud.dash_pressed.connect(func(): _dash = true)
+	hud.editor_pressed.connect(_open_editor)
 	hud.settings_pressed.connect(_open_settings)
 	hud.rotate_pressed.connect(func():
 		settings.landscape = not landscape
 		_settings_changed(settings))
-	hud.eat_pressed.connect(func(): _handle(village.eat(village.snack())))
-	hud.pickup_pressed.connect(func(): _handle(village.pick_up()))
 
-	bag = BagPanel.new()
-	bag.visible = false
-	ui.add_child(bag)
-	bag.closed.connect(func(): bag.visible = false)
-	bag.eat.connect(func(id):
-		_handle(village.eat(id))
-		bag.rebuild())
-	bag.place.connect(func(id):
-		bag.visible = false
-		_handle(village.place(id)))
-	bag.craft.connect(func(id):
-		_handle(village.craft(id))
-		bag.rebuild())
-	bag.plant.connect(func(id):
-		bag.visible = false
-		_handle(village.plant(id)))
+	editor = EditorPanel.new()
+	editor.visible = false
+	ui.add_child(editor)
+	editor.closed.connect(func():
+		editor.visible = false
+		sound.play("ui")
+		pond.player.sync_player(evo)
+		_save())
+	editor.changed.connect(func():
+		sound.play("place")
+		pond.player.sync_player(evo)
+		_dirty = true)
 
 	setup = SettingsPanel.new()
 	setup.visible = false
 	ui.add_child(setup)
 	setup.closed.connect(func(): setup.visible = false)
 	setup.changed.connect(_settings_changed)
-	setup.new_world.connect(_new_world)
+	setup.new_world.connect(_start_over)
 
 	sound = SoundBank.new()
 	add_child(sound)
@@ -108,168 +103,201 @@ func _ready() -> void:
 	_orient()
 	get_viewport().size_changed.connect(_on_resize)
 	_on_resize()
-	_was_night = village.is_night()
-	sound.set_ambience("night" if _was_night else "day")
 	if fresh:
-		hud.toast("Утро на опушке. Ветки и камешки лежат рядом — наступи на них")
+		hud.toast("Ты — крошечная клетка. Плыви к зелёным крупинкам: это еда")
+
+func _new_pond() -> void:
+	pond = Pond.new(evo, _seed)
+	view.setup(pond)
+	pond.view_radius = view.view_radius()
+	pond.fill()
+	for s in _spawns:
+		pond.spawn(s[0], pond.player.pos + s[1])
+
+## Затемнение по краям: глубина, и взгляд сам собирается к середине.
+func _vignette() -> TextureRect:
+	var g := Gradient.new()
+	g.set_color(0, Color(0, 0, 0, 0))
+	g.set_color(1, Color(0.0, 0.02, 0.04, 0.55))
+	g.add_point(0.55, Color(0, 0, 0, 0))
+	var tex := GradientTexture2D.new()
+	tex.gradient = g
+	tex.fill = GradientTexture2D.FILL_RADIAL
+	tex.fill_from = Vector2(0.5, 0.5)
+	tex.fill_to = Vector2(1.05, 0.5)
+	tex.width = 256
+	tex.height = 256
+	var r := TextureRect.new()
+	r.texture = tex
+	r.stretch_mode = TextureRect.STRETCH_SCALE
+	r.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	r.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	return r
 
 
 # --- кадр -----------------------------------------------------------------------------
 
 func _process(delta: float) -> void:
 	_run_script()
-	var moved := 0.0
-	var panels := bag.visible or setup.visible
-	var v: Vector2 = hud.pad.vector if _script_pad == Vector2.ZERO else _script_pad
-	if not panels and v.length() > 0.01:
-		_route.clear()
-		var out := village.walk(v * Settings.SPEED[settings.speed] * delta)
-		moved = out.get("moved", 0.0)
-		_handle(out)
-	elif not panels and not _route.is_empty():
-		moved = _follow(delta)
-
-	if not panels:
-		village.animals.step(delta, village)
-	world.update_view(moved)
-	if moved > 0.0:
-		_dirty = true
-		_step_acc += moved
-		if _step_acc >= STEP_SOUND_EVERY:
-			_step_acc = 0.0
-			sound.play("step")
-
-	var night := village.is_night()
-	if night != _was_night:
-		_was_night = night
-		world.sync_all()
-		sound.set_ambience("night" if night else "day")
-
-	_regrow_in -= delta
-	if _regrow_in <= 0.0:
-		_regrow_in = 1.0
-		world.sync_regrowth()
-		village.animals.sync_chickens(village)
-
-	hud.refresh(village)
-
-	if _dirty:
-		_save_in = 2.0
-		_dirty = false
+	var paused: bool = editor.visible or setup.visible
+	if not paused:
+		pond.view_radius = view.view_radius()
+		pond.step(minf(delta, 0.05), _steer(), _dash)
+		_dash = false
+		view.effects(pond.events)
+		_handle(pond.events)
+	hud.refresh(pond)
+	backdrop.drift = pond.player.pos
+	_update_arrows()
 	if _save_in > 0.0:
 		_save_in -= delta
 		if _save_in <= 0.0:
 			_save()
+	elif _dirty:
+		_dirty = false
+		_save_in = 3.0
 
-## Идти по дороге, проложенной касанием: к середине следующей клетки, потом дальше.
-func _follow(delta: float) -> float:
-	var goal := Vector2(_route[0]) + Vector2(0.5, 0.5)
-	var to := goal - village.pos
-	var step: float = Settings.SPEED[settings.speed] * delta
-	var out := village.walk(to.limit_length(step))
-	var moved: float = out.get("moved", 0.0)
-	_handle(out)
-	if village.pos.distance_to(goal) < 0.08:
-		_route.pop_front()
-		_stuck = 0.0
-	elif moved < 0.0001:
-		# Упёрся — дорога устарела (что-то выросло или построено). Бросаем, а не топчемся.
-		_stuck += delta
-		if _stuck > 0.4:
-			_route.clear()
-			_stuck = 0.0
-	if _route.is_empty() and _route_face != Vector2i.ZERO:
-		village.face(Vector2(_route_face))
-		_route_face = Vector2i.ZERO
-	return moved
-
-
-# --- касания карты --------------------------------------------------------------------
+## Куда плыть: джойстик, палец на экране или сценарий проверки.
+func _steer() -> Vector2:
+	if _script_pad != Vector2.ZERO:
+		return _script_pad
+	if settings.control == "stick":
+		return hud.pad.vector
+	if _fingers.is_empty():
+		return Vector2.ZERO
+	var finger: Vector2 = _fingers.values()[-1]
+	var me: Vector2 = view.get_canvas_transform() * pond.player.pos
+	var to := finger - me
+	return to.normalized() * clampf(to.length() / 140.0, 0.25, 1.0) if to.length() > 12.0 else Vector2.ZERO
 
 func _unhandled_input(e: InputEvent) -> void:
+	if settings.control != "follow":
+		return
 	if e is InputEventScreenTouch:
-		if e.pressed:
-			_touch_start[e.index] = [e.position, Time.get_ticks_msec()]
-		elif _touch_start.has(e.index):
-			var start: Array = _touch_start[e.index]
-			_touch_start.erase(e.index)
-			var quick: bool = (Time.get_ticks_msec() - start[1]) / 1000.0 < TAP_TIME
-			if quick and e.position.distance_to(start[0]) < TAP_SLOP and not hud.covers(e.position):
-				_tap(e.position)
-
-func _tap(screen: Vector2) -> void:
-	if bag.visible or setup.visible:
-		return
-	var c: Vector2i = world.cell_at_screen(screen)
-	# Нажал на зверя рядом — повернуться к нему и сделать, что можно (покормить, погладить).
-	var spot := (world.get_canvas_transform().affine_inverse() * screen) / Art.TILE
-	for a in village.animals.list:
-		if a.kind != "bird" and not a.gone and a.pos.distance_to(spot + Vector2(0, 0.3)) < 0.7 and a.pos.distance_to(village.pos) < 1.8:
-			_route.clear()
-			village.face(a.pos - village.pos)
-			_act()
-			return
-	if c == village.target() and village.action_label() != "":
-		_route.clear()
-		_act()
-		return
-	if not settings.can_tap_walk() or c == village.tile_of(village.pos):
-		return
-	var road := village.path_to(c)
-	if road.is_empty():
-		sound.play("nope")
-		var info := village.cell(c)
-		hud.toast("Туда вплавь не добраться" if not info.is_empty() and info.ground == WorldGen.Ground.WATER else "Туда не пройти")
-		return
-	_route.assign(road.cells)
-	_route_face = road.face
-	_stuck = 0.0
+		if e.pressed and not hud.covers(e.position):
+			_fingers[e.index] = e.position
+		elif not e.pressed:
+			_fingers.erase(e.index)
+	elif e is InputEventScreenDrag and _fingers.has(e.index):
+		_fingers[e.index] = e.position
 
 
-# --- действия -------------------------------------------------------------------------
+# --- события --------------------------------------------------------------------------
 
-func _act() -> void:
-	if bag.visible or setup.visible:
-		return
-	_handle(village.act())
+func _handle(events: Array) -> void:
+	var near: float = view.view_radius()
+	for e in events:
+		match e.t:
+			"eat":
+				sound.play("eat" if e.kind == "plant" else "eat_meat", randf_range(0.9, 1.15))
+				_dirty = true
+			"hit":
+				if e.to_player:
+					sound.play("hurt")
+					hud.hurt()
+					_buzz(30)
+				elif e.from_player:
+					sound.play("bite" if e.kind == "bite" else "hit", randf_range(0.9, 1.1))
+					_buzz(12)
+			"kill":
+				if e.by_player:
+					sound.play("kill")
+					_buzz(25)
+				elif e.pos.distance_to(pond.player.pos) < near:
+					sound.play("kill", 1.3)
+			"drop":
+				sound.play("drop")
+				var name: String = Content.PARTS[e.part].name
+				if evo.unlocked.has(e.part):
+					hud.toast("Выпала часть: %s — подбери, станет сильнее" % name.to_lower())
+				else:
+					hud.toast("Выпала новая часть: %s! Подбери её" % name.to_lower())
+			"pickup":
+				_dirty = true
+				var def: Dictionary = Content.PARTS[e.part]
+				if e.new:
+					sound.play("newpart")
+					hud.announce("Новая часть!", "%s — %s. Поставь её в «Эволюции»" % [def.name, def.hint.to_lower()])
+					hud.editor_btn.badge = "!"
+					hud.editor_btn.queue_redraw()
+					_buzz(40)
+				elif e.dna > 0:
+					sound.play("pickup")
+					hud.toast("%s уже на пятом уровне: +%d ДНК" % [def.name, e.dna])
+				elif e.up:
+					sound.play("newpart", 1.2)
+					hud.announce("%s: уровень %d" % [def.name, e.level], "Сильнее на %d%%, чем в начале" % int(round((Content.power(e.level) - 1.0) * 100.0)))
+					_buzz(30)
+				else:
+					sound.play("pickup")
+					hud.toast("%s: копия %d из %d до уровня %d" % [def.name, e.have, e.need, e.level + 1])
+			"levelup":
+				sound.play("levelup")
+				_dirty = true
+				_buzz(50)
+				hud.editor_btn.badge = "!"
+				hud.editor_btn.queue_redraw()
+				if e.level >= Content.LEVELS.size():
+					hud.announce("Многоклеточный!", "Этап клетки пройден. Можно жить дальше: собирать и улучшать части")
+				else:
+					hud.announce("Размер %d" % e.level, "Места на теле больше: %d. Вокруг появятся новые клетки" % evo.slots())
+			"zap":
+				if e.by_player or e.to_player:
+					sound.play("zap")
+			"poison":
+				sound.play("poison")
+				if e.to_player:
+					hud.toast("Отравлен! Яд жжёт ещё три секунды")
+			"death":
+				sound.play("death")
+				_buzz(80)
+				_dirty = true
+				hud.announce("Тебя съели", "Новая клетка твоего вида появилась неподалёку. Всё найденное осталось")
+			"dash":
+				sound.play("dash")
+			"goal":
+				_dirty = true
+				var g: Dictionary = e.goal
+				get_tree().create_timer(0.4).timeout.connect(func():
+					sound.play("goal")
+					hud.toast("Задача выполнена: %s" % g.title.to_lower()))
+			"seen":
+				_dirty = true
+				hud.toast("Новый вид: %s. Он теперь в «Атласе»" % Content.SPECIES[e.species].name)
 
-func _handle(out: Dictionary) -> void:
-	if out.is_empty():
-		return
-	var said: String = out.get("message", "")
-	if said != "":
-		hud.toast(said)
-	var s: String = out.get("sound", "")
-	if s != "":
-		sound.play(s)
-		var buzz: int = {"chop": 22, "stone": 26, "craft": 16, "place": 22, "pickup": 12, "berries": 10, "twig": 8, "pebble": 8, "dig": 14, "harvest": 14, "pet": 8}.get(s, 0)
-		if buzz > 0 and settings.vibration:
-			Input.vibrate_handheld(buzz)
-	if out.has("cell"):
-		world.sync_cell(out.cell)
-		world.burst(out.cell, s)
-	if out.has("hearts"):
-		world.hearts(out.hearts)
-	if out.get("slept", false):
-		world.sync_all()
-	if out.get("goal", false):
-		get_tree().create_timer(0.3).timeout.connect(func():
-			sound.play("goal")
-			world.burst(village.tile_of(village.pos), "goal"))
-	_dirty = true
+func _buzz(ms: int) -> void:
+	if settings.vibration:
+		Input.vibrate_handheld(ms)
+
+## Стрелки к находкам за краем экрана и — с глазками — к хищникам.
+func _update_arrows() -> void:
+	var list: Array = []
+	var xf: Transform2D = view.get_canvas_transform()
+	for cap in pond.capsules:
+		list.append({"at": xf * cap.pos, "kind": "part", "part": cap.part})
+	var p := pond.player
+	if p.eyes > 0.0:
+		for m in pond.mobs:
+			if pond._hunts(m) and m.radius >= p.radius * 0.8 and m.pos.distance_to(p.pos) < p.sight * 2.0:
+				list.append({"at": xf * m.pos, "kind": "danger"})
+	hud.indicators.targets = list
 
 
-func _open_bag() -> void:
-	sound.play("bag")
-	_route.clear()
+# --- панели ---------------------------------------------------------------------------
+
+func _open_editor() -> void:
+	sound.play("ui")
 	hud.pad.release()
-	bag.open(village, landscape)
+	_fingers.clear()
+	hud.editor_btn.badge = ""
+	hud.editor_btn.queue_redraw()
+	editor.open(evo, landscape)
 
 func _open_settings() -> void:
 	sound.play("ui")
-	_route.clear()
 	hud.pad.release()
-	setup.open(settings, village, landscape)
+	_fingers.clear()
+	setup.open(settings, evo, landscape)
 
 func _settings_changed(s: Settings) -> void:
 	settings = s
@@ -278,22 +306,17 @@ func _settings_changed(s: Settings) -> void:
 	_orient()
 	_on_resize()
 
-func _new_world() -> void:
-	village = Village.create(randi() & 0x7FFFFFFF)
-	village.animals = Animals.new(village)
+func _start_over() -> void:
+	evo = Evolution.create()
 	setup.visible = false
-	world.build(village)
-	_route.clear()
-	_was_night = village.is_night()
-	sound.set_ambience("day")
-	sound.play("sleep")
-	hud.toast("Новый мир. Утро на опушке — ветки и камешки рядом")
+	_new_pond()
+	sound.play("levelup", 0.8)
+	hud.toast("Снова крошечная клетка. Плыви к зелёным крупинкам: это еда")
 	_save()
 
 
 # --- экран ----------------------------------------------------------------------------
 
-## Лечь набок или встать — по настройке. На компьютере не делает ничего.
 func _orient() -> void:
 	DisplayServer.screen_set_orientation(DisplayServer.SCREEN_SENSOR_LANDSCAPE if settings.landscape else DisplayServer.SCREEN_PORTRAIT)
 
@@ -301,10 +324,9 @@ func _on_resize() -> void:
 	var s := get_viewport().get_visible_rect().size
 	landscape = s.x > s.y
 	hud.apply_settings(settings, landscape)
-	world.show_target = settings.show_target
-	if bag.visible:
-		bag.landscape = landscape
-		bag.rebuild()
+	if editor.visible:
+		editor.landscape = landscape
+		editor.rebuild()
 	if setup.visible:
 		setup.landscape = landscape
 		setup.rebuild()
@@ -314,28 +336,26 @@ func _on_resize() -> void:
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
-		if village:
+		if evo:
 			_save()
 
 func _save() -> void:
 	_save_in = 0.0
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f:
-		f.store_string(JSON.stringify({"village": village.to_dict()}))
+		f.store_string(JSON.stringify(evo.to_dict()))
 
-func _load() -> Village:
+func _load() -> Evolution:
 	if not FileAccess.file_exists(SAVE_PATH):
 		return null
-	var data = JSON.parse_string(FileAccess.get_file_as_string(SAVE_PATH))
-	if not data is Dictionary:
-		return null
-	return Village.from_dict(data.get("village"))
+	return Evolution.from_dict(JSON.parse_string(FileAccess.get_file_as_string(SAVE_PATH)))
 
 
 # --- проверка из командной строки -----------------------------------------------------
 #
-# godot --path . -- --fresh --seed=42 --time=1230 --bag=stick:12,axe:1 --water=5 --pets=1 \
-#   --built=32:33:campfire --do="pad:1,0:40 act wait:20 open:bag"
+# godot --path . -- --fresh --seed=42 --dna=120 --unlock=jaws:1,spike:2 \
+#   --body=jaws@0,spike@90,spike@-90,cilia@180 --color=3 --spawn=kusaka@120,0 \
+#   --do="pad:1,0:40 dash wait:20 open:editor select:spike print"
 #
 # Нужна, чтобы прогнать настоящую игру без телефона и снять кадры. В обычной игре этих
 # аргументов нет, и всё это не делает ничего.
@@ -347,24 +367,31 @@ func _apply_debug_args() -> void:
 		args[kv[0]] = kv[1] if kv.size() > 1 else ""
 	if args.is_empty():
 		return
-	if args.has("fresh") or args.has("seed"):
-		village = Village.create(int(args.get("seed", "42")))
-	if args.has("time"):
-		village.time = float(args.time)
-	if args.has("food"):
-		village.food = float(args.food)
-	if args.has("water"):
-		village.water = int(args.water)
-	if args.has("pets"):
-		village.pets = int(args.pets)
-	if args.has("bag"):
-		for pair in args.bag.split(","):
+	if args.has("fresh"):
+		evo = Evolution.create()
+	_seed = int(args.get("seed", "0"))
+	if args.has("dna"):
+		evo.dna_total = float(args.dna)
+	if args.has("unlock"):
+		for pair in args.unlock.split(","):
 			var p: PackedStringArray = pair.split(":")
-			village.bag[p[0]] = int(p[1])
-	if args.has("built"):
-		for item in args.built.split(","):
-			var p: PackedStringArray = item.split(":")
-			village.built["%s:%s" % [p[0], p[1]]] = p[2]
+			evo.unlocked[p[0]] = int(p[1]) if p.size() > 1 else 1
+	if args.has("body"):
+		evo.body = []
+		for item in args.body.split(","):
+			var p: PackedStringArray = item.split("@")
+			evo.unlocked[p[0]] = evo.unlocked.get(p[0], 1)
+			evo.body.append({"id": p[0], "a": int(p[1])})
+	if args.has("color"):
+		evo.color = int(args.color)
+	if args.has("seen"):
+		for s in args.seen.split(","):
+			evo.seen[s] = true
+	if args.has("spawn"):
+		for item in args.spawn.split(";"):
+			var p: PackedStringArray = item.split("@")
+			var xy: PackedStringArray = p[1].split(",")
+			_spawns.append([p[0], Vector2(float(xy[0]), float(xy[1]))])
 	if args.has("settings"):
 		for pair in args.settings.split(","):
 			var p: PackedStringArray = pair.split(":")
@@ -392,59 +419,30 @@ func _run_script() -> void:
 			_script_wait = int(p[2])
 		"wait":
 			_script_wait = int(p[1])
-		"act":
-			_act()
-		"tap":
-			var c := p[1].split(",")
-			var cell := village.tile_of(village.pos) + Vector2i(int(c[0]), int(c[1]))
-			_tap(world.get_canvas_transform() * ((Vector2(cell) + Vector2(0.5, 0.5)) * Art.TILE))
-		"craft":
-			_handle(village.craft(p[1]))
-		"place":
-			_handle(village.place(p[1]))
-		"plant":
-			_handle(village.plant(p[1]))
-		"time":
-			village.time += float(p[1])
-		"goto":
-			# Дойти до ближайшего дерева, куста, камня — той же дорогой, что и по касанию.
-			var here := village.tile_of(village.pos)
-			var best := {}
-			var best_d := INF
-			for y in range(here.y - 12, here.y + 13):
-				for x in range(here.x - 12, here.x + 13):
-					var c := Vector2i(x, y)
-					var info := village.cell(c)
-					if info.is_empty() or info.nature != p[1] or info.depleted:
-						continue
-					var d := Vector2(c).distance_to(Vector2(here))
-					if d < best_d:
-						var road := village.path_to(c)
-						if not road.is_empty():
-							best_d = d
-							best = road
-			if not best.is_empty():
-				_route.assign(best.cells)
-				_route_face = best.face
-		"face":
-			var d := p[1].split(",")
-			village.face(Vector2(float(d[0]), float(d[1])))
+		"dash":
+			_dash = true
 		"open":
-			if p[1] == "bag":
-				_open_bag()
-			elif p[1] == "craft":
-				_open_bag()
-				bag.tab = "craft"
-				bag.rebuild()
-			else:
+			if p[1] == "settings":
 				_open_settings()
-		"dump":
-			var stack: Array = [bag]
-			while not stack.is_empty():
-				var n = stack.pop_back()
-				if n is Control and n.size.x > 300:
-					print("MIN ", n.get_class(), " ", n.position, n.size, " min ", n.get_combined_minimum_size())
-				stack.append_array(n.get_children())
+			else:
+				_open_editor()
+				if p[1] == "atlas":
+					editor.tab = "atlas"
+					editor.rebuild()
+		"select":
+			editor.selected = p[1]
+			editor.rebuild()
+		"placeat":
+			editor.place_at(float(p[1]))
+		"pick":
+			editor.pick(int(p[1]))
+		"ghost":
+			editor._preview.ghost = float(p[1])
+		"close":
+			editor.visible = false
+			setup.visible = false
+			pond.player.sync_player(evo)
+		"banner":
+			hud.announce("Размер 3", "Места на теле больше: 5. Вокруг появятся новые клетки")
 		"print":
-			print("СОСТОЯНИЕ: ", village.clock(), " ", village.pos, " ", village.bag, " ", village.action_label())
-			print("ЭКРАН: ", hud.size, " джойстик ", hud.pad.position, hud.pad.size, " день ", hud.day_pill.position, hud.day_pill.size, " задача ", hud.goal_card.position, hud.goal_card.size)
+			print("СОСТОЯНИЕ: размер ", evo.level(), " ДНК ", evo.dna_free(), "/", int(evo.dna_total), " клеток ", pond.mobs.size(), " еды ", pond.food.size(), " поз ", pond.player.pos)
