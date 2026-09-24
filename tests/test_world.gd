@@ -96,7 +96,9 @@ func test_гиганты_по_размерам(c) -> void:
 	_run(p, 0.5)
 	p._roam_t = 0.0
 	_run(p, 0.5)
-	c.eq("гигант вокруг один", p.mobs.filter(func(m): return Pond.is_giant(m)).size(), 1)
+	p._roam_t = 0.0
+	_run(p, 0.5)
+	c.ok("гигантов вокруг не больше двух", p.mobs.filter(func(m): return Pond.is_giant(m)).size() <= 2)
 
 func test_гигант_проходим(c) -> void:
 	# Бьёт слабее своего размера и сам не лечится — одолеть можно.
@@ -607,3 +609,40 @@ func test_стая_слабее(c) -> void:
 	var p := _pond(_evo_with([["filter", 0], ["needle", 0]], 1100.0))
 	var a := p._spawn_ally()
 	c.ok("у потомка иглы слабее твоих", float(a.guns[0].dmg) < float(p.player.guns[0].dmg) * 0.5)
+
+func test_гиганты_дерутся_и_едят(c) -> void:
+	var p := _pond(_evo_with([["filter", 0]], 1100.0))
+	p._safe_t = 0.0
+	p.player.pos = Vector2(-5000, 0)
+	var a := p.spawn("zmei", Vector2(0, 0))
+	var b := p.spawn("kleshnerug", Vector2(a.radius + 200.0, 0))
+	c.ok("оба — гиганты", a.giant and b.giant)
+	a.ai_t = 0.0
+	b.ai_t = 0.0
+	var ha := a.hp
+	var hb := b.hp
+	_run(p, 6.0)
+	c.ok("сцепились друг с другом", a.ai_target == b or b.ai_target == a)
+	c.ok("и ранят друг друга", a.hp < ha or b.hp < hb)
+	var q := _pond(_evo_with([["filter", 0]], 1100.0))
+	q._safe_t = 0.0
+	q.player.pos = Vector2(-5000, 0)
+	var g := q.spawn("zmei", Vector2(0, 0))
+	var prey := q.spawn("kusaka", Vector2(g.radius + 120.0, 0))
+	g.ai_t = 0.0
+	_run(q, 0.5)
+	c.ok("хищный гигант гонится за мелким", g.ai_target == prey)
+
+func test_второй_гигант_плывёт_к_первому(c) -> void:
+	var p := _pond(_evo_with([["filter", 0]], 1100.0))
+	p._safe_t = 0.0
+	var first := p.spawn(p.pick_giant(), p.player.pos + Vector2(300, 0))
+	var got := false
+	for i in 40:
+		p._roam_t = 0.0
+		p._roamers(0.1)
+		var others := p.mobs.filter(func(m): return Pond.is_giant(m) and m != first)
+		if not others.is_empty():
+			got = others[0].species != first.species and others[0].ai_goal.distance_to(first.pos) < 1.0
+			break
+	c.ok("приплыл второй, другого вида, прямо к первому", got)

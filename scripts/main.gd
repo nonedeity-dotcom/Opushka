@@ -1033,6 +1033,9 @@ func _run_script() -> void:
 			setup.rebuild()
 			var to := int(p[1]) if p.size() > 1 else 0
 			get_tree().create_timer(0.3).timeout.connect(func(): setup._body.get_child(1).scroll_vertical = to)
+		"hide":
+			# Спрятать клетку от всех (для снимков драк).
+			pond.player.hidden_t = 999.0
 		"myhp":
 			pond.player.hp = pond.player.max_hp * float(p[1])
 		"event":

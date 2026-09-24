@@ -367,6 +367,9 @@ func _wants_bite(x: Creature, y: Creature) -> bool:
 		return false
 	if def.behavior == "roamer" and not x.giant:
 		return _hunts(x) or y == x.last_attacker
+	# Гиганты разных видов кусают друг друга — даже мирные.
+	if x.giant and y.giant and x.species != y.species:
+		return true
 	return def.behavior == "hunter" or def.get("hunts", false) or y == x.last_attacker
 
 ## Ранить y. Панцирь со стороны удара снимает часть урона.
@@ -1387,7 +1390,8 @@ func _roamers(dt: float) -> void:
 	_colossi(dt)
 	# Гигант, что уплыл за край и дальше, новому не мешает.
 	var near := view_radius + 800.0
-	if mobs.any(func(m): return is_giant(m) and m.pos.distance_to(player.pos) < near + m.radius):
+	var around: Array = mobs.filter(func(m): return is_giant(m) and m.pos.distance_to(player.pos) < near + m.radius)
+	if around.size() >= 2:
 		return
 	_roam_t -= dt
 	if _roam_t > 0.0:
@@ -1395,6 +1399,22 @@ func _roamers(dt: float) -> void:
 	_roam_t = rng.randf_range(25.0, 45.0)
 	var pick := pick_giant()
 	if pick == "":
+		return
+	# Один уже рядом — иногда приплывает второй, другого вида, прямо к нему: будет драка.
+	if around.size() == 1:
+		var first: Creature = around[0]
+		if rng.randf() > DUEL_CHANCE:
+			return
+		for i in 6:
+			if pick != first.species:
+				break
+			pick = pick_giant()
+		if pick == first.species:
+			return
+		var from := Vector2.from_angle(rng.randf() * TAU)
+		var g := spawn(pick, first.pos + from * (view_radius + 400.0))
+		g.ai_goal = first.pos
+		events.append({"t": "roamer", "species": pick, "pos": g.pos})
 		return
 	var dir := Vector2.from_angle(rng.randf() * TAU)
 	var m := spawn(pick, player.pos + dir * (view_radius + 500.0))
@@ -1422,6 +1442,37 @@ func pick_giant() -> String:
 		if roll <= 0.0:
 			return q[0]
 	return pool[-1][0]
+
+## Шанс, что к гиганту рядом приплывёт второй — подраться.
+const DUEL_CHANCE := 0.45
+
+## Другой гигант чужого вида рядом — соперник.
+func _giant_rival(m: Creature) -> Creature:
+	var best: Creature = null
+	var best_d := m.sight * 1.3
+	for o in mobs:
+		if o == m or not o.alive or not is_giant(o) or o.species == m.species:
+			continue
+		var d := m.pos.distance_to(o.pos) - o.radius - m.radius
+		if d < best_d:
+			best_d = d
+			best = o
+	return best
+
+## Хищный гигант ест всех, кто заметно мельче: стаи, хищников, твоих потомков.
+func _giant_prey(m: Creature) -> Creature:
+	var best: Creature = null
+	var best_d := m.sight
+	for o in everyone():
+		if o == m or o.is_player or not o.alive or is_giant(o) or is_colossus(o) or o.species == "mate" or o.hidden_t > 0.0:
+			continue
+		if o.radius > m.radius * 0.7:
+			continue
+		var d := m.pos.distance_to(o.pos)
+		if d < best_d:
+			best_d = d
+			best = o
+	return best
 
 func _roamer_think(m: Creature) -> void:
 	var def: Dictionary = Content.SPECIES[m.species]
@@ -1453,6 +1504,30 @@ func _roamer_think(m: Creature) -> void:
 			m.voice_t = 12.0
 			events.append({"t": "voice", "kind": "boom", "pos": m.pos, "size": m.size_r})
 		return
+	# Гиганты разных видов при встрече дерутся — и мирные тоже.
+	var rival := _giant_rival(m)
+	if rival != null:
+		m.ai_state = "fight"
+		m.ai_target = rival
+		m.desire = (rival.pos - m.pos).normalized()
+		if m.pos.distance_to(rival.pos) < (m.radius + rival.radius) * 1.3 and m.dash_cd <= 0.0:
+			_lunge(m)
+			m.dash_cd = 3.0
+		if m.voice_t <= 0.0:
+			m.voice_t = 8.0
+			events.append({"t": "voice", "kind": "boom", "pos": m.pos, "size": m.size_r})
+		return
+	# Хищный гигант охотится на всех, кто мельче, — пока не выдохся.
+	if (def.get("hunts", false) or m.aggro) and m.stamina > 0.2 and m.resting <= 0.0:
+		var prey := _giant_prey(m)
+		if prey != null:
+			m.ai_state = "chase"
+			m.ai_target = prey
+			m.desire = (prey.pos + prey.vel * 0.3 - m.pos).normalized()
+			if m.pos.distance_to(prey.pos) < (m.radius + prey.radius) * 1.5 and m.dash_cd <= 0.0:
+				_lunge(m)
+				m.dash_cd = 3.5
+			return
 	if m.calm_t < 4.0 and m.last_attacker != null and m.last_attacker.alive:
 		# Мирного разозлили — разворачивается и отбивается.
 		m.ai_state = "guard"
