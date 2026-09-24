@@ -18,6 +18,11 @@ var _mat: StandardMaterial3D
 var _mat2: StandardMaterial3D
 var _leg_len := 1.0
 var _stepping_group := -1
+## Бросок вперёд при укусе: 1 — только что кусил, тает к 0.
+var _lunge := 0.0
+var _flash := 0.0
+var _bar: Node3D
+var _bar_fill: MeshInstance3D
 
 static func mat(c: Color, rough := 0.75) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
@@ -63,8 +68,8 @@ static func _basis_y(dir: Vector3) -> Basis:
 	var z := x.cross(y).normalized()
 	return Basis(x, y, z)
 
-## Собрать тело. Вперёд — ось +Z.
-func build(c: Color, c2: Color, s: float, legs: int) -> void:
+## Собрать тело. Вперёд — ось +Z. spikes — гребень шипов по спине (отшельники).
+func build(c: Color, c2: Color, s: float, legs: int, spikes := false) -> void:
 	for ch in get_children():
 		ch.queue_free()
 	_legs.clear()
@@ -87,6 +92,13 @@ func build(c: Color, c2: Color, s: float, legs: int) -> void:
 	# Пятна второго цвета на спине.
 	for q in [Vector3(0.18, 0.42, 0.3), Vector3(-0.2, 0.4, -0.05), Vector3(0.05, 0.38, -0.45)]:
 		_sphere(R * 0.28, _mat2, q * size, _body, Vector3(1, 0.5, 1))
+	if spikes:
+		var horn := mat(Color("#e8dcc0"), 0.5)
+		for i in 5:
+			var z := 0.55 - i * 0.28
+			_cone(0.1 * size, (0.42 - absf(i - 1.5) * 0.06) * size, horn, Vector3(0, 0.36, z) * size, Vector3(0, 1, -0.35), _body)
+		for side in [-1.0, 1.0]:
+			_cone(0.07 * size, 0.35 * size, horn, head + Vector3(side * 0.25, 0.25, -0.05) * size, Vector3(side * 0.5, 1, -0.6), _body)
 	# Глаза: белок и зрачок, чуть навыкате.
 	var white := mat(Color("#f4f4ec"), 0.3)
 	var black := mat(Color("#1e1e28"), 0.2)
@@ -157,6 +169,52 @@ func _place_feet() -> void:
 		leg.foot = _rest(leg)
 		leg.t = -1.0
 
+## Укусил — тело бросается вперёд.
+func lunge() -> void:
+	_lunge = 1.0
+
+## Вспышка: 1 — только что ранен (белеет), 0 — обычный.
+func flash(k: float) -> void:
+	k = clampf(k, 0.0, 1.0)
+	if absf(k - _flash) < 0.02 and (k == 0.0) == (_flash == 0.0):
+		return
+	_flash = k
+	for m in [_mat, _mat2]:
+		m.emission_enabled = k > 0.0
+		m.emission = Color(1, 0.85, 0.8)
+		m.emission_energy_multiplier = k * 0.9
+
+## Полоска здоровья над головой; frac ≥ 1 — спрятать.
+func health(frac: float) -> void:
+	if frac >= 0.999:
+		if _bar:
+			_bar.visible = false
+		return
+	if _bar == null:
+		_bar = Node3D.new()
+		add_child(_bar)
+		for i in 2:
+			var q := MeshInstance3D.new()
+			var qm := QuadMesh.new()
+			qm.size = Vector2(1.2, 0.16) * maxf(size, 0.9)
+			q.mesh = qm
+			var m := StandardMaterial3D.new()
+			m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			m.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+			m.billboard_keep_scale = true
+			m.no_depth_test = true
+			m.render_priority = i
+			m.albedo_color = Color(0.1, 0.05, 0.05, 0.8) if i == 0 else Color("#e0484a")
+			if i == 0:
+				m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			q.material_override = m
+			_bar.add_child(q)
+			if i == 1:
+				_bar_fill = q
+		_bar.position.y = _leg_len + 1.5 * size
+	_bar.visible = true
+	_bar_fill.scale.x = clampf(frac, 0.02, 1.0)
+
 ## Кадр: где стоит (на земле), куда смотрит, как быстро идёт.
 func update(dt: float, at: Vector3, heading: float, vel: Vector3) -> void:
 	var first := _legs.size() > 0 and (_legs[0].foot as Vector3) == Vector3.ZERO
@@ -168,14 +226,20 @@ func update(dt: float, at: Vector3, heading: float, vel: Vector3) -> void:
 	var body_y := _leg_len * 0.85 + 0.5 * size * 0.6
 	_body.position = Vector3(0, body_y + 0.05 * size * sin(_phase * 2.0) * minf(speed / 3.0, 1.0), 0)
 	_body.rotation.z = 0.04 * sin(_phase) * minf(speed / 3.0, 1.0)
-	if first:
+	# Бросок: быстро вперёд и вниз, потом назад.
+	_lunge = maxf(0.0, _lunge - dt * 4.0)
+	var jab := sin(PI * (1.0 - _lunge)) if _lunge > 0.0 else 0.0
+	_body.position.z = jab * 0.35 * size
+	_body.rotation.x = jab * 0.25
+	# Первый кадр или долго не рисовали (был далеко) — ноги сразу под себя.
+	if first or (_legs.size() > 0 and (_legs[0].foot as Vector3).distance_to(at) > _leg_len * 3.0):
 		_place_feet()
 	var stride := _leg_len * 0.7
 	var busy := _stepping_group
 	for leg in _legs:
 		var rest := _rest(leg)
 		if leg.t >= 0.0:
-			leg.t += dt / 0.2
+			leg.t += dt / float(leg.get("dur", 0.2))
 			var q: float = minf(leg.t, 1.0)
 			var p: Vector3 = (leg.from as Vector3).lerp(leg.to, q)
 			p.y += sin(PI * q) * _leg_len * 0.3
@@ -183,10 +247,13 @@ func update(dt: float, at: Vector3, heading: float, vel: Vector3) -> void:
 			if leg.t >= 1.0:
 				leg.t = -1.0
 				leg.foot = leg.to
-		elif (leg.foot as Vector3).distance_to(rest) > stride and (busy == -1 or busy == leg.group):
-			# Перешагнуть: цель — чуть впереди, по ходу.
+		elif (leg.foot as Vector3).distance_to(rest) > stride and (busy == -1 or busy == leg.group or (leg.foot as Vector3).distance_to(rest) > stride * 2.0):
+			# Перешагнуть: цель — впереди, по ходу. Бежит — шаг быстрее и дальше, иначе
+			# ноги не поспевают за телом.
+			var dur := clampf(stride / maxf(speed, 0.1) * 0.6, 0.08, 0.2)
+			leg.dur = dur
 			leg.from = leg.foot
-			var ahead := rest + Vector3(vel.x, 0, vel.z) * 0.18
+			var ahead := rest + Vector3(vel.x, 0, vel.z) * dur * 1.6
 			leg.to = Vector3(ahead.x, _ground_at(ahead.x, ahead.z), ahead.z)
 			leg.t = 0.0
 			busy = leg.group

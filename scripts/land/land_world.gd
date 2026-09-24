@@ -1,17 +1,25 @@
-## Суша на экране: остров, вода, небо, деревья, кусты с плодами, ты и соседи, камера.
-## Камера — сверху под углом, следует за тобой; её можно повернуть пальцем.
+## Суша на экране: остров, вода, небо, деревья, кусты с плодами, гнёзда, кости, ты и
+## соседи, камера. Камера — сверху под углом, следует за тобой; её можно повернуть пальцем.
 class_name LandWorld
 extends Node3D
 
-signal ate
+## Всё, что случилось за кадр (съел, укусил, ранили, разбил кость…) — для звуков и дрожи.
+signal happened(e: Dictionary)
 
 var land: Land
 var input := Vector2.ZERO  # джойстик: x — вправо, y — вниз по экрану
 var cam_yaw := 0.0
 var camera: Camera3D
 var _player: Creature3D
-var _npcs: Array = []
+var _mobs := {}  # uid → Creature3D
 var _bushes: Array = []  # [{node, fruits: [MeshInstance3D]}]
+var _nests: Array = []  # [{node, eggs: [MeshInstance3D]}]
+var _bones := {}  # uid кости → Node3D
+var _ground_fn: Callable
+## Нажали «Укус» — передаётся в мир на следующем шаге.
+var bite_pressed := false
+## Дальше этого существ и кости не рисуем — всё равно не видно, а телефону легче.
+const DRAW_DIST := 70.0
 
 const CAM_PITCH := deg_to_rad(40.0)
 const CAM_DIST := 15.0
@@ -68,20 +76,16 @@ func setup(l: Land) -> void:
 	add_child(water)
 	_trees()
 	_make_bushes()
+	_make_nests()
 	# Ты — цвета своего вида. Соседи — свои цвета и ноги.
-	var ground_fn := func(x: float, z: float) -> float: return land.terrain.height(x, z)
+	_ground_fn = func(x: float, z: float) -> float: return land.terrain.height(x, z)
 	_player = Creature3D.new()
-	_player.ground = ground_fn
+	_player.ground = _ground_fn
 	add_child(_player)
 	var c := Color(Content.COLORS[evo.color])
 	_player.build(c, Color(Content.COLORS[evo.color2]) if evo.pattern != "none" else c.darkened(0.25), 1.0, 4)
-	for n in l.npcs:
-		var cr := Creature3D.new()
-		cr.ground = ground_fn
-		add_child(cr)
-		var nc := Color(n.color)
-		cr.build(nc, nc.darkened(0.3), n.size, n.legs)
-		_npcs.append(cr)
+	_sync_mobs(0.0)
+	_sync_bones()
 	camera = Camera3D.new()
 	camera.fov = 50.0
 	camera.far = 600.0
@@ -154,6 +158,193 @@ func _make_bushes() -> void:
 			fruits.append(f)
 		_bushes.append({"node": node, "fruits": fruits})
 
+## Гнездо: кольцо из веток и яйца в нём.
+func _make_nests() -> void:
+	var twig := Creature3D.mat(Color("#8a6a44"), 1.0)
+	var twig2 := Creature3D.mat(Color("#6e5236"), 1.0)
+	var egg := Creature3D.mat(Color("#f2ead2"), 0.5)
+	var spot := Creature3D.mat(Color("#b89a70"), 0.8)
+	for n in land.nests:
+		var node := Node3D.new()
+		node.position = n.pos
+		add_child(node)
+		var cm := CylinderMesh.new()
+		cm.top_radius = 0.09
+		cm.bottom_radius = 0.11
+		cm.height = 1.5
+		cm.radial_segments = 5
+		cm.rings = 1
+		for i in 16:
+			var a := TAU * i / 16.0
+			var tw := MeshInstance3D.new()
+			tw.mesh = cm
+			tw.material_override = twig if i % 2 == 0 else twig2
+			tw.position = Vector3(cos(a) * 1.35, 0.22 + 0.12 * (i % 3), sin(a) * 1.35)
+			# Ветки лежат по кругу, чуть вкось.
+			tw.basis = Creature3D._basis_y(Vector3(-sin(a), 0.15 * ((i % 3) - 1), cos(a)).rotated(Vector3.UP, 0.35))
+			node.add_child(tw)
+		var bed := MeshInstance3D.new()
+		var bm := CylinderMesh.new()
+		bm.top_radius = 1.3
+		bm.bottom_radius = 1.1
+		bm.height = 0.25
+		bm.radial_segments = 10
+		bed.mesh = bm
+		bed.material_override = twig2
+		bed.position.y = 0.08
+		node.add_child(bed)
+		var eggs: Array = []
+		for i in Land.EGGS:
+			var e := MeshInstance3D.new()
+			var em := SphereMesh.new()
+			em.radius = 0.3
+			em.height = 0.78
+			em.radial_segments = 10
+			em.rings = 6
+			e.mesh = em
+			e.material_override = egg
+			var a := TAU * i / Land.EGGS + 0.4
+			e.position = Vector3(cos(a) * 0.45, 0.5, sin(a) * 0.45)
+			e.rotation.z = 0.25 * (i - 1)
+			var sp := MeshInstance3D.new()
+			var smm := SphereMesh.new()
+			smm.radius = 0.09
+			smm.height = 0.1
+			smm.radial_segments = 6
+			smm.rings = 3
+			sp.mesh = smm
+			sp.material_override = spot
+			sp.position = Vector3(0.18, 0.12, 0.18)
+			e.add_child(sp)
+			node.add_child(e)
+			eggs.append(e)
+		_nests.append({"node": node, "eggs": eggs})
+
+## Кость: большой скелет (череп, хребет, рёбра) или кучка (череп и пара костей).
+func _make_bone(b: Dictionary) -> Node3D:
+	var node := Node3D.new()
+	node.position = b.pos
+	node.rotation.y = b.yaw
+	var s: float = b.size
+	var m := Creature3D.mat(Color("#ece2c8"), 0.6)
+	var dark := Creature3D.mat(Color("#3a3028"), 1.0)
+	var inner := Node3D.new()
+	inner.name = "Inner"
+	node.add_child(inner)
+	var sk := s * (0.55 if b.big else 0.6)
+	var skull := MeshInstance3D.new()
+	var skm := SphereMesh.new()
+	skm.radius = sk
+	skm.height = sk * 1.8
+	skm.radial_segments = 12
+	skm.rings = 6
+	skull.mesh = skm
+	skull.material_override = m
+	var head_at := Vector3(0, sk * 0.75, s * (0.9 if b.big else 0.0))
+	skull.position = head_at
+	skull.scale = Vector3(1.0, 0.85, 1.2)
+	inner.add_child(skull)
+	for side in [-1.0, 1.0]:
+		var hole := MeshInstance3D.new()
+		var hm := SphereMesh.new()
+		hm.radius = sk * 0.26
+		hm.height = sk * 0.4
+		hm.radial_segments = 8
+		hm.rings = 4
+		hole.mesh = hm
+		hole.material_override = dark
+		hole.position = head_at + Vector3(side * sk * 0.42, sk * 0.15, sk * 0.95)
+		inner.add_child(hole)
+	var rod := func(from: Vector3, to: Vector3, r: float) -> void:
+		var mi := MeshInstance3D.new()
+		var cm := CylinderMesh.new()
+		cm.top_radius = r
+		cm.bottom_radius = r
+		cm.height = from.distance_to(to)
+		cm.radial_segments = 6
+		cm.rings = 1
+		mi.mesh = cm
+		mi.material_override = m
+		mi.position = (from + to) / 2.0
+		mi.basis = Creature3D._basis_y(to - from)
+		inner.add_child(mi)
+	if b.big:
+		# Хребет и рёбра дугами — как выброшенный на берег великан.
+		var spine_from := Vector3(0, s * 0.35, s * 0.4)
+		var spine_to := Vector3(0, s * 0.2, -s * 1.6)
+		rod.call(spine_from, spine_to, 0.13 * s)
+		for i in 5:
+			var z := lerpf(0.1, -1.3, i / 4.0) * s
+			var h := s * (0.95 - i * 0.1)
+			for side in [-1.0, 1.0]:
+				var top := Vector3(0, s * 0.33, z)
+				var mid := Vector3(side * h * 0.55, h * 0.75, z - 0.1 * s)
+				var low := Vector3(side * h * 0.8, 0.05, z - 0.2 * s)
+				rod.call(top, mid, 0.07 * s)
+				rod.call(mid, low, 0.06 * s)
+	else:
+		for q in [[Vector3(-0.9, 0.12, -0.3), Vector3(0.7, 0.12, -0.8)], [Vector3(0.9, 0.15, 0.2), Vector3(0.1, 0.1, 0.9)]]:
+			rod.call((q[0] as Vector3) * s, (q[1] as Vector3) * s, 0.1 * s)
+			for end in q:
+				var knob := MeshInstance3D.new()
+				var km := SphereMesh.new()
+				km.radius = 0.16 * s
+				km.height = 0.32 * s
+				km.radial_segments = 6
+				km.rings = 3
+				knob.mesh = km
+				knob.material_override = m
+				knob.position = (end as Vector3) * s
+				inner.add_child(knob)
+	return node
+
+## Кости: новые — построить, разбитые — спрятать, вернувшиеся — снова показать.
+func _sync_bones() -> void:
+	var seen := {}
+	for b in land.bones:
+		seen[b.uid] = true
+		var n: Node3D = _bones.get(b.uid)
+		if n == null:
+			n = _make_bone(b)
+			add_child(n)
+			_bones[b.uid] = n
+		n.visible = b.alive and (b.pos as Vector3).distance_to(land.pos) < DRAW_DIST + 20.0
+		if n.visible:
+			# Удар — кость вздрагивает; побитая — поменьше.
+			var inner := n.get_node("Inner") as Node3D
+			inner.position.x = sin(land.time * 60.0) * 0.08 * float(b.hit) * float(b.size)
+			inner.scale = Vector3.ONE * (0.7 + 0.3 * float(b.hp) / float(b.max_hp))
+	for uid in _bones.keys():
+		if not seen.has(uid):
+			(_bones[uid] as Node3D).queue_free()
+			_bones.erase(uid)
+
+## Существа: новые — построить, умершие — убрать. Далёкие — не рисовать.
+func _sync_mobs(delta: float) -> void:
+	var seen := {}
+	for m in land.mobs:
+		seen[m.uid] = true
+		var cr: Creature3D = _mobs.get(m.uid)
+		if cr == null:
+			cr = Creature3D.new()
+			cr.ground = _ground_fn
+			add_child(cr)
+			var nc := Color(m.color)
+			var hermit: bool = m.kind == "hermit"
+			cr.build(nc, nc.darkened(0.45 if hermit else 0.3), m.size, m.legs, hermit)
+			_mobs[m.uid] = cr
+		var far: bool = (m.pos as Vector3).distance_to(land.pos) > DRAW_DIST
+		cr.visible = not far
+		if far:
+			continue
+		cr.update(delta, m.pos, m.heading, m.vel)
+		cr.flash(m.hit)
+		cr.health(m.hp / m.max_hp)
+	for uid in _mobs.keys():
+		if not seen.has(uid):
+			(_mobs[uid] as Node3D).queue_free()
+			_mobs.erase(uid)
+
 func _process(delta: float) -> void:
 	if land == null:
 		return
@@ -161,14 +352,26 @@ func _process(delta: float) -> void:
 	var fwd := Vector2(sin(cam_yaw), cos(cam_yaw)) * -1.0
 	var right := Vector2(-fwd.y, fwd.x)
 	var dir := right * input.x - fwd * input.y
-	land.step(minf(delta, 0.05), dir)
+	land.step(minf(delta, 0.05), dir, bite_pressed)
+	bite_pressed = false
 	for e in land.events:
-		if e.t == "eat":
-			ate.emit()
+		match e.t:
+			"bite":
+				_player.lunge()
+			"hurt":
+				# Тебя кусили: ты белеешь, а кусачий бросается вперёд.
+				_player.flash(1.0)
+				if _mobs.has(e.uid):
+					(_mobs[e.uid] as Creature3D).lunge()
+		happened.emit(e)
+	_player.flash(_player._flash - delta * 3.0)
 	_player.update(delta, land.pos, land.heading, land.vel)
-	for i in _npcs.size():
-		var n: Dictionary = land.npcs[i]
-		(_npcs[i] as Creature3D).update(delta, n.pos, n.heading, n.vel)
+	_sync_mobs(delta)
+	_sync_bones()
+	for i in _nests.size():
+		var eggs: Array = _nests[i].eggs
+		for j in eggs.size():
+			eggs[j].visible = j < int(land.nests[i].eggs)
 	for i in _bushes.size():
 		var fr: Array = _bushes[i].fruits
 		for j in fr.size():

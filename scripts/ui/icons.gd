@@ -44,6 +44,14 @@ static func draw(ci: CanvasItem, name: String, rect: Rect2, col: Color) -> void:
 			Art.poly(ci, [Vector2(40, 20), Vector2(84, 50), Vector2(40, 80), Vector2(52, 50)], col)
 			for y in [34.0, 50.0, 66.0]:
 				ci.draw_line(Vector2(12, y), Vector2(36, y), Color(col, 0.7), 6, true)
+		"bite":
+			# Раскрытая пасть: верхний и нижний ряд зубов.
+			ci.draw_arc(Vector2(50, 50), 38, PI * 1.1, PI * 1.9, 16, col, 8, true)
+			ci.draw_arc(Vector2(50, 50), 38, PI * 0.1, PI * 0.9, 16, col, 8, true)
+			for i in 4:
+				var x := 26.0 + i * 16.0
+				Art.poly(ci, [Vector2(x - 7, 24), Vector2(x + 7, 24), Vector2(x, 44)], col)
+				Art.poly(ci, [Vector2(x - 7, 76), Vector2(x + 7, 76), Vector2(x, 56)], col)
 		"book":
 			Art.poly(ci, [Vector2(12, 22), Vector2(48, 28), Vector2(48, 84), Vector2(12, 78)], col)
 			Art.poly(ci, [Vector2(88, 22), Vector2(52, 28), Vector2(52, 84), Vector2(88, 78)], col)

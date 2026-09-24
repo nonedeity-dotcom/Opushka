@@ -268,13 +268,49 @@ func _to_land() -> void:
 	land_world = LandWorld.new()
 	add_child(land_world)
 	land_world.setup(land)
-	land_world.ate.connect(func():
-		sound.play("eat", randf_range(0.9, 1.1))
-		_buzz(10))
 	land_hud = preload("res://scripts/land/land_hud.gd").new()
 	land_hud.world = land_world
 	land_hud.back.connect(_to_menu)
 	_ui.add_child(land_hud)
+	land_world.happened.connect(_land_event)
+
+## Что случилось на суше — звук, дрожь, надпись.
+func _land_event(e: Dictionary) -> void:
+	match e.t:
+		"eat":
+			sound.play("eat", randf_range(0.9, 1.1))
+			_buzz(10)
+		"egg":
+			sound.play("eat_meat", randf_range(0.9, 1.1))
+			_buzz(20)
+			land_hud.say("+%d ДНК — яйцо! Стая в ярости" % int(e.dna))
+		"bite":
+			sound.play("bite", randf_range(0.9, 1.1))
+		"hit":
+			sound.play("hit", randf_range(0.9, 1.1))
+			_buzz(15)
+		"bone_hit":
+			sound.play("rock", randf_range(1.2, 1.5))
+			_buzz(12)
+		"bone_break":
+			sound.play("rock")
+			_buzz(40)
+			land_hud.say("+%d ДНК из костей" % int(e.dna))
+		"alarm":
+			sound.play("growl", randf_range(1.1, 1.3))
+		"hurt":
+			sound.play("hurt", randf_range(0.9, 1.1))
+			land_hud.hurt()
+			_buzz(30)
+		"kill":
+			sound.play("kill")
+			_buzz(30)
+			if e.kind == "hermit":
+				land_hud.say("Отшельник повержен! +%d ДНК" % int(e.dna))
+		"death":
+			sound.play("death")
+			_buzz(120)
+			land_hud.say("Тебя одолели — снова у начала (−%d ДНК)" % int(e.lost))
 
 func _leave_land() -> void:
 	if land_world:
@@ -1091,6 +1127,10 @@ func _run_script() -> void:
 			l.pos = Vector3(float(q[0]), l.terrain.height(float(q[0]), float(q[1])), float(q[1]))
 		"yaw":
 			land_world.cam_yaw = deg_to_rad(float(p[1]))
+		"landbite":
+			land_world.bite_pressed = true
+		"landhp":
+			land_world.land.hp = land_world.land.max_hp * float(p[1])
 		"myhp":
 			pond.player.hp = pond.player.max_hp * float(p[1])
 		"event":
