@@ -44,6 +44,9 @@ var zap_targets := 0
 var regen := 0.0
 var dna_rate := 0.0
 var dash_power := 260.0
+var armor_all := 0.0  # доля урона, которую снимает броня со всех сторон
+var grabs: Array = []  # щупальца: [{a, arc, dmg}]
+var glow := false  # светится — видно сквозь туман
 
 # Что с ней сейчас.
 var desire := Vector2.ZERO  # куда и насколько сильно хочет плыть, длина 0–1
@@ -67,9 +70,15 @@ var ai_target: Creature = null
 ## Сколько ещё может гнаться, пока не выдохнется; отдых — пока не станет снова больше нуля.
 var stamina := 1.0
 var resting := 0.0
+## Держат щупальцем — плывёт медленнее.
+var slow_t := 0.0
+## Сколько секунд живёт — для появления из мути.
+var age := 0.0
 # Только для рисования.
 var flash := 0.0
 var bite_anim := 0.0
+var eat_anim := 0.0
+var grow_anim := 0.0
 var phase := 0.0
 var wobble := 0.0
 
@@ -80,11 +89,12 @@ func _init() -> void:
 	wobble = float(uid % 97) * 0.37
 
 
-static func of_species(id: String) -> Creature:
+## size — «рост» для великанов, которые всегда во много раз больше тебя.
+static func of_species(id: String, size := 0.0) -> Creature:
 	var def: Dictionary = Content.SPECIES[id]
 	var c := Creature.new()
 	c.species = id
-	c.size_r = def.radius
+	c.size_r = size if size > 0.0 else def.radius
 	c.shape = Content.shape_preset(def.get("shape", "round"))
 	c.radius = c.size_r * Content.shape_scale(c.shape)
 	c.color = Color(def.color)
@@ -121,6 +131,8 @@ func sync_player(evo: Evolution) -> void:
 func behavior() -> String:
 	if is_player:
 		return "player"
+	if species == "mate":
+		return "mate"
 	return "skittish" if golden else Content.SPECIES[species].behavior
 
 func size_k() -> float:
@@ -139,6 +151,9 @@ func rebuild() -> void:
 	glands = []
 	zap = 0.0
 	zap_targets = 0
+	armor_all = 0.0
+	grabs = []
+	glow = false
 	regen = 0.0
 	dna_rate = 0.0
 	eyes = 0.0
@@ -157,7 +172,13 @@ func rebuild() -> void:
 				mouth = {"id": p.id, "a": p.a, "arc": arc, "bite": float(def.get("bite", 0.0)) * pw * dmg_k,
 					"diet": def.diet, "eat_plant": float(def.get("eat_plant", 0.0)) * feed, "eat_meat": float(def.get("eat_meat", 0.0)) * feed}
 		if def.has("spike"):
-			spikes.append({"a": p.a, "arc": arc, "dmg": def.spike * pw * dmg_k})
+			spikes.append({"a": p.a, "arc": arc, "dmg": def.spike * pw * dmg_k, "rock": float(def.get("rock", 1.0))})
+		if def.has("armor_all"):
+			armor_all = maxf(armor_all, minf(0.6, def.armor_all * pw))
+		if def.has("grab"):
+			grabs.append({"a": p.a, "arc": arc, "dmg": def.grab * pw * dmg_k})
+		if def.get("glow", false):
+			glow = true
 		if def.has("armor"):
 			shells.append({"a": p.a, "arc": arc, "armor": minf(0.8, def.armor * pw)})
 		if def.has("poison"):
@@ -186,7 +207,7 @@ func eats(kind: String) -> bool:
 
 ## Может ли вообще ранить (для «опасен ли он»).
 func armed() -> bool:
-	return float(mouth.get("bite", 0.0)) > 0.0 or not spikes.is_empty() or not glands.is_empty() or zap > 0.0
+	return float(mouth.get("bite", 0.0)) > 0.0 or not spikes.is_empty() or not glands.is_empty() or zap > 0.0 or not grabs.is_empty()
 
 func heading_vec() -> Vector2:
 	return Vector2.from_angle(heading)

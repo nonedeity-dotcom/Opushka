@@ -23,10 +23,16 @@ var seen := {}  # вид → true
 var stats := {}  # plants, meat, kills, deaths, parts_found, edits, dashes
 var kills_by := {}  # вид → сколько
 var goals_done: Array = []
+var difficulty := "normal"
+## Поколение: сколько раз находил пару и менял тело.
+var generation := 1
+## Сколько секунд сыграно — для меню сохранений.
+var played := 0.0
 
 
-static func create() -> Evolution:
+static func create(diff := "normal") -> Evolution:
 	var e := Evolution.new()
+	e.difficulty = diff if Content.DIFFICULTY.has(diff) else "normal"
 	e.body = Content.START_PARTS.duplicate(true)
 	e.unlocked = Content.START_UNLOCKED.duplicate()
 	e.shape = Content.shape_preset("round")
@@ -105,6 +111,8 @@ static func anchor(a: float, d: float) -> Vector2:
 
 ## Можно ли поставить часть на этот угол и глубину. {ok, reason}. Рот ставится вместо старого.
 func can_place(id: String, angle: int, depth := 1.0) -> Dictionary:
+	if not Content.obtainable(id):
+		return {"ok": false, "reason": "Эту часть не добыть — она есть только у существ"}
 	if not unlocked.has(id):
 		return {"ok": false, "reason": "Эта часть ещё не найдена"}
 	var cost: int = Content.PARTS[id].cost
@@ -282,6 +290,9 @@ func to_dict() -> Dictionary:
 		"stats": stats.duplicate(),
 		"kills_by": kills_by.duplicate(),
 		"goals_done": goals_done.duplicate(),
+		"difficulty": difficulty,
+		"generation": generation,
+		"played": played,
 	}
 
 ## Прочитанное с диска. Непонятное выбрасывается по кусочку. null — сохранения нет.
@@ -292,7 +303,7 @@ static func from_dict(d: Variant) -> Evolution:
 	e.dna_total = maxf(0.0, float(d.dna_total))
 	for id in _dict(d.get("unlocked")):
 		var l = d.unlocked[id]
-		if Content.PARTS.has(id) and (l is int or l is float):
+		if Content.PARTS.has(id) and Content.obtainable(id) and (l is int or l is float):
 			e.unlocked[id] = clampi(int(l), 1, Content.PART_MAX_LEVEL)
 	for id in _dict(d.get("shards")):
 		var n = d.shards[id]
@@ -325,6 +336,14 @@ static func from_dict(d: Variant) -> Evolution:
 		var n = d.kills_by[s]
 		if Content.SPECIES.has(s) and (n is int or n is float):
 			e.kills_by[s] = int(n)
+	if Content.DIFFICULTY.has(str(d.get("difficulty", ""))):
+		e.difficulty = str(d.difficulty)
+	var gen = d.get("generation")
+	if gen is int or gen is float:
+		e.generation = maxi(1, int(gen))
+	var pl = d.get("played")
+	if pl is int or pl is float:
+		e.played = maxf(0.0, float(pl))
 	if d.get("goals_done") is Array:
 		for g in d.goals_done:
 			if g is String:
@@ -333,3 +352,17 @@ static func from_dict(d: Variant) -> Evolution:
 
 static func _dict(x: Variant) -> Dictionary:
 	return x if x is Dictionary else {}
+
+func diff() -> Dictionary:
+	return Content.DIFFICULTY[difficulty]
+
+## На тяжёлой сложности гибель отнимает часть пути до следующего размера.
+func death_loss() -> float:
+	var k: float = diff().death
+	if k <= 0.0:
+		return 0.0
+	var floor_dna: float = Content.LEVELS[level() - 1].dna
+	var lost := (dna_total - floor_dna) * k
+	dna_total -= lost
+	return lost
+

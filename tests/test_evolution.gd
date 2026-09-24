@@ -121,8 +121,34 @@ func test_справочник(c) -> void:
 	for sid in Content.SPECIES:
 		for d in Content.SPECIES[sid].drops:
 			found[d[0]] = true
-	var missing := Content.PARTS.keys().filter(func(p): return not found.has(p) and not Content.START_UNLOCKED.has(p))
-	c.eq("каждую часть можно где-то добыть", missing, [])
+	var from_rocks := {}
+	for rid in Content.ROCKS:
+		for d in Content.ROCKS[rid].drops:
+			from_rocks[d[0]] = true
+	var missing := Content.PARTS.keys().filter(func(p): return Content.obtainable(p) and not found.has(p) and not from_rocks.has(p) and not Content.START_UNLOCKED.has(p))
+	c.eq("каждую добываемую часть можно где-то добыть", missing, [])
+	c.ok("каменные части — только из камней", from_rocks.keys().all(func(p): return Content.PARTS[p].get("source", "") == "rock" and not found.has(p)))
+	c.ok("части «не выбить» не выпадают ни откуда", Content.PARTS.keys().filter(func(p): return not Content.obtainable(p)).all(func(p): return not found.has(p) and not from_rocks.has(p)))
+	c.ok("у кого-то такие части есть", Content.SPECIES.values().any(func(d): return d.parts.any(func(p): return not Content.obtainable(p[0]))))
+
+func test_неотбиваемые(c) -> void:
+	var e := Evolution.create()
+	e.unlocked.tentacle = 1
+	e.add_dna(500)
+	c.ok("щупальце не поставить, даже если как-то открыто", not e.can_place("tentacle", 90).ok)
+	var odd := Evolution.from_dict({"dna_total": 10, "unlocked": {"horn": 3}})
+	c.ok("из сохранения не протащить", not odd.unlocked.has("horn"))
+
+func test_сложность(c) -> void:
+	var e := Evolution.create("hard")
+	e.add_dna(Content.LEVELS[2].dna + 40)
+	var lost := e.death_loss()
+	c.ok("на тяжёлой гибель отнимает часть роста", lost > 0.0 and e.level() == 3)
+	var easy := Evolution.create("easy")
+	easy.add_dna(100)
+	c.eq("на лёгкой — ничего", easy.death_loss(), 0.0)
+	var copy := Evolution.from_dict(JSON.parse_string(JSON.stringify(e.to_dict())))
+	c.eq("сложность сохраняется", copy.difficulty, "hard")
 
 func test_части_внутри(c) -> void:
 	var e := Evolution.create()

@@ -79,6 +79,8 @@ func effects(events: Array) -> void:
 				if e.to_player:
 					_shake = minf(1.0, _shake + 0.5)
 			"kill":
+				# Погибшая клетка не исчезает сразу: съёживается и тает.
+				_fx.append({"k": "corpse", "who": e.who, "life": 1.0, "speed": 1.8})
 				_bits(e.pos, e.color, 14, 120.0)
 				if e.get("golden", false):
 					_bits(e.pos, Art.GOLD, 24, 160.0)
@@ -93,6 +95,8 @@ func effects(events: Array) -> void:
 			"pickup":
 				_ring(e.pos, 40.0, Art.GOLD, 0.7)
 				_bits(e.pos, Art.GOLD, 12, 110.0)
+				# Находка влетает в клетку.
+				_fx.append({"k": "fly", "from": e.pos, "part": e.part, "life": 1.0, "speed": 2.5})
 			"levelup":
 				_ring(pond.player.pos, pond.player.radius * 4.0, Art.GREEN, 1.2)
 				_ring(pond.player.pos, pond.player.radius * 2.5, Color.WHITE, 0.9)
@@ -103,6 +107,22 @@ func effects(events: Array) -> void:
 			"death":
 				_bits(e.pos, Color("#f07070"), 20, 150.0)
 				_shake = 1.0
+			"rock_hit":
+				_bits(e.pos, Color(Content.ROCKS[e.rock].color).lightened(0.3), 6, 110.0)
+				_shake = minf(1.0, _shake + 0.15)
+			"rock_break":
+				var col := Color(Content.ROCKS[e.rock].color)
+				for i in 10:
+					_fx.append({"k": "shard", "pos": e.pos, "vel": Vector2.from_angle(randf() * TAU) * randf_range(60.0, 180.0), "life": 1.0, "speed": 1.2, "col": col, "r": e.r * randf_range(0.15, 0.3), "rot": randf() * TAU})
+				_ring(e.pos, e.r * 2.0, Color(1, 1, 1, 0.7), 0.5)
+				_text(e.pos + Vector2(0, -e.r), "+%s" % _num(e.dna), Color("#a8f0c0"))
+				_shake = minf(1.0, _shake + 0.4)
+			"mate_called":
+				_ring(pond.player.pos, pond.player.radius * 3.0, Color("#f07aa8"), 0.8)
+			"mated":
+				for i in 10:
+					_fx.append({"k": "heart", "pos": e.pos + Vector2(randf() - 0.5, randf() - 0.5) * 30.0, "vel": Vector2(randf_range(-30, 30), randf_range(-90, -40)), "life": 1.0, "speed": 0.7, "r": randf_range(6.0, 12.0)})
+				_ring(e.pos, pond.player.radius * 4.0, Color("#f07aa8"), 1.0)
 			"dash":
 				for i in 5:
 					_fx.append({"k": "bubble", "pos": e.pos + Vector2(randf() - 0.5, randf() - 0.5) * 20.0, "life": 0.9, "r": randf_range(2.0, 4.0)})
@@ -138,9 +158,14 @@ func _draw() -> void:
 	for cap in pond.capsules:
 		if near.has_point(cap.pos):
 			CellArt.capsule(self, cap, t, pond.evo.unlocked.has(cap.part))
+	for k in pond.rocks:
+		if view.grow(k.r * 2.0).has_point(k.pos):
+			CellArt.rock(self, k, t)
 	for m in pond.mobs:
 		if view.grow(m.radius * 3.0).has_point(m.pos):
 			_creature(m)
+	if pond.mate != null and view.grow(pond.mate.radius * 3.0).has_point(pond.mate.pos):
+		CellArt.mate(self, pond.mate, t)
 	var p := pond.player
 	draw_circle(p.pos, p.radius * 1.6, Color(1, 1, 1, 0.05))
 	if p.invuln > 0.0:
@@ -151,8 +176,13 @@ func _draw() -> void:
 func _creature(c: Creature) -> void:
 	CellArt.creature(self, c.pos, c.size_r, c.heading, c.color, c.parts, c.phase, {
 		"flash": c.flash, "bite": c.bite_anim, "poisoned": c.poison_t > 0.0, "wobble": c.wobble,
-		"shape": c.shape, "golden": c.golden,
+		"shape": c.shape, "golden": c.golden, "gulp": c.eat_anim, "grow": c.grow_anim,
+		"stretch": clampf(c.vel.length() / maxf(c.speed, 1.0), 0.0, 1.6),
+		# Новая клетка проявляется из мути, а не возникает разом.
+		"ghost": 1.0 if c.is_player else clampf(c.age / 0.6, 0.0, 1.0),
 	})
+	if c.slow_t > 0.0:
+		draw_arc(c.pos, c.radius * 1.15, 0, TAU, 24, Color(0.9, 0.5, 0.8, 0.5), 2.0, true)
 	if not c.is_player and c.hp < c.max_hp - 0.01:
 		var w := maxf(c.radius * 1.6, 18.0)
 		var at := c.pos + Vector2(-w / 2.0, -c.radius - 10.0)
@@ -201,6 +231,26 @@ func _draw_fx() -> void:
 				pts.append(f.to)
 				draw_polyline(pts, Color(1.0, 0.95, 0.5, a), 3.0, true)
 				draw_polyline(pts, Color(1, 1, 1, a), 1.2, true)
+			"corpse":
+				var who: Creature = f.who
+				var k := a * a
+				CellArt.creature(self, who.pos, who.size_r * (0.4 + 0.6 * k), who.heading + (1.0 - a) * 0.8, who.color, who.parts, t, {
+					"shape": who.shape, "ghost": a, "flash": 1.0 - a, "shadow": false})
+			"fly":
+				var to := pond.player.pos
+				var q: float = 1.0 - a
+				var at: Vector2 = f.from.lerp(to, q * q) + Vector2(0, -40.0 * sin(PI * q))
+				var sz := 26.0 * (1.0 - q * 0.6)
+				CellArt.part_icon(self, f.part, Rect2(at - Vector2(sz, sz) / 2.0, Vector2(sz, sz)), Color("#c0c8d0"), t)
+			"shard":
+				var s := f.r as float
+				var rot: float = f.rot + (1.0 - a) * 4.0
+				var pts := PackedVector2Array()
+				for i in 4:
+					pts.append(f.pos + Vector2.from_angle(rot + i * 1.7) * s * (0.6 + 0.4 * (i % 2)))
+				draw_colored_polygon(pts, Color(f.col, a))
+			"heart":
+				Art.heart(self, f.pos, f.r, Color(0.95, 0.5, 0.7, a))
 			"text":
 				var size := int(22.0 / camera.zoom.x)
 				var w := _font.get_string_size(f.s, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x

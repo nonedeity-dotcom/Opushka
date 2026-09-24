@@ -20,14 +20,17 @@ func _draw() -> void:
 	var c := size / 2.0
 	var bg := Color(0.05, 0.1, 0.13, 0.62) if floating else Art.CARD
 	if accent:
-		bg = Color(0.2, 0.36, 0.3, 0.92)
+		bg = Color(0.42, 0.2, 0.32, 0.92) if icon_name == "heart" else Color(0.2, 0.36, 0.3, 0.92)
 	if is_pressed() and get_draw_mode() == DRAW_PRESSED:
 		bg = Art.GREEN_DARK
 	draw_circle(c, r, bg)
 	draw_arc(c, r - 1, 0, TAU, 40, Color(1, 1, 1, 0.1), 2, true)
 	var inner := Rect2(c - Vector2(r, r) * 0.52, Vector2(r, r) * 1.04)
 	if icon_name != "":
-		Icons.draw(self, icon_name, inner, Art.GREEN if accent else Art.TEXT)
+		var ic := Art.TEXT
+		if accent:
+			ic = Color("#f7a8c8") if icon_name == "heart" else Art.GREEN
+		Icons.draw(self, icon_name, inner, ic)
 	if badge != "":
 		var b := Vector2(size.x - 10, 10)
 		draw_circle(b, 15, Art.ACCENT)

@@ -42,7 +42,10 @@ const LEVELS := [
 ##   bite — укус; spike — укол шипом; arc — в пределах скольки градусов от части она
 ##   действует; speed, turn — скорость и поворот; armor — какую долю урона панцирь снимает
 ##   со своей стороны; hp — здоровье; regen — лечение в секунду; dna_rate — ДНК в секунду;
-##   poison — урон ядом в секунду; zap — удар током; eyes — зрение.
+##   poison — урон ядом в секунду; zap — удар током; eyes — зрение; armor_all — какую долю
+##   урона снимает со всех сторон; rock — во сколько раз сильнее бьёт по камням; grab —
+##   щупальце: держит и замедляет; glow — светится, видно даже в тумане.
+##   source: rock — добывается только из камней; mob — есть только у существ, не выбить.
 const PARTS := {
 	"filter": {"name": "Фильтр", "kind": "mouth", "cost": 4, "diet": "plant", "eat_plant": 1.0, "arc": 75,
 		"hint": "Травоядный рот: ест водоросли"},
@@ -74,6 +77,45 @@ const PARTS := {
 		"hint": "Раздвигает туман: без глаз видно только то, что рядом"},
 	"chloroplast": {"name": "Хлоропласт", "kind": "special", "cost": 28, "regen": 0.6, "dna_rate": 0.08, "inner": true,
 		"hint": "Питается светом: лечит и понемногу даёт ДНК"},
+	# Только из камней.
+	"drill": {"name": "Бур", "kind": "weapon", "cost": 30, "spike": 6.0, "arc": 30, "rock": 3.0, "source": "rock",
+		"hint": "Колет спереди и крошит камни втрое быстрее. Только из камней"},
+	"stone_skin": {"name": "Каменная кожа", "kind": "defense", "cost": 26, "armor_all": 0.2, "speed": -10.0, "source": "rock",
+		"hint": "Любой удар слабее на пятую часть. Только из камней"},
+	"crystal": {"name": "Кристалл", "kind": "sense", "cost": 34, "eyes": 1.6, "glow": true, "inner": true, "source": "rock",
+		"hint": "Светится изнутри и раздвигает туман сильнее глаза. Только из камней"},
+	# Есть только у существ — выбить нельзя.
+	"tentacle": {"name": "Щупальце", "kind": "weapon", "cost": 0, "grab": 3.0, "arc": 45, "source": "mob",
+		"hint": "Хватает и замедляет. Не выбить"},
+	"lantern": {"name": "Фонарик", "kind": "sense", "cost": 0, "glow": true, "source": "mob",
+		"hint": "Светится — видно даже в тумане. Не выбить"},
+	"plates": {"name": "Пластины", "kind": "defense", "cost": 0, "armor_all": 0.35, "source": "mob",
+		"hint": "Броня со всех сторон. Не выбить"},
+	"horn": {"name": "Рог", "kind": "weapon", "cost": 0, "spike": 11.0, "arc": 25, "source": "mob",
+		"hint": "Бьёт с разгона. Не выбить"},
+}
+
+## Камни: их можно разбить — рывком, укусом, шипом. Из них — части, которых нет ни у кого.
+## Радиус и прочность растут вместе с тобой.
+const ROCKS := {
+	"stone": {"name": "Камень", "radius": 20.0, "hp": 28.0, "levels": [1, 10], "weight": 3.0, "dna": 3.0,
+		"color": "#7d8690", "drops": [["stone_skin", 0.12], ["drill", 0.05]]},
+	"boulder": {"name": "Валун", "radius": 34.0, "hp": 80.0, "levels": [3, 10], "weight": 2.0, "dna": 9.0,
+		"color": "#6f757d", "drops": [["drill", 0.18], ["stone_skin", 0.15]]},
+	"crystal": {"name": "Кристальная глыба", "radius": 28.0, "hp": 120.0, "levels": [5, 10], "weight": 1.0, "dna": 16.0,
+		"color": "#7fb8d8", "drops": [["crystal", 0.25], ["drill", 0.1]]},
+}
+
+## Сложность выбирается при новой игре. hurt — во сколько раз больнее тебе; drop — шанс
+## выпадения частей; hunt — скорость хищников; death — какую долю пути до следующего
+## размера теряешь, если съели.
+const DIFFICULTY := {
+	"easy": {"name": "Лёгкая", "hurt": 0.6, "drop": 1.3, "hunt": 0.85, "death": 0.0,
+		"hint": "Хищники медленнее и кусают слабее, части выпадают чаще"},
+	"normal": {"name": "Обычная", "hurt": 1.0, "drop": 1.0, "hunt": 1.0, "death": 0.0,
+		"hint": "Как задумано"},
+	"hard": {"name": "Тяжёлая", "hurt": 1.5, "drop": 0.8, "hunt": 1.12, "death": 0.25,
+		"hint": "Больнее, быстрее, реже выпадает; гибель отнимает часть роста"},
 }
 
 ## С чего начинает каждая новая клетка.
@@ -139,13 +181,35 @@ const SPECIES := {
 		"drops": [["flagellum2", 0.25], ["jaws", 0.2]],
 		"hint": "Очень быстрый хищник"},
 	"velikan": {"name": "Шипастый великан", "behavior": "boss", "radius": 44.0, "color": "#a08a50", "shape": "star", "tier": 6,
-		"parts": [["spike2", 0, 1], ["spike2", 120, 1], ["spike2", -120, 1], ["shell", 60, 1], ["shell", -60, 1], ["shell", 180, 1]],
+		"parts": [["horn", 0, 1], ["spike2", 120, 1], ["spike2", -120, 1], ["shell", 60, 1], ["shell", -60, 1], ["shell", 180, 1]],
 		"levels": [6, 10], "weight": 0.6, "drops": [["spike2", 0.3], ["shell", 0.3]],
 		"hint": "Огромный и колючий. Ищи щель между шипами"},
 	"leviafan": {"name": "Левиафан", "behavior": "boss", "radius": 60.0, "color": "#4a5a8a", "shape": "oval", "tier": 8, "hunts": true,
 		"parts": [["fangs", 0, 2], ["flagellum", 180, 1], ["spike2", 90, 1], ["spike2", -90, 1], ["eye", 30, 1], ["eye", -30, 1], ["membrane", 150, 2], ["membrane", -150, 2]],
 		"levels": [8, 10], "weight": 0.4, "drops": [["fangs", 0.5], ["spike2", 0.3], ["eye", 0.3], ["membrane", 0.3]],
 		"hint": "Гроза первичного океана"},
+	# С частями, которых не выбить.
+	"fonarshik": {"name": "Фонарщик", "behavior": "drifter", "radius": 17.0, "color": "#5a6ab0", "shape": "drop", "tier": 2,
+		"parts": [["lantern", 0, 1], ["filter", 60, 1], ["cilia", 180, 1]], "levels": [2, 9], "weight": 2.0,
+		"drops": [["filter", 0.2], ["cilia", 0.2]],
+		"hint": "Светится — видно даже в тумане. Фонарик не выбить"},
+	"shchupalets": {"name": "Щупальцевик", "behavior": "hunter", "radius": 23.0, "color": "#a05a8a", "shape": "bean", "tier": 4,
+		"parts": [["tentacle", 0, 1], ["tentacle", 45, 1], ["tentacle", -45, 1], ["jaws", 180, 1], ["cilia", 120, 1]], "levels": [4, 10], "weight": 1.5,
+		"drops": [["jaws", 0.25], ["cilia", 0.25]],
+		"hint": "Хватает щупальцами и держит. Щупальца не выбить"},
+	"bronenosets": {"name": "Броненосец", "behavior": "grazer", "radius": 27.0, "color": "#8a8a70", "shape": "oval", "tier": 4,
+		"parts": [["plates", 90, 1], ["plates", -90, 1], ["filter", 0, 1], ["cilia", 180, 1]], "levels": [5, 10], "weight": 1.5,
+		"drops": [["filter", 0.25], ["cilia", 0.25]],
+		"hint": "В броне со всех сторон. Пластины не выбить"},
+	# Великаны — всегда во много раз больше тебя.
+	"gigant": {"name": "Гигантская амёба", "behavior": "giant", "radius": 16.0, "scale": 4.0, "color": "#6a9a8a", "shape": "blob", "tier": 5,
+		"parts": [["filter", 0, 1], ["cilia", 120, 1], ["cilia", -120, 1], ["membrane", 180, 2]], "levels": [1, 10], "weight": 0.5,
+		"drops": [["membrane", 0.5], ["cilia", 0.3]],
+		"hint": "Огромная и мирная. Плывёт по своим делам"},
+	"pozhiratel": {"name": "Пожиратель", "behavior": "giant", "hunts": true, "radius": 16.0, "scale": 3.2, "color": "#6a3a4a", "shape": "drop", "tier": 7,
+		"parts": [["jaws", 0, 2], ["tentacle", 40, 1], ["tentacle", -40, 1], ["cilia", 180, 1], ["plates", 150, 1], ["plates", -150, 1]],
+		"levels": [3, 10], "weight": 0.25, "drops": [["jaws", 0.6], ["cilia", 0.4]],
+		"hint": "Великан-хищник. Медленный — от него можно уплыть. Щупальца и пластины не выбить"},
 }
 
 ## Цвета тела на выбор в редакторе.
@@ -157,7 +221,7 @@ const GOALS := [
 	{"id": "grow", "title": "Подрасти", "hint": "Еда даёт ДНК. Наберёшь 40 — клетка вырастет"},
 	{"id": "kill", "title": "Одолей другую клетку", "hint": "«Рывок» — удар с разгона. Им можно сбить мелкую клетку"},
 	{"id": "part", "title": "Добудь новую часть", "hint": "Части выпадают из тех, у кого они есть. Не всегда!"},
-	{"id": "edit", "title": "Поставь часть на тело", "hint": "Кнопка «Эволюция» — выбери часть и нажми на край клетки"},
+	{"id": "edit", "title": "Поставь часть на тело", "hint": "Нажми ♥ — стрелка покажет, где пара. Доплыви до неё — и меняй тело"},
 	{"id": "diet", "title": "Выбери, кем быть", "hint": "Челюсти — хищник, фильтр — травоядный, хоботок — всеядный"},
 	{"id": "upgrade", "title": "Улучши часть", "hint": "Та же часть ещё раз — и она становится сильнее"},
 	{"id": "size5", "title": "Вырасти до 5-го размера", "hint": "Чем больше, тем крупнее соседи"},
@@ -247,4 +311,17 @@ static func shape_scale(shape: Array) -> float:
 	for v in shape:
 		sum += v
 	return clampf(sum / shape.size(), 0.8, 1.25)
+
+## Можно ли вообще получить эту часть (а не только увидеть у существ).
+static func obtainable(id: String) -> bool:
+	return PARTS[id].get("source", "") != "mob"
+
+## Камни, из которых выпадает часть, — для подсказки «где взять».
+static func rock_sources(part: String) -> Array:
+	var out: Array = []
+	for rid in ROCKS:
+		for d in ROCKS[rid].drops:
+			if d[0] == part:
+				out.append([rid, d[1]])
+	return out
 

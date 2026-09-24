@@ -237,3 +237,91 @@ func test_сияющая_особь(c) -> void:
 		p._deaths()
 		drops += p.events.filter(func(e): return e.t == "drop").size()
 	c.ok("из сияющей выпадает всегда", drops >= 30)
+
+func test_камень(c) -> void:
+	var p := _pond()
+	var rock := p.add_rock("stone", Vector2(60, 0))
+	_run(p, 1.0, Vector2.RIGHT)
+	c.ok("в камень не проплыть", p.player.pos.x < 60.0 - rock.r + 1.0)
+	var hp0: float = rock.hp
+	p.player.dash_cd = 0.0
+	p.player.pos = Vector2(60, 0) - Vector2(rock.r + p.player.radius + 20.0, 0)
+	p.step(0.05, Vector2.RIGHT, true)
+	var ev := _run(p, 0.4, Vector2.RIGHT)
+	c.ok("рывком крошится", rock.hp < hp0 and ev.any(func(e): return e.t == "rock_hit"))
+	rock.hp = 0.1
+	p.player.dash_cd = 0.0
+	p.player.pos = Vector2(60, 0) - Vector2(rock.r + p.player.radius + 20.0, 0)
+	p.step(0.05, Vector2.RIGHT, true)
+	ev = _run(p, 0.4, Vector2.RIGHT)
+	c.ok("разбит", ev.any(func(e): return e.t == "rock_break") and p.rocks.is_empty())
+	c.ok("за камень — ДНК", p.evo.dna_total > 0.0)
+
+func test_шанс_из_камней(c) -> void:
+	var p := _pond()
+	var drops := {}
+	for i in 400:
+		var r := p.add_rock("boulder", Vector2(9000, 0))
+		p.rocks.erase(r)
+		p.events.clear()
+		p._rock_broken(r)
+		for e in p.events:
+			if e.t == "drop":
+				drops[e.part] = drops.get(e.part, 0) + 1
+	var drill := float(drops.get("drill", 0)) / 400.0
+	c.ok("бур из валуна примерно в 18%% (вышло %.0f%%)" % (drill * 100.0), drill > 0.11 and drill < 0.26)
+	c.ok("и только каменные части", drops.keys().all(func(k): return Content.PARTS[k].get("source", "") == "rock"))
+
+func test_бур_крошит_быстрее(c) -> void:
+	var plain := _pond(_evo_with([["filter", 180], ["spike", 0]], 100.0))
+	var drill := _pond(_evo_with([["filter", 180], ["drill", 0]], 100.0))
+	var hits := []
+	for p in [plain, drill]:
+		var rock: Dictionary = p.add_rock("boulder", Vector2(80, 0))
+		p.player.heading = 0.0
+		var hp0: float = rock.hp
+		_run(p, 2.0, Vector2.RIGHT * 0.5)
+		hits.append(hp0 - rock.hp)
+	c.ok("бур бьёт камень сильнее шипа", hits[1] > hits[0] * 1.5)
+
+func test_щупальце_держит(c) -> void:
+	var p := _pond()
+	p._safe_t = 0.0
+	var m := p.spawn("shchupalets", Vector2(45, 0))
+	m.heading = PI
+	m.ai_t = 99.0
+	_run(p, 0.5, Vector2.RIGHT)
+	c.ok("схватило — плывёшь медленнее", p.player.slow_t > 0.0)
+
+func test_великан(c) -> void:
+	var p := _pond(_evo_with([["filter", 0]], 800.0))
+	var g := p.spawn("gigant", Vector2(900, 0))
+	c.ok("великан во много раз больше тебя", g.radius > p.player.radius * 3.0)
+	var small := _pond()
+	var g2 := small.spawn("gigant", Vector2(900, 0))
+	c.ok("и маленького тоже", g2.radius > small.player.radius * 3.0)
+
+func test_пара(c) -> void:
+	var p := _pond()
+	c.ok("позвал", p.call_mate() and p.mate != null)
+	c.ok("второй раз — та же", not p.call_mate())
+	c.ok("она поодаль", p.mate.pos.distance_to(p.player.pos) > 300.0)
+	var to := (p.mate.pos - p.player.pos).normalized()
+	var ev: Array = []
+	for i in 400:
+		p.step(0.05, (p.mate.pos - p.player.pos).normalized() if p.mate else Vector2.ZERO)
+		ev.append_array(p.events)
+		if p.mate == null:
+			break
+	c.ok("доплыл — новое поколение", ev.any(func(e): return e.t == "mated") and p.evo.generation == 2)
+
+func test_сложность_в_драке(c) -> void:
+	var hurt := []
+	for d in ["easy", "hard"]:
+		var e := Evolution.create(d)
+		var p := _pond(e)
+		p.player.hp = 100.0
+		p.player.max_hp = 100.0
+		p._hurt(p.player, 10.0, null, "bite")
+		hurt.append(100.0 - p.player.hp)
+	c.ok("на тяжёлой больнее, чем на лёгкой", hurt[1] > hurt[0] * 2.0)

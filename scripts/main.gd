@@ -10,8 +10,7 @@ const Hud := preload("res://scripts/ui/hud.gd")
 const EditorPanel := preload("res://scripts/ui/editor_panel.gd")
 const SettingsPanel := preload("res://scripts/ui/settings_panel.gd")
 const SoundBank := preload("res://scripts/sound_bank.gd")
-
-const SAVE_PATH := "user://evolution.json"
+const MenuPanel := preload("res://scripts/ui/menu_panel.gd")
 
 var evo: Evolution
 var pond: Pond
@@ -23,7 +22,12 @@ var setup: Control
 var sound: Node
 var backdrop: Control
 var fog: ColorRect
+var menu: Control
 var landscape := true
+## Ячейка сохранения, в которую играем. 0 — проверочный запуск: не сохраняется.
+var slot := 0
+var _debug := false
+var _show_menu := false
 
 var _seed := 0
 var _dash := false
@@ -38,10 +42,7 @@ var _spawns: Array = []
 
 func _ready() -> void:
 	settings = Settings.load_saved()
-	evo = _load()
-	var fresh := evo == null
-	if fresh:
-		evo = Evolution.create()
+	Saves.migrate()
 	_apply_debug_args()
 
 	var back := CanvasLayer.new()
@@ -52,7 +53,6 @@ func _ready() -> void:
 
 	view = PondView.new()
 	add_child(view)
-	_new_pond()
 
 	var shade := CanvasLayer.new()
 	shade.layer = 1
@@ -73,7 +73,12 @@ func _ready() -> void:
 	hud = Hud.new()
 	ui.add_child(hud)
 	hud.dash_pressed.connect(func(): _dash = true)
-	hud.editor_pressed.connect(_open_editor)
+	hud.editor_pressed.connect(_call_mate)
+	hud.atlas_pressed.connect(func():
+		sound.play("ui")
+		hud.pad.release()
+		_fingers.clear()
+		editor.open(evo, landscape, false))
 	hud.settings_pressed.connect(_open_settings)
 
 	editor = EditorPanel.new()
@@ -94,7 +99,20 @@ func _ready() -> void:
 	ui.add_child(setup)
 	setup.closed.connect(func(): setup.visible = false)
 	setup.changed.connect(_settings_changed)
-	setup.new_world.connect(_start_over)
+	setup.new_world.connect(_to_menu)
+
+	menu = MenuPanel.new()
+	menu.visible = false
+	ui.add_child(menu)
+	menu.play.connect(func(s):
+		sound.play("ui")
+		evo = Saves.load_slot(s)
+		if evo:
+			_begin(s, false))
+	menu.new_game.connect(func(s, d):
+		sound.play("levelup", 0.8)
+		evo = Evolution.create(d)
+		_begin(s, true))
 
 	sound = SoundBank.new()
 	add_child(sound)
@@ -103,8 +121,33 @@ func _ready() -> void:
 	_orient()
 	get_viewport().size_changed.connect(_on_resize)
 	_on_resize()
+	if _debug and not _show_menu:
+		_begin(0, false)
+	else:
+		_to_menu()
+
+## Начать игру в ячейке: океан вокруг, интерфейс, первое сохранение.
+func _begin(s: int, fresh: bool) -> void:
+	slot = s
+	_new_pond()
+	menu.visible = false
+	hud.visible = true
+	fog.visible = true
+	_save()
 	if fresh:
 		hud.toast("Ты — крошечная клетка без глаз: видно только то, что рядом. Плыви к зелёным крупинкам — это еда")
+
+## В меню: сохранить, убрать океан, показать ячейки.
+func _to_menu() -> void:
+	if pond:
+		_save()
+	pond = null
+	view.pond = null
+	setup.visible = false
+	editor.visible = false
+	hud.visible = false
+	fog.visible = false
+	menu.open()
 
 func _new_pond() -> void:
 	pond = Pond.new(evo, _seed)
@@ -140,7 +183,11 @@ func _vignette() -> TextureRect:
 
 func _process(delta: float) -> void:
 	_run_script()
+	if pond == null:
+		return
+	evo.played += delta
 	var paused: bool = editor.visible or setup.visible
+	fog.visible = not paused
 	if not paused:
 		pond.view_radius = view.view_radius()
 		pond.step(minf(delta, 0.05), _steer(), _dash)
@@ -150,7 +197,12 @@ func _process(delta: float) -> void:
 	hud.refresh(pond)
 	backdrop.drift = pond.player.pos
 	var xf: Transform2D = view.get_canvas_transform()
-	fog.update(xf * pond.player.pos, pond.player.vision * view.camera.zoom.x, delta)
+	var lights: Array = []
+	var z: float = view.camera.zoom.x
+	for m in pond.mobs:
+		if m.glow:
+			lights.append(Vector3((xf * m.pos).x, (xf * m.pos).y, m.radius * 3.0 * z))
+	fog.update(xf * pond.player.pos, pond.player.vision * z, delta, lights)
 	_update_arrows()
 	if _save_in > 0.0:
 		_save_in -= delta
@@ -220,7 +272,7 @@ func _handle(events: Array) -> void:
 				var def: Dictionary = Content.PARTS[e.part]
 				if e.new:
 					sound.play("newpart")
-					hud.announce("Новая часть!", "%s — %s. Поставь её в «Эволюции»" % [def.name, Content.lc_first(def.hint)])
+					hud.announce("Новая часть!", "%s — %s. Нажми ♥ и найди пару, чтобы поставить её" % [def.name, Content.lc_first(def.hint)])
 					hud.editor_btn.badge = "!"
 					hud.editor_btn.queue_redraw()
 					_buzz(40)
@@ -255,7 +307,10 @@ func _handle(events: Array) -> void:
 				sound.play("death")
 				_buzz(80)
 				_dirty = true
-				hud.announce("Тебя съели", "Новая клетка твоего вида появилась неподалёку. Всё найденное осталось")
+				if e.get("lost", 0.0) > 0.5:
+					hud.announce("Тебя съели", "Тяжёлая сложность: потеряно %d ДНК роста. Части остались" % int(e.lost))
+				else:
+					hud.announce("Тебя съели", "Новая клетка твоего вида появилась неподалёку. Всё найденное осталось")
 			"dash":
 				sound.play("dash")
 			"goal":
@@ -267,6 +322,23 @@ func _handle(events: Array) -> void:
 			"seen":
 				_dirty = true
 				hud.toast("Новый вид: %s. Он теперь в «Атласе»" % Content.SPECIES[e.species].name)
+			"rock_hit":
+				sound.play("rock", randf_range(1.2, 1.5))
+				_buzz(10)
+			"rock_break":
+				sound.play("rock")
+				_buzz(35)
+				_dirty = true
+			"mate_called":
+				sound.play("mate")
+			"mated":
+				sound.play("mate", 1.25)
+				_buzz(60)
+				_dirty = true
+				hud.announce("Поколение %d" % e.generation, "Потомство можно изменить: части, форма, цвет")
+				hud.editor_btn.badge = ""
+				hud.editor_btn.queue_redraw()
+				get_tree().create_timer(0.9).timeout.connect(_open_editor)
 			"golden":
 				sound.play("drop", 0.8)
 				hud.toast("Сияющая особь — %s! Из неё обязательно что-то выпадет. Она пугливая" % Content.SPECIES[e.species].name.to_lower())
@@ -282,6 +354,8 @@ func _update_arrows() -> void:
 	for cap in pond.capsules:
 		list.append({"at": xf * cap.pos, "kind": "part", "part": cap.part})
 	var p := pond.player
+	if pond.mate != null:
+		list.append({"at": xf * pond.mate.pos, "kind": "mate", "hidden": pond.mate.pos.distance_to(p.pos) > p.vision})
 	if p.eyes > 0.0:
 		for m in pond.mobs:
 			if pond._hunts(m) and m.radius >= p.radius * 0.8 and m.pos.distance_to(p.pos) < p.sight * 2.0:
@@ -292,12 +366,22 @@ func _update_arrows() -> void:
 # --- панели ---------------------------------------------------------------------------
 
 func _open_editor() -> void:
+	if pond == null:
+		return
 	sound.play("ui")
 	hud.pad.release()
 	_fingers.clear()
-	hud.editor_btn.badge = ""
-	hud.editor_btn.queue_redraw()
-	editor.open(evo, landscape)
+	editor.open(evo, landscape, true)
+
+## Кнопка ♥: позвать пару. Тело меняется только после встречи с ней.
+func _call_mate() -> void:
+	if pond == null:
+		return
+	if pond.call_mate():
+		hud.toast("Пара где-то рядом — плыви по розовой стрелке")
+	else:
+		sound.play("ui")
+		hud.toast("Пара уже ждёт — плыви по розовой стрелке")
 
 func _open_settings() -> void:
 	sound.play("ui")
@@ -312,13 +396,6 @@ func _settings_changed(s: Settings) -> void:
 	_orient()
 	_on_resize()
 
-func _start_over() -> void:
-	evo = Evolution.create()
-	setup.visible = false
-	_new_pond()
-	sound.play("levelup", 0.8)
-	hud.toast("Снова крошечная клетка. Плыви к зелёным крупинкам: это еда")
-	_save()
 
 
 # --- экран ----------------------------------------------------------------------------
@@ -343,19 +420,14 @@ func _on_resize() -> void:
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
-		if evo:
+		if pond:
 			_save()
 
+## Сохранить в свою ячейку. Проверочный запуск (ячейка 0) не сохраняется.
 func _save() -> void:
 	_save_in = 0.0
-	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
-	if f:
-		f.store_string(JSON.stringify(evo.to_dict()))
-
-func _load() -> Evolution:
-	if not FileAccess.file_exists(SAVE_PATH):
-		return null
-	return Evolution.from_dict(JSON.parse_string(FileAccess.get_file_as_string(SAVE_PATH)))
+	if slot > 0 and evo:
+		Saves.save_slot(slot, evo)
 
 
 # --- проверка из командной строки -----------------------------------------------------
@@ -374,8 +446,9 @@ func _apply_debug_args() -> void:
 		args[kv[0]] = kv[1] if kv.size() > 1 else ""
 	if args.is_empty():
 		return
-	if args.has("fresh"):
-		evo = Evolution.create()
+	_debug = true
+	_show_menu = args.has("menu")
+	evo = Evolution.create(args.get("difficulty", "normal"))
 	_seed = int(args.get("seed", "0"))
 	if args.has("dna"):
 		evo.dna_total = float(args.dna)
@@ -428,14 +501,20 @@ func _run_script() -> void:
 			_script_wait = int(p[1])
 		"dash":
 			_dash = true
+		"mate":
+			pond.call_mate()
+		"mated":
+			pond.mate.pos = pond.player.pos + Vector2(pond.player.radius + pond.mate.radius, 0)
+		"rock":
+			var q := p[1].split(",")
+			pond.add_rock(q[0], pond.player.pos + Vector2(float(q[1]), float(q[2])))
 		"open":
 			if p[1] == "settings":
 				_open_settings()
+			elif p[1] == "atlas":
+				editor.open(evo, landscape, false)
 			else:
 				_open_editor()
-				if p[1] == "atlas":
-					editor.tab = "atlas"
-					editor.rebuild()
 		"select":
 			editor.selected = p[1]
 			editor.rebuild()

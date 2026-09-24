@@ -128,28 +128,14 @@ func rebuild() -> void:
 	var danger := Button.new()
 	danger.focus_mode = Control.FOCUS_NONE
 	danger.custom_minimum_size = Vector2(0, 64)
-	danger.text = "Точно? Нажми ещё раз — вид пропадёт" if _arming else "Начать с одной клетки"
-	var bg := Art.ACCENT if _arming else Color(0, 0, 0, 0)
-	danger.add_theme_stylebox_override("normal", Kit.box(bg, 18, Art.ACCENT))
-	danger.add_theme_stylebox_override("hover", Kit.box(bg, 18, Art.ACCENT))
-	danger.add_theme_stylebox_override("pressed", Kit.box(Art.ACCENT, 18, Art.ACCENT))
-	danger.add_theme_color_override("font_color", Art.BG if _arming else Art.ACCENT)
-	danger.add_theme_color_override("font_hover_color", Art.BG if _arming else Art.ACCENT)
-	danger.pressed.connect(func():
-		if _arming:
-			_arming = false
-			new_world.emit()
-		else:
-			# Начать заново — только со второго нажатия: одним случайным касанием месяцы
-			# игры не стираются.
-			_arming = true
-			rebuild()
-			get_tree().create_timer(4.0).timeout.connect(func():
-				if _arming:
-					_arming = false
-					rebuild()))
+	danger.text = "Выйти в меню"
+	danger.add_theme_stylebox_override("normal", Kit.box(Color(0, 0, 0, 0), 18, Art.GREEN_DARK))
+	danger.add_theme_stylebox_override("hover", Kit.box(Color(0, 0, 0, 0), 18, Art.GREEN_DARK))
+	danger.add_theme_stylebox_override("pressed", Kit.box(Art.GREEN_DARK, 18, Art.GREEN_DARK))
+	danger.add_theme_color_override("font_color", Art.GREEN)
+	danger.pressed.connect(func(): new_world.emit())
 	col.add_child(danger)
-	col.add_child(Kit.muted("Снова крошечная клетка: вся ДНК, части и задачи — с нуля. Настройки остаются.", 20))
+	col.add_child(Kit.muted("Игра сохранится. В меню — три ячейки: можно начать новый вид с другой сложностью.", 20))
 	var pad := Control.new()
 	pad.custom_minimum_size = Vector2(0, 30)
 	col.add_child(pad)

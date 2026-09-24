@@ -261,6 +261,25 @@ S.amb_water = (() => {
   return loop(mix(hum, bubbles), 0.6);
 })();
 
+// --- добавлены позже: камни и пара -----------------------------------------------------
+
+// Камень: сухой каменный стук и крошки.
+S.rock = (() => {
+  const x = buf(0.45);
+  mix(x, tone(110, 0.3, { attack: 0.002, decay: 0.06, harmonics: [1, 0.7, 0.5, 0.3], glide: -0.3 }), 0, 0.8);
+  mix(x, burst(0.2, { decay: 0.04, lo: 600, hi: 4000 }), 0, 0.7);
+  for (let k = 0; k < 4; k++) mix(x, burst(0.04, { decay: 0.008, lo: 2000, hi: 7000 }), 0.05 + k * 0.05 + rnd() * 0.03, 0.4);
+  return finish(x, 0.65);
+})();
+
+// Зов пары: мягкая трель, дважды.
+S.mate = (() => {
+  const x = buf(1.0);
+  [[659.25, 0], [783.99, 0.12], [659.25, 0.34], [880, 0.46]].forEach(([f, at]) =>
+    mix(x, tone(f, 0.5, { attack: 0.01, decay: 0.16, harmonics: [1, 0.3, 0.1], glide: 0.08 }), at, 0.55));
+  return finish(x, 0.5);
+})();
+
 fs.mkdirSync(OUT, { recursive: true });
 let total = 0;
 for (const [name, x] of Object.entries(S)) total += writeWav(name, x);

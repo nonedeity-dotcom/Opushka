@@ -5,7 +5,7 @@
 extends Node
 
 const EFFECTS := ["eat", "eat_meat", "bite", "hit", "hurt", "kill", "pickup", "newpart", "levelup",
-	"dash", "zap", "poison", "death", "ui", "place", "remove", "nope", "goal", "drop"]
+	"dash", "zap", "poison", "death", "ui", "place", "remove", "nope", "goal", "drop", "rock", "mate"]
 ## Насколько тише остальных: частые звуки не должны заглушать редкие.
 const LEVEL := {"eat": -6.0, "ui": -4.0, "nope": -3.0, "hit": -2.0, "dash": -3.0}
 

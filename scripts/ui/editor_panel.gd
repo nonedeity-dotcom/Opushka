@@ -25,6 +25,8 @@ var mode := "parts"
 var selected := ""
 var picked := -1
 var mirror := true
+## Тело можно менять только после встречи с парой; из «Атласа» — только смотреть.
+var editable := true
 var _sheet: PanelContainer
 var _root: VBoxContainer
 var _info: Label
@@ -44,9 +46,11 @@ func _ready() -> void:
 	resized.connect(_place)
 
 
-func open(e: Evolution, landscape_: bool) -> void:
+func open(e: Evolution, landscape_: bool, editable_ := true) -> void:
 	evo = e
 	landscape = landscape_
+	editable = editable_
+	tab = "body" if editable else "atlas"
 	selected = ""
 	picked = -1
 	visible = true
@@ -80,7 +84,7 @@ func _header() -> HBoxContainer:
 	icon.icon = "dna"
 	icon.custom_minimum_size = Vector2(46, 46)
 	head.add_child(icon)
-	head.add_child(Kit.label("Эволюция", 30, Art.TEXT, true))
+	head.add_child(Kit.label("Поколение %d" % evo.generation if editable else "Атлас", 30, Art.TEXT, true))
 	# Имя вида — прямо в заголовке, нажал и пишешь.
 	var name_edit := LineEdit.new()
 	name_edit.text = evo.name
@@ -97,9 +101,12 @@ func _header() -> HBoxContainer:
 			evo.name = t.strip_edges())
 	name_edit.focus_exited.connect(func(): changed.emit())
 	head.add_child(name_edit)
-	head.add_child(_toggle("Тело", tab == "body", func():
+	var body_btn := _toggle("Тело", tab == "body", func():
 		tab = "body"
-		rebuild()))
+		rebuild())
+	body_btn.disabled = not editable
+	body_btn.tooltip_text = "" if editable else "Тело меняется после встречи с парой: нажми ♥"
+	head.add_child(body_btn)
 	head.add_child(_toggle("Атлас", tab == "atlas", func():
 		tab = "atlas"
 		selected = ""
@@ -225,7 +232,7 @@ func _palette() -> ScrollContainer:
 	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(grid)
 	# Сначала открытые — по порядку справочника, потом закрытые.
-	var ids: Array = Content.PARTS.keys()
+	var ids: Array = Content.PARTS.keys().filter(func(id): return Content.obtainable(id))
 	ids.sort_custom(func(a, b): return int(evo.unlocked.has(a)) > int(evo.unlocked.has(b)))
 	for id in ids:
 		var tile := PartTile.new()
@@ -330,6 +337,11 @@ func _update_info() -> void:
 
 ## «Выпадает из: Колючка (30%)» — только из тех, кого уже встречал.
 func where_to_get(id: String) -> String:
+	if Content.PARTS[id].get("source", "") == "rock":
+		var rocks: Array = []
+		for src in Content.rock_sources(id):
+			rocks.append("%s (%d%%)" % [Content.ROCKS[src[0]].name, int(round(src[1] * 100.0))])
+		return "Только из камней: %s. Разбей рывком, укусом или шипом." % ", ".join(rocks)
 	var known: Array = []
 	var unknown := 0
 	for src in Content.sources(id):
@@ -389,8 +401,10 @@ func _atlas_tab() -> void:
 			hidden += 1
 			continue
 		grid.add_child(_species_card(id))
+	for rid in Content.ROCKS:
+		grid.add_child(_rock_card(rid))
 	var total := Content.SPECIES.size()
-	var line := "Встречено видов: %d из %d. Сияющих побеждено: %d." % [total - hidden, total, evo.stats.get("golden", 0)]
+	var line := "Встречено видов: %d из %d. Сияющих побеждено: %d. Камней разбито: %d." % [total - hidden, total, evo.stats.get("golden", 0), evo.stats.get("rocks", 0)]
 	if hidden > 0:
 		line += " Остальные живут глубже — подрасти, и они появятся."
 	var note := Kit.muted(line, 20)
@@ -419,6 +433,15 @@ func _species_card(id: String) -> PanelContainer:
 		chip.chance = d[1]
 		chip.have = evo.unlocked.has(d[0])
 		drops.add_child(chip)
+	# Части, которых не выбить, — тоже видно, но без шанса.
+	var seen_mob := {}
+	for p in def.parts:
+		if not Content.obtainable(p[0]) and not seen_mob.has(p[0]):
+			seen_mob[p[0]] = true
+			var chip := DropChip.new()
+			chip.part = p[0]
+			chip.chance = -1.0
+			drops.add_child(chip)
 	text.add_child(drops)
 	row.add_child(text)
 	var card := Kit.card(row, Art.CARD, 20, 12)
@@ -427,7 +450,46 @@ func _species_card(id: String) -> PanelContainer:
 	return card
 
 
+func _rock_card(rid: String) -> PanelContainer:
+	var def: Dictionary = Content.ROCKS[rid]
+	var row := Kit.hbox(14)
+	var pic := RockPic.new()
+	pic.kind = rid
+	pic.custom_minimum_size = Vector2(96, 96)
+	row.add_child(pic)
+	var text := Kit.vbox(4)
+	text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	text.add_child(Kit.label("%s · камень" % def.name, 22, Art.TEXT, true))
+	text.add_child(Kit.muted("Разбивается рывком, укусом, шипом, а буром — втрое быстрее. С размера %d" % def.levels[0], 17))
+	var drops := HFlowContainer.new()
+	drops.add_theme_constant_override("h_separation", 8)
+	for d in def.drops:
+		var chip := DropChip.new()
+		chip.part = d[0]
+		chip.chance = d[1]
+		chip.have = evo.unlocked.has(d[0])
+		drops.add_child(chip)
+	text.add_child(drops)
+	row.add_child(text)
+	var card := Kit.card(row, Color("#1a2228"), 20, 12)
+	card.mouse_filter = Control.MOUSE_FILTER_PASS
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	return card
+
+
 # --- мелкие части ---------------------------------------------------------------------
+
+class RockPic:
+	extends Control
+	var kind := ""
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_PASS
+
+	func _draw() -> void:
+		draw_circle(size / 2.0, size.x / 2.0, Color(0.07, 0.13, 0.17))
+		CellArt.rock(self, {"pos": size / 2.0, "r": size.x * 0.3, "hp": 1.0, "max_hp": 1.0, "kind": kind, "v": 7, "flash": 0.0}, 0.0)
+
 
 ## Клетка крупно. «Части»: касание — примерка выбранной части, отпустил — поставил;
 ## без выбора касание части выделяет её. «Форма»: палец тянет край тела.
@@ -630,6 +692,8 @@ class DropChip:
 	var have := false
 
 	func _text() -> String:
+		if chance < 0.0:
+			return "%s — не выбить" % Content.PARTS[part].name
 		return "%s %d%%" % [Content.PARTS[part].name, int(round(chance * 100.0))]
 
 	func _ready() -> void:
@@ -640,4 +704,5 @@ class DropChip:
 	func _draw() -> void:
 		draw_style_box(Kit.box(Art.BG, 20, Art.GREEN_DARK if have else Color(0, 0, 0, 0), 0), Rect2(Vector2.ZERO, size))
 		CellArt.part_icon(self, part, Rect2(6, 4, 32, 32), Color("#9aa4b0"))
-		draw_string(get_theme_default_font(), Vector2(44, 27), _text(), HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Art.GREEN if have else Art.GOLD)
+		var col := Art.MUTED if chance < 0.0 else (Art.GREEN if have else Art.GOLD)
+		draw_string(get_theme_default_font(), Vector2(44, 27), _text(), HORIZONTAL_ALIGNMENT_LEFT, -1, 18, col)

@@ -11,11 +11,14 @@ const Indicators := preload("res://scripts/ui/indicators.gd")
 
 signal dash_pressed
 signal editor_pressed
+signal atlas_pressed
 signal settings_pressed
 
 var pad: Control
 var dash: Control
+## Кнопка ♥ — позвать пару; через пару меняется тело.
 var editor_btn: Button
+var atlas_btn: Button
 var settings_btn: Button
 var size_pill: Control
 var dna_pill: Control
@@ -59,6 +62,8 @@ func _ready() -> void:
 
 	settings_btn = _round("settings", "Настройки", 64)
 	settings_btn.pressed.connect(func(): settings_pressed.emit())
+	atlas_btn = _round("book", "Атлас", 64)
+	atlas_btn.pressed.connect(func(): atlas_pressed.emit())
 
 	goal_title = Kit.label("", 22, Art.TEXT, true)
 	goal_hint = Kit.label("", 18, Art.MUTED)
@@ -105,7 +110,7 @@ func _ready() -> void:
 	dash = DashButton.new()
 	dash.pressed.connect(func(): dash_pressed.emit())
 	add_child(dash)
-	editor_btn = _round("dna", "Эволюция", 92)
+	editor_btn = _round("heart", "Позвать пару", 92)
 	editor_btn.accent = true
 	editor_btn.pressed.connect(func(): editor_pressed.emit())
 
@@ -125,7 +130,7 @@ func apply_settings(s: Settings, landscape: bool) -> void:
 	pad.visible = s.control == "stick"
 	if not pad.visible:
 		pad.release()
-	for n in [pad, dash, editor_btn, settings_btn]:
+	for n in [pad, dash, editor_btn, settings_btn, atlas_btn]:
 		n.floating = true
 	indicators.enabled = s.arrows
 	pad.queue_redraw()
@@ -154,7 +159,7 @@ func hurt() -> void:
 
 ## Пришлось ли касание на что-то из интерфейса.
 func covers(p: Vector2) -> bool:
-	for n in [pad, dash, editor_btn, settings_btn, size_pill, dna_pill, hp_bar, goal_card]:
+	for n in [pad, dash, editor_btn, settings_btn, atlas_btn, size_pill, dna_pill, hp_bar, goal_card]:
 		if n.visible and n.get_global_rect().grow(10).has_point(p):
 			return true
 	return false
@@ -216,9 +221,10 @@ func _layout() -> void:
 	hp_bar.position = Vector2(left, top + 74)
 	hp_bar.size = Vector2(size_pill.size.x + 10 + dna_pill.size.x, 26)
 	settings_btn.position = Vector2(right - 64, top)
+	atlas_btn.position = Vector2(right - 64 * 2 - 10, top)
 	if _landscape:
 		goal_card.position = Vector2(dna_pill.position.x + dna_pill.size.x + 14, top)
-		goal_card.size = Vector2(minf(560.0, settings_btn.position.x - goal_card.position.x - 14), 64)
+		goal_card.size = Vector2(minf(560.0, atlas_btn.position.x - goal_card.position.x - 14), 64)
 	else:
 		goal_card.position = Vector2(left, top + 112)
 		goal_card.size = Vector2(right - left, 0)

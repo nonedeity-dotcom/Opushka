@@ -57,6 +57,11 @@ func _init() -> void:
 	for f in files:
 		print(f.get_basename())
 		var script: GDScript = load("res://tests/" + f)
+		# Файл проверок не собрался — это провал, а не повод зависнуть.
+		if script == null or not script.can_instantiate():
+			check.failed += 1
+			print("  ✗ файл не собрался: ", f)
+			continue
 		var suite = script.new()
 		for m in suite.get_method_list():
 			var name: String = m.name

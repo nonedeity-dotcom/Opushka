@@ -8,7 +8,9 @@ extends RefCounted
 
 ## Части, которые торчат наружу, — рисуются под телом, чтобы край их прикрывал.
 ## Рты рисуются поверх — у них видна сама пасть на краю тела.
-const OUTSIDE := ["proboscis", "cilia", "flagellum", "flagellum2", "spike", "spike2"]
+const OUTSIDE := ["proboscis", "cilia", "flagellum", "flagellum2", "spike", "spike2", "drill", "tentacle", "horn", "lantern"]
+## Части, что лежат дугой по краю тела.
+const RIM := ["shell", "membrane", "stone_skin", "plates"]
 
 
 ## Клетка целиком. r — «рост» клетки; opts: shape (форма тела), flash, bite, poisoned,
@@ -19,6 +21,17 @@ static func creature(ci: CanvasItem, at: Vector2, r: float, heading: float, colo
 	var bite: float = opts.get("bite", 0.0)
 	var pick: int = opts.get("pick", -1)
 	var shape: Array = opts.get("shape", [])
+	# Живость: плывёт — тело вытягивается по ходу; вырос — вздрагивает; всё время чуть дышит.
+	var stretch: float = opts.get("stretch", 0.0)
+	var grow: float = opts.get("grow", 0.0)
+	r *= 1.0 + 0.22 * sin(PI * grow) * grow + 0.015 * sin(t * 2.2 + w)
+	if stretch > 0.01 or not shape.is_empty():
+		var src := shape if not shape.is_empty() else Content.shape_preset("round")
+		var live: Array = []
+		for i in src.size():
+			var th := TAU * i / src.size()
+			live.append(src[i] * (1.0 + 0.1 * stretch * cos(2.0 * th)))
+		shape = live
 	# Тело — живая капля своей формы: край чуть колышется.
 	var body := PackedVector2Array()
 	var n := 40
@@ -35,9 +48,10 @@ static func creature(ci: CanvasItem, at: Vector2, r: float, heading: float, colo
 		for q in body:
 			shadow.append(q + Vector2(r * 0.12, r * 0.18))
 		ci.draw_colored_polygon(shadow, Color(0, 0, 0, 0.22 * alpha))
+	var gulp: float = opts.get("gulp", 0.0)
 	for i in parts.size():
 		if parts[i].id in OUTSIDE:
-			_part(ci, parts[i], at, r, heading, color, t + w, bite, alpha, i == pick, shape)
+			_part(ci, parts[i], at, r, heading, color, t + w, bite, alpha, i == pick, shape, gulp)
 	ci.draw_colored_polygon(body, Color(color, alpha))
 	var edge := body.duplicate()
 	edge.append(body[0])
@@ -53,7 +67,7 @@ static func creature(ci: CanvasItem, at: Vector2, r: float, heading: float, colo
 		ci.draw_circle(at + Vector2.from_angle(heading + a) * r * 0.55 * Content.shape_at(shape, a), r * 0.07, Color(color.lightened(0.35), 0.8 * alpha))
 	for i in parts.size():
 		if not parts[i].id in OUTSIDE:
-			_part(ci, parts[i], at, r, heading, color, t + w, bite, alpha, i == pick, shape)
+			_part(ci, parts[i], at, r, heading, color, t + w, bite, alpha, i == pick, shape, gulp)
 	var flash: float = opts.get("flash", 0.0)
 	if flash > 0.0:
 		ci.draw_colored_polygon(body, Color(1, 0.85, 0.8, 0.55 * flash))
@@ -78,15 +92,18 @@ static func part_anchor(p: Dictionary, at: Vector2, r: float, heading: float, sh
 	return at + Vector2.from_angle(heading + p.a) * edge * k
 
 ## Внутренняя часть в своей системе нарисована не с нуля: сдвиг до её середины.
-const INNER_CENTER := {"eye": Vector2(-2.5, 0), "chloroplast": Vector2(-6.0, 0), "electro": Vector2(-1.5, 0)}
+const INNER_CENTER := {"eye": Vector2(-2.5, 0), "chloroplast": Vector2(-6.0, 0), "electro": Vector2(-1.5, 0), "crystal": Vector2(-2.0, 0)}
 
 ## Одна часть. Годится и для «примерки» в редакторе.
-static func _part(ci: CanvasItem, p: Dictionary, at: Vector2, r: float, heading: float, color: Color, t: float, bite: float, alpha: float, picked: bool, shape: Array) -> void:
+static func _part(ci: CanvasItem, p: Dictionary, at: Vector2, r: float, heading: float, color: Color, t: float, bite: float, alpha: float, picked: bool, shape: Array, gulp := 0.0) -> void:
 	var ang: float = heading + p.a
 	var s := r / 20.0 * (1.0 + 0.08 * (int(p.get("lvl", 1)) - 1))
+	# Глоток: рот на миг раздувается.
+	if gulp > 0.0 and Content.is_mouth(p.id):
+		s *= 1.0 + 0.35 * sin(PI * gulp)
 	var pos := part_anchor(p, at, r, heading, shape)
 	var d: float = p.get("d", 1.0)
-	if p.id == "shell" or p.id == "membrane":
+	if p.id in RIM:
 		_rim_part(ci, p.id, at, r, heading, p.a, alpha, shape)
 	elif d < 0.999:
 		# Внутри тела часть смотрит вперёд — так глаз посередине глядит по ходу.
@@ -108,9 +125,9 @@ static func part_alone(ci: CanvasItem, p: Dictionary, at: Vector2, r: float, hea
 
 ## Панцирь и мембрана лежат по краю тела дугой — по его форме.
 static func _rim_part(ci: CanvasItem, id: String, at: Vector2, r: float, heading: float, a: float, alpha: float, shape: Array) -> void:
-	var half := deg_to_rad(Content.PARTS[id].get("arc", 35) * 0.8 if id == "shell" else 32.0)
-	var inner := 0.84 if id == "shell" else 0.9
-	var outer := 1.12 if id == "shell" else 1.06
+	var half := deg_to_rad(Content.PARTS[id].get("arc", 35) * 0.8 if id == "shell" else (45.0 if id == "plates" else 32.0))
+	var inner := 0.84 if id in ["shell", "plates"] else 0.9
+	var outer := 1.12 if id in ["shell", "plates"] else 1.06
 	var n := 10
 	var out_pts := PackedVector2Array()
 	var in_pts := PackedVector2Array()
@@ -122,6 +139,19 @@ static func _rim_part(ci: CanvasItem, id: String, at: Vector2, r: float, heading
 	var pts := out_pts.duplicate()
 	for i in range(n, -1, -1):
 		pts.append(in_pts[i])
+	if id == "plates":
+		ci.draw_colored_polygon(pts, Color("#7a7a68", alpha))
+		for i in range(0, n + 1, 2):
+			var mid := (in_pts[i] + out_pts[i]) / 2.0
+			ci.draw_circle(mid, r * 0.13, Color("#9a9a84", alpha))
+			ci.draw_arc(mid, r * 0.13, 0, TAU, 12, Color("#5a5a4a", alpha), maxf(1.0, r * 0.03), true)
+		return
+	if id == "stone_skin":
+		ci.draw_colored_polygon(pts, Color("#8d949c", alpha))
+		for i in [2, 5, 8]:
+			ci.draw_circle((in_pts[i] + out_pts[i]) / 2.0, r * 0.05, Color("#5d646c", alpha))
+		ci.draw_polyline(out_pts, Color("#b0b8c0", alpha), maxf(1.0, r * 0.04), true)
+		return
 	if id == "shell":
 		ci.draw_colored_polygon(pts, Color("#b9a784", alpha))
 		for i in [3, 5, 7]:
@@ -209,6 +239,38 @@ static func part_shape(ci: CanvasItem, id: String, color: Color, t: float, bite 
 				ci.draw_circle(Vector2(-1.2, 0), 2.3, Color("#1e1e28", alpha))
 				ci.draw_circle(Vector2(-2.0, -0.9), 0.8, Color(1, 1, 1, alpha))
 			ci.draw_arc(Vector2(-2.5, 0), 4.6, 0, TAU, 16, dark, 0.8, true)
+		"drill":
+			Art.poly(ci, [Vector2(-1, -5.5), Vector2(17, 0), Vector2(-1, 5.5)], Color("#9aa8b8", alpha))
+			# Витки бура бегут — будто он вращается.
+			for i in 4:
+				var x := fposmod(i * 4.0 + t * 14.0, 16.0)
+				var hw := 5.5 * (1.0 - x / 17.0)
+				ci.draw_line(Vector2(x, -hw), Vector2(x + 2.5, hw), Color("#6a7888", alpha), 1.1, true)
+		"crystal":
+			var glow := 0.6 + 0.4 * sin(t * 3.0)
+			ci.draw_circle(Vector2(-2.0, 0), 9.0, Color(0.6, 0.9, 1.0, 0.18 * glow * alpha))
+			Art.poly(ci, [Vector2(-2, -6), Vector2(2, -2.5), Vector2(2, 2.5), Vector2(-2, 6), Vector2(-6, 2.5), Vector2(-6, -2.5)], Color("#9fe0f8", alpha))
+			Art.poly(ci, [Vector2(-2, -6), Vector2(2, -2.5), Vector2(-2, 0), Vector2(-6, -2.5)], Color("#dff6ff", alpha))
+		"tentacle":
+			var pts := PackedVector2Array()
+			for i in 15:
+				var x := 30.0 * i / 14.0
+				pts.append(Vector2(x, sin(x * 0.28 - t * 5.0) * (x / 30.0) * 5.0))
+			ci.draw_polyline(pts, dark, 4.0, true)
+			ci.draw_polyline(pts, Color(color.lightened(0.15), alpha), 2.4, true)
+			for i in [3, 6, 9, 12]:
+				ci.draw_circle(pts[i], 0.9, Color("#f0d0e0", alpha))
+		"lantern":
+			var tip := Vector2(11.0, -5.0 + sin(t * 2.0) * 1.0)
+			ci.draw_polyline(Art.quad(Vector2(0, 0), Vector2(7, 1), tip, 6), dark, 1.8, true)
+			var pulse := 0.7 + 0.3 * sin(t * 4.0)
+			ci.draw_circle(tip, 7.0, Color(1.0, 0.95, 0.5, 0.2 * pulse * alpha))
+			ci.draw_circle(tip, 3.4, Color(1.0, 0.95, 0.6, alpha))
+		"horn":
+			var pts := Art.quad(Vector2(-1, -5.5), Vector2(10, -6), Vector2(19, -3.5), 8)
+			pts.append_array(Art.quad(Vector2(19, -3.5), Vector2(11, 0), Vector2(-1, 5.5), 8))
+			ci.draw_colored_polygon(pts, Color("#ece2c8", alpha))
+			ci.draw_polyline(pts, Color("#a89878", alpha), 0.8, true)
 		"chloroplast":
 			Art.ellipse(ci, Vector2(-6.0, 0), 5.0, 2.8, Color("#3f9a4a", alpha), 0.0, 14)
 			for x in [-8.5, -6.0, -3.5]:
@@ -223,7 +285,7 @@ static func part_icon(ci: CanvasItem, id: String, rect: Rect2, color: Color, t :
 		s *= 0.8
 		origin.x -= rect.size.x * 0.12
 	ci.draw_circle(origin + Vector2(-18.0 * s, 0), 18.0 * s, Color(color, 0.9 * alpha))
-	if id == "shell" or id == "membrane":
+	if id in RIM:
 		_rim_part(ci, id, origin + Vector2(-18.0 * s, 0), 18.0 * s, 0.0, 0.0, alpha, [])
 		return
 	ci.draw_set_transform(origin + Vector2(-18.0 * s + 18.0 * s * 0.93, 0), 0.0, Vector2(s * 0.9, s * 0.9))
@@ -263,3 +325,59 @@ static func capsule(ci: CanvasItem, cap: Dictionary, t: float, known: bool) -> v
 	part_icon(ci, cap.part, Rect2(at - Vector2(12, 12), Vector2(24, 24)), Color("#9aa4b0"), t)
 	if not known:
 		ci.draw_circle(at + Vector2(11, -11), 5.0, Art.ACCENT)
+
+
+# --- камни и пара ---------------------------------------------------------------------
+
+## Камень: грани, трещины тем больше, чем сильнее разбит, вспышка от удара.
+static func rock(ci: CanvasItem, k: Dictionary, t: float) -> void:
+	var def: Dictionary = Content.ROCKS[k.kind]
+	var col := Color(def.color)
+	var r: float = k.r
+	var v: int = k.v
+	var pts := PackedVector2Array()
+	var n := 9
+	for i in n:
+		var a := TAU * i / n + v * 0.1
+		pts.append(k.pos + Vector2.from_angle(a) * r * (0.86 + 0.14 * sin(v * 1.3 + i * 2.1)))
+	var shadow := PackedVector2Array()
+	for q in pts:
+		shadow.append(q + Vector2(r * 0.1, r * 0.14))
+	ci.draw_colored_polygon(shadow, Color(0, 0, 0, 0.25))
+	ci.draw_colored_polygon(pts, col.darkened(0.15))
+	# Светлая грань сверху-слева.
+	var top := PackedVector2Array([k.pos])
+	for i in [5, 6, 7, 8]:
+		top.append(pts[i])
+	ci.draw_colored_polygon(top, col.lightened(0.12))
+	var edge := pts.duplicate()
+	edge.append(pts[0])
+	ci.draw_polyline(edge, col.darkened(0.45), maxf(1.5, r * 0.06), true)
+	if k.kind == "crystal":
+		var glow := 0.6 + 0.4 * sin(t * 2.0 + v)
+		for i in 3:
+			var a := -PI / 2.0 + (i - 1) * 0.5
+			var base: Vector2 = k.pos + Vector2.from_angle(a + PI / 2.0) * r * 0.2
+			var tip := base + Vector2.from_angle(a) * r * (0.7 + 0.15 * i)
+			var side := Vector2.from_angle(a).orthogonal() * r * 0.14
+			ci.draw_colored_polygon(PackedVector2Array([base - side, tip, base + side]), Color(0.7, 0.95, 1.0, 0.85))
+		ci.draw_circle(k.pos, r * 1.3, Color(0.6, 0.9, 1.0, 0.08 * glow))
+	# Трещины: чем меньше прочности, тем их больше.
+	var broken := 1.0 - float(k.hp) / float(k.max_hp)
+	for i in int(broken * 5.0):
+		var a := v * 0.7 + i * 2.4
+		var p0: Vector2 = k.pos + Vector2.from_angle(a) * r * 0.15
+		var p1 := p0 + Vector2.from_angle(a + 0.4) * r * 0.45
+		var p2 := p1 + Vector2.from_angle(a - 0.3) * r * 0.35
+		ci.draw_polyline(PackedVector2Array([p0, p1, p2]), Color(0.1, 0.1, 0.12, 0.8), maxf(1.0, r * 0.05), true)
+	if k.flash > 0.0:
+		ci.draw_colored_polygon(pts, Color(1, 1, 1, 0.4 * k.flash))
+
+## Пара: твоя же клетка, только с розовым ореолом и сердечком над ней.
+static func mate(ci: CanvasItem, m: Creature, t: float) -> void:
+	var pulse := 0.5 + 0.5 * sin(t * 3.0)
+	ci.draw_circle(m.pos, m.radius * (1.6 + 0.15 * pulse), Color(1.0, 0.6, 0.8, 0.12))
+	creature(ci, m.pos, m.size_r, m.heading, m.color, m.parts, m.phase, {"shape": m.shape, "wobble": 1.7})
+	var h := m.pos + Vector2(0, -m.radius * 1.7 - 6.0 * pulse)
+	Art.heart(ci, h, m.radius * 0.8, Color("#f07aa8"))
+

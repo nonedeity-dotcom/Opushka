@@ -34,6 +34,10 @@ var player: Creature
 var mobs: Array[Creature] = []
 var food: Array = []  # [{pos, kind: plant/meat, value, r, t, v, eaten}]
 var capsules: Array = []  # [{pos, part, t}]
+var rocks: Array = []  # [{pos, r, hp, max_hp, kind, v, uid, flash}]
+## Пара: зовёшь кнопкой ♥, доплываешь — и можно менять тело. null — не звал.
+var mate: Creature = null
+var _rock_uid := -1
 var events: Array = []
 var rng := RandomNumberGenerator.new()
 ## Полдиагонали экрана в точках мира: за этим краем появляются новые клетки.
@@ -61,6 +65,8 @@ func fill() -> void:
 		_spawn_plant(60.0, outer, true)
 	for i in _mob_target() / 2:
 		_spawn_mob(true)
+	for i in _rock_target():
+		_spawn_rock(view_radius * 0.6, view_radius + 700.0)
 
 
 # --- шаг ------------------------------------------------------------------------------
@@ -80,7 +86,9 @@ func step(dt: float, input: Vector2, dash := false) -> void:
 		_move(c, dt)
 		_timers(c, dt)
 	_collide(all)
+	_rock_contacts(all)
 	_zaps(all)
+	_mate_step(dt)
 	_rebuild_grid()
 	_eat(all)
 	_pickup()
@@ -106,8 +114,12 @@ func everyone() -> Array[Creature]:
 
 func _move(c: Creature, dt: float) -> void:
 	var spd := c.speed
-	if c.ai_state == "flee" and not c.is_player and c.behavior() == "skittish":
+	if c.ai_state == "flee" and not c.is_player and c.species != "mate" and c.behavior() == "skittish":
 		spd *= 1.25
+	if c.ai_state == "chase":
+		spd *= float(evo.diff().hunt)
+	if c.slow_t > 0.0:
+		spd *= 0.6
 	var goal := c.desire * spd
 	# Во время рывка вода тормозит слабее — разгон доносит до цели.
 	var k := 0.8 if c.dash_t > 0.0 else 4.0
@@ -144,6 +156,10 @@ func _timers(c: Creature, dt: float) -> void:
 	c.player_hit_t += dt
 	c.flash = maxf(0.0, c.flash - dt * 4.0)
 	c.bite_anim = maxf(0.0, c.bite_anim - dt * 3.0)
+	c.eat_anim = maxf(0.0, c.eat_anim - dt * 4.0)
+	c.grow_anim = maxf(0.0, c.grow_anim - dt * 1.2)
+	c.slow_t -= dt
+	c.age += dt
 	for k in c.hit_cd.keys():
 		c.hit_cd[k] -= dt
 		if c.hit_cd[k] <= 0.0:
@@ -202,6 +218,13 @@ func _contact(x: Creature, y: Creature, n: Vector2) -> void:
 			x.hit_cd[y.uid] = SPIKE_CD
 			_hurt(y, s.dmg * boost, x, "spike")
 			break
+	for g in x.grabs:
+		if x.faces(g.a, g.arc, y.pos) and x.hit_cd.get(-y.uid, 0.0) <= 0.0:
+			# Щупальце хватает: немного ранит и держит — жертва плывёт медленнее.
+			x.hit_cd[-y.uid] = 0.8
+			y.slow_t = 1.5
+			_hurt(y, g.dmg, x, "grab")
+			break
 	for g in x.glands:
 		if x.faces(g.a, g.arc, y.pos) and y.invuln <= 0.0:
 			if y.poison_t <= 0.0 and (y.is_player or x.is_player):
@@ -231,7 +254,11 @@ func _hurt(y: Creature, dmg: float, from: Creature, kind: String, silent := fals
 		for s in y.shells:
 			if y.faces(s.a, s.arc, from.pos):
 				mult = minf(mult, 1.0 - s.armor)
+	if kind != "poison":
+		mult *= 1.0 - y.armor_all
 	dmg *= mult
+	if y.is_player:
+		dmg *= float(evo.diff().hurt)
 	y.hp -= dmg
 	y.calm_t = 0.0
 	if from != null:
@@ -307,6 +334,7 @@ func _fed(c: Creature, f: Dictionary) -> void:
 		c.hp = minf(c.max_hp, c.hp + f.value)
 	else:
 		c.hp = minf(c.max_hp, c.hp + 3.0)
+	c.eat_anim = 1.0
 	if not c.is_player:
 		return
 	var gain: float
@@ -348,6 +376,7 @@ func _gain(amount: float) -> void:
 	if evo.add_dna(amount):
 		player.sync_player(evo)
 		player.hp = player.max_hp
+		player.grow_anim = 1.0
 		events.append({"t": "levelup", "level": evo.level()})
 
 
@@ -361,7 +390,7 @@ func _deaths() -> void:
 			var off := Vector2.from_angle(rng.randf() * TAU) * rng.randf() * m.radius * 0.8
 			food.append({"pos": m.pos + off, "kind": "meat", "value": 1, "r": 5.0, "t": 0.0, "v": rng.randi() % 256, "eaten": false})
 		var by_player := m.player_hit_t < KILL_CREDIT
-		events.append({"t": "kill", "pos": m.pos, "species": m.species, "by_player": by_player, "radius": m.radius, "color": m.color, "golden": m.golden})
+		events.append({"t": "kill", "pos": m.pos, "species": m.species, "by_player": by_player, "radius": m.radius, "color": m.color, "golden": m.golden, "who": m})
 		if by_player:
 			evo.count("kills")
 			evo.kills_by[m.species] = evo.kills_by.get(m.species, 0) + 1
@@ -372,7 +401,7 @@ func _deaths() -> void:
 			_gain(bonus)
 			var dropped: Array = []
 			for d in def.drops:
-				if rng.randf() < d[1]:
+				if rng.randf() < d[1] * float(evo.diff().drop):
 					dropped.append(d[0])
 			# Из сияющей что-нибудь выпадает всегда.
 			if m.golden and dropped.is_empty() and not def.drops.is_empty():
@@ -390,7 +419,8 @@ func _deaths() -> void:
 ## неуязвимая. Всё найденное и накопленное остаётся.
 func _reborn() -> void:
 	evo.count("deaths")
-	events.append({"t": "death", "pos": player.pos})
+	var lost := evo.death_loss()
+	events.append({"t": "death", "pos": player.pos, "lost": lost})
 	var away := Vector2.from_angle(rng.randf() * TAU) * (view_radius * 2.0 + 400.0)
 	player.pos += away
 	player.vel = Vector2.ZERO
@@ -436,7 +466,7 @@ func _nearest_prey(m: Creature) -> Creature:
 	for o in everyone():
 		if o == m or not o.alive or o.species == m.species or o.invuln > 0.0:
 			continue
-		if not o.is_player and Content.SPECIES[o.species].behavior == "boss":
+		if not o.is_player and Content.SPECIES[o.species].behavior in ["boss", "giant"]:
 			continue
 		if o.radius > m.radius * PREY_RATIO:
 			continue
@@ -474,7 +504,7 @@ func _think(m: Creature, dt: float) -> void:
 	var flee_r := m.sight * (1.0 if b == "skittish" else 0.65)
 	var threat := _nearest_threat(m, flee_r)
 	var runs := b == "grazer" or b == "skittish" or (hunts and weak)
-	if threat != null and hunts and threat.radius >= m.radius * 1.4 and b != "boss":
+	if threat != null and hunts and threat.radius >= m.radius * 1.4 and b != "boss" and b != "giant":
 		runs = true
 	if threat != null and runs:
 		m.ai_state = "flee"
@@ -504,12 +534,12 @@ func _think(m: Creature, dt: float) -> void:
 	var f := _nearest_food(m, m.sight)
 	if not f.is_empty():
 		m.ai_state = "feed"
-		m.desire = (f.pos - m.pos).normalized() * (0.45 if b == "drifter" or b == "boss" else 0.8)
+		m.desire = (f.pos - m.pos).normalized() * (0.45 if b in ["drifter", "boss", "giant"] else 0.8)
 		return
 	if m.ai_state != "wander" or m.pos.distance_to(m.ai_goal) < m.radius or rng.randf() < 0.03:
 		m.ai_state = "wander"
 		m.ai_goal = m.pos + Vector2.from_angle(rng.randf() * TAU) * rng.randf_range(80.0, 220.0)
-	m.desire = (m.ai_goal - m.pos).normalized() * (0.35 if b == "drifter" or b == "boss" else 0.5)
+	m.desire = (m.ai_goal - m.pos).normalized() * (0.35 if b in ["drifter", "boss", "giant"] else 0.5)
 
 ## Бросок хищника на добычу.
 func _lunge(m: Creature) -> void:
@@ -545,6 +575,7 @@ func _spawn_plant(inner: float, outer: float, anywhere := false) -> void:
 func _species_pool() -> Array:
 	var lvl := evo.level()
 	var boss_here := mobs.any(func(m): return Content.SPECIES[m.species].behavior == "boss")
+	var giant_here := mobs.any(func(m): return Content.SPECIES[m.species].behavior == "giant")
 	var pool: Array = []
 	for id in Content.SPECIES:
 		var def: Dictionary = Content.SPECIES[id]
@@ -552,7 +583,9 @@ func _species_pool() -> Array:
 			continue
 		if def.behavior == "boss" and boss_here:
 			continue
-		if _safe_t > 0.0 and (def.behavior == "hunter" or def.behavior == "boss"):
+		if def.behavior == "giant" and giant_here:
+			continue
+		if _safe_t > 0.0 and (def.behavior == "hunter" or def.behavior == "boss" or def.get("hunts", false)):
 			continue
 		pool.append([id, def.weight])
 	return pool
@@ -573,12 +606,14 @@ func _spawn_mob(anywhere := false) -> Creature:
 			break
 	var inner := view_radius + 60.0
 	var r := rng.randf_range(inner, inner + (900.0 if anywhere else 600.0))
-	var golden: bool = Content.SPECIES[pick].behavior != "boss" and rng.randf() < Content.GOLDEN_CHANCE
+	var golden: bool = not Content.SPECIES[pick].behavior in ["boss", "giant"] and rng.randf() < Content.GOLDEN_CHANCE
 	return spawn(pick, player.pos + Vector2.from_angle(rng.randf() * TAU) * r, golden)
 
 ## Поставить клетку вида id в точку — и для проверок тоже.
 func spawn(id: String, at: Vector2, golden := false) -> Creature:
-	var m := Creature.of_species(id)
+	var def: Dictionary = Content.SPECIES[id]
+	# Великаны всегда во много раз больше тебя, каким бы ты ни был.
+	var m := Creature.of_species(id, player.size_r * float(def.scale) if def.has("scale") else 0.0)
 	if golden:
 		m.make_golden()
 	m.pos = at
@@ -599,6 +634,9 @@ func _manage() -> void:
 	capsules = capsules.filter(func(c): return c.pos.distance_to(player.pos) < far)
 	for i in mini(_mob_target() - mobs.size(), 3):
 		_spawn_mob()
+	rocks = rocks.filter(func(k): return k.pos.distance_to(player.pos) < far)
+	if rocks.size() < _rock_target():
+		_spawn_rock(view_radius + 60.0, view_radius + 700.0)
 	for m in mobs:
 		var near := m.pos.distance_to(player.pos) < player.vision + m.radius
 		if near and not evo.seen.has(m.species):
@@ -607,3 +645,138 @@ func _manage() -> void:
 		if near and m.golden and not m.announced:
 			m.announced = true
 			events.append({"t": "golden", "species": m.species, "pos": m.pos})
+
+
+# --- камни ----------------------------------------------------------------------------
+
+func _rock_target() -> int:
+	return 5 + evo.level() / 2
+
+## Камень подходящего размера — чуть в стороне, не на тебе.
+func _spawn_rock(inner: float, outer: float, kind := "") -> Dictionary:
+	var lvl := evo.level()
+	if kind == "":
+		var pool: Array = []
+		var total := 0.0
+		for id in Content.ROCKS:
+			var def: Dictionary = Content.ROCKS[id]
+			if lvl >= def.levels[0] and lvl <= def.levels[1]:
+				pool.append([id, def.weight])
+				total += def.weight
+		var roll := rng.randf() * total
+		kind = pool[-1][0]
+		for p in pool:
+			roll -= p[1]
+			if roll <= 0.0:
+				kind = p[0]
+				break
+	var at := player.pos + Vector2.from_angle(rng.randf() * TAU) * rng.randf_range(inner, outer)
+	return add_rock(kind, at)
+
+## Поставить камень — и для проверок тоже.
+func add_rock(kind: String, at: Vector2) -> Dictionary:
+	var def: Dictionary = Content.ROCKS[kind]
+	var k := pow(player.size_r / 16.0, 0.8)
+	var rock := {"pos": at, "r": def.radius * k, "hp": def.hp * k * k, "max_hp": def.hp * k * k, "kind": kind,
+		"v": rng.randi() % 1000, "uid": _rock_uid, "flash": 0.0}
+	_rock_uid -= 1
+	rocks.append(rock)
+	return rock
+
+## Камни не сдвинуть: кто в них упёрся — отодвигается сам. Ты можешь их крошить.
+func _rock_contacts(all: Array[Creature]) -> void:
+	var broken: Array = []
+	for rock in rocks:
+		rock.flash = maxf(0.0, rock.flash - 0.08)
+		for c in all:
+			if not c.alive:
+				continue
+			var d: Vector2 = c.pos - rock.pos
+			var min_d: float = c.radius + rock.r
+			if d.length_squared() >= min_d * min_d:
+				continue
+			var dist := d.length()
+			var n := d / dist if dist > 0.001 else Vector2.RIGHT
+			c.pos = rock.pos + n * min_d
+			var into := c.vel.dot(-n)
+			if c.is_player:
+				_hit_rock(rock, c, into)
+			if into > 0.0:
+				c.vel += n * into
+		if rock.hp <= 0.0:
+			broken.append(rock)
+	for rock in broken:
+		rocks.erase(rock)
+		_rock_broken(rock)
+
+func _hit_rock(rock: Dictionary, c: Creature, into: float) -> void:
+	var dmg := 0.0
+	if c.dash_t > 0.0 and not c.dash_hit.has(rock.uid):
+		c.dash_hit[rock.uid] = true
+		dmg += RAM_DAMAGE * 1.5 * pow(c.size_k(), 0.7)
+	var bite: float = c.mouth.get("bite", 0.0)
+	if bite > 0.0 and c.bite_cd <= 0.0 and c.faces(c.mouth.a, c.mouth.arc, rock.pos):
+		c.bite_cd = BITE_CD
+		c.bite_anim = 1.0
+		dmg += bite
+	for sp in c.spikes:
+		if c.hit_cd.get(rock.uid, 0.0) <= 0.0 and c.faces(sp.a, sp.arc, rock.pos):
+			c.hit_cd[rock.uid] = SPIKE_CD
+			dmg += sp.dmg * sp.rock
+			break
+	if dmg <= 0.0:
+		return
+	rock.hp -= dmg
+	rock.flash = 1.0
+	events.append({"t": "rock_hit", "pos": rock.pos + (c.pos - rock.pos).normalized() * rock.r, "dmg": dmg, "rock": rock.kind})
+
+func _rock_broken(rock: Dictionary) -> void:
+	var def: Dictionary = Content.ROCKS[rock.kind]
+	evo.count("rocks")
+	var bonus: float = def.dna * pow(player.size_r / 16.0, 0.5)
+	events.append({"t": "rock_break", "pos": rock.pos, "r": rock.r, "rock": rock.kind, "dna": bonus})
+	_gain(bonus)
+	for d in def.drops:
+		if rng.randf() < d[1] * float(evo.diff().drop):
+			var at: Vector2 = rock.pos + Vector2.from_angle(rng.randf() * TAU) * rock.r * 0.4
+			capsules.append({"pos": at, "part": d[0], "t": 0.0})
+			events.append({"t": "drop", "part": d[0], "pos": at})
+
+
+# --- пара -----------------------------------------------------------------------------
+
+## Позвать пару: она появляется поодаль, стрелка покажет, где. false — уже зовёшь.
+func call_mate() -> bool:
+	if mate != null:
+		return false
+	var m := Creature.new()
+	m.species = "mate"
+	m.size_r = player.size_r
+	m.shape = player.shape.duplicate()
+	m.radius = player.radius
+	m.color = player.color.lerp(Color("#f0a0c8"), 0.25)
+	m.parts = player.parts.duplicate(true)
+	m.rebuild()
+	var dist := (view_radius * 0.9 + 250.0) * rng.randf_range(0.9, 1.2)
+	m.pos = player.pos + Vector2.from_angle(rng.randf() * TAU) * dist
+	m.heading = rng.randf() * TAU - PI
+	m.ai_goal = m.pos
+	mate = m
+	events.append({"t": "mate_called", "pos": m.pos})
+	return true
+
+## Пара плавает неспешно рядом со своим местом. Коснулся — новое поколение.
+func _mate_step(dt: float) -> void:
+	if mate == null:
+		return
+	mate.age += dt
+	if mate.pos.distance_to(mate.ai_goal) < mate.radius or rng.randf() < 0.01:
+		mate.ai_goal = mate.pos + Vector2.from_angle(rng.randf() * TAU) * 60.0
+	mate.desire = (mate.ai_goal - mate.pos).normalized() * 0.25
+	_move(mate, dt)
+	if player.alive and player.pos.distance_to(mate.pos) < player.radius + mate.radius + 4.0:
+		evo.generation += 1
+		evo.count("mates")
+		events.append({"t": "mated", "pos": (player.pos + mate.pos) / 2.0, "generation": evo.generation})
+		mate = null
+
