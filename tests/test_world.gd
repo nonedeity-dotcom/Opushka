@@ -558,3 +558,19 @@ func test_гиганты_чаще(c) -> void:
 			if Pond.is_giant(m) and m.age > 20.0:
 				m.pos = p.player.pos + Vector2(p.view_radius + 5000.0, 0)
 	c.ok("за полторы минуты — хотя бы два гиганта (%d)" % seen, seen >= 2)
+
+func test_тяжёлая_хищники_хитрее(c) -> void:
+	var n := _pond(_evo_with([["filter", 0]], 1100.0))
+	var eh := _evo_with([["filter", 0]], 1100.0)
+	eh.difficulty = "hard"
+	var h := _pond(eh)
+	var def: Dictionary = Content.SPECIES["kusaka"]
+	c.ok("хищники растут вместе с тобой быстрее", h.grow_k(def) > n.grow_k(def) * 1.05)
+	c.ok("мирные — как обычно", is_equal_approx(h.grow_k(Content.SPECIES["zelenka"]), n.grow_k(Content.SPECIES["zelenka"])))
+	# Замечают издалека: хищник на расстоянии чуть больше обычного зрения.
+	for p: Pond in [n, h]:
+		p._safe_t = 0.0
+		var m := p.spawn("kusaka", p.player.pos + Vector2(1, 0), false, p.player.size_r * 2.0)
+		m.pos = p.player.pos + Vector2(m.sight * 1.2, 0)
+	c.ok("на обычной — не видит", n._nearest_prey(n.mobs[-1]) != n.player)
+	c.ok("на тяжёлой — видит", h._nearest_prey(h.mobs[-1]) == h.player)

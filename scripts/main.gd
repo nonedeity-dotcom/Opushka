@@ -705,8 +705,9 @@ func _update_minimap() -> void:
 	for m in pond.mobs:
 		if (m.invisible and p.eyes < 1.0) or (m.behavior() == "ambush" and m.revealed_t <= 0.0 and p.eyes < 2.0):
 			continue
-		# Гигантов на карте нет — их замечаешь сам, по теням и голосу.
+		# Гиганты и колоссы — просто красной точкой, как любая опасная клетка.
 		if Pond.is_giant(m) or Pond.is_colossus(m):
+			put.call(m.pos, Art.DANGER, 3.5)
 			continue
 		if pond._hunts(m) and m.radius >= p.radius * 0.8:
 			put.call(m.pos, Art.DANGER, 3.5)

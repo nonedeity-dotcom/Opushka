@@ -13,7 +13,7 @@ func _init() -> void:
 		args[kv[0]] = kv[1] if kv.size() > 1 else ""
 	var minutes := float(args.get("minutes", "30"))
 	diet_goal = args.get("diet", "plant")
-	evo = Evolution.create()
+	evo = Evolution.create(args.get("difficulty", "normal"))
 	pond = Pond.new(evo, int(args.get("seed", "1")))
 	pond.view_radius = 480.0
 	pond.fill()

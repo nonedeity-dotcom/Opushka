@@ -274,6 +274,8 @@ func _timers(c: Creature, dt: float) -> void:
 	var heal := c.regen
 	if c.calm_t > REGEN_DELAY:
 		heal += 0.3 * c.size_k()
+	if c.is_player:
+		heal *= _hard("regen")
 	c.hp = minf(c.max_hp, c.hp + heal * dt)
 
 
@@ -703,6 +705,9 @@ func _nearest_prey(m: Creature) -> Creature:
 		if o.radius > m.radius * (maxf(ratio, 1.6) if rival else ratio):
 			continue
 		var d := m.pos.distance_to(o.pos)
+		# На сложности выше тебя замечают издалека.
+		if o.is_player:
+			d /= _hard("sight")
 		# Маскировка: замечают позже.
 		if o.camo > 0.0 and d > best_d * (1.0 - o.camo):
 			continue
@@ -726,7 +731,7 @@ func _nearest_food(m: Creature, within: float) -> Dictionary:
 func _think(m: Creature, dt: float) -> void:
 	m.resting = maxf(0.0, m.resting - dt)
 	if m.ai_state == "chase":
-		m.stamina -= dt / CHASE_TIME
+		m.stamina -= dt / (CHASE_TIME * _hard("chase"))
 	else:
 		m.stamina = minf(1.0, m.stamina + dt / REST_TIME)
 	m.ai_t -= dt
@@ -902,6 +907,9 @@ func _spawn_mob(anywhere := false, at := Vector2.INF) -> Creature:
 	var first := spawn(pick, at, golden)
 	# Стайка появляется вся сразу, кучкой: двое или трое, не больше.
 	var group := rng.randi_range(2, mini(int(def.school), 3)) if def.has("school") else (rng.randi_range(2, 3) if def.behavior == "roamer" else 1)
+	# На сложности выше хищники нередко приплывают вдвоём.
+	if group == 1 and def.behavior == "hunter" and rng.randf() < _hard("pack", 0.0):
+		group = 2
 	for i in group - 1:
 		spawn(pick, at + Vector2.from_angle(rng.randf() * TAU) * rng.randf_range(10.0, 60.0))
 	return first
@@ -965,8 +973,18 @@ func is_giant_now(def: Dictionary) -> bool:
 
 ## Во сколько раз вид крупнее своего обычного: каким он задуман на размере, с которого
 ## появляется, таким и встречается; перерастаешь его — он подрастает, но медленнее тебя.
+## Повадка хищников по сложности (Content.DIFFICULTY): на первых размерах — почти как на
+## обычной, к 6-му — в полную силу. Начало не должно быть мучением.
+func _hard(key: String, normal := 1.0) -> float:
+	var full := float(evo.diff().get(key, normal))
+	return lerpf(normal, full, clampf((evo.level() - 2) / 4.0, 0.0, 1.0))
+
 func grow_k(def: Dictionary) -> float:
-	return maxf(1.0, pow(player.size_r / Content.radius_for(int(def.levels[0])), 0.6))
+	# Хищники на сложности выше растут вместе с тобой быстрее — и остаются опасными.
+	var e := 0.6
+	if def.behavior == "hunter" or def.get("hunts", false):
+		e = float(evo.diff().get("grow", 0.6))
+	return maxf(1.0, pow(player.size_r / Content.radius_for(int(def.levels[0])), e))
 
 func _manage() -> void:
 	var outer := _plant_outer()
@@ -1418,7 +1436,7 @@ func _roamer_think(m: Creature) -> void:
 		if m.stamina <= 0.0:
 			# Выдохся — отстаёт и надолго теряет интерес: плывёт дальше своей дорогой.
 			m.resting = REST_TIME
-			m.bored_t = GIANT_BORED
+			m.bored_t = GIANT_BORED / _hard("chase")
 			m.ai_state = "rest"
 			m.desire *= 0.2
 			return

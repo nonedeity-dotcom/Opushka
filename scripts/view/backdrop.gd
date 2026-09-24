@@ -17,7 +17,12 @@ var player_r := 16.0
 var _ghosts: Array = []  # [{id, p, dir, speed, parts, shape}]
 var _ghost_level := -1
 var _rng := RandomNumberGenerator.new()
-const DEPTH := 0.3
+## Насколько тени отстают от мира: мир сдвигается на экране на N точек — тени на N·DEPTH.
+const DEPTH := 0.7
+## Сколько точек экрана «проехал» мир — копится по кадрам, с учётом зума: так смена
+## зума не дёргает тени, а сами они уходят назад в полскорости мира, как далёкие.
+var _scroll := Vector2.ZERO
+var _last_drift := Vector2.INF
 
 var _shadows: Control
 ## Блики солнца сквозь рябь: два слоя одной сетки скользят навстречу (дёшево — только
@@ -77,6 +82,10 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	t += delta
+	if _last_drift == Vector2.INF or drift.distance_to(_last_drift) > 3000.0:
+		_last_drift = drift
+	_scroll += (drift - _last_drift) * zoom
+	_last_drift = drift
 	var water: Array = Content.WATER[clampi(level, 1, Content.WATER.size()) - 1]
 	var k := 1.0 - exp(-0.8 * delta)
 	_top = _top.lerp(Color(water[0]), k)
@@ -101,7 +110,7 @@ func _process(delta: float) -> void:
 	if _caustics.visible:
 		var mat: ShaderMaterial = _caustics.material
 		mat.set_shader_parameter("area", size)
-		mat.set_shader_parameter("offset", drift * zoom * 0.35)
+		mat.set_shader_parameter("offset", _scroll * 0.35)
 		mat.set_shader_parameter("t", t)
 		mat.set_shader_parameter("strength", glint)
 		mat.set_shader_parameter("tint", Color(0.75, 1.0, 0.8) if event == "bloom" else Color(0.8, 0.97, 1.0))
@@ -139,16 +148,16 @@ func _new_ghost(pool: Array, anywhere: bool) -> Dictionary:
 		parts.append({"id": p[0], "a": deg_to_rad(p[1]), "d": 1.0, "lvl": p[2]})
 	var dir := _rng.randf() * TAU
 	# Выплывает из-за края экрана (в пространстве глубины).
-	var start := drift * DEPTH + Vector2(_rng.randf_range(-0.5, 0.5), _rng.randf_range(-0.5, 0.5)) * size
+	var start := _scroll * DEPTH + Vector2(_rng.randf_range(-0.5, 0.5), _rng.randf_range(-0.5, 0.5)) * size
 	if not anywhere:
-		start = drift * DEPTH - Vector2.from_angle(dir) * (size.length() * 0.6)
+		start = _scroll * DEPTH - Vector2.from_angle(dir) * (size.length() * 0.6)
 		ghost_appeared.emit(float(def.get("scale", 3.0)))
 	# Плывут заметно: экран пересекают за 10–20 секунд.
 	return {"id": id, "p": start, "dir": dir, "speed": _rng.randf_range(70.0, 120.0), "parts": parts,
 		"shape": Content.shape_preset(def.get("shape", "round")), "wobble": _rng.randf() * 10.0}
 
 func _ghost_screen(g: Dictionary) -> Vector2:
-	return g.p - drift * DEPTH + size / 2.0
+	return g.p - _scroll * DEPTH + size / 2.0
 
 func _draw() -> void:
 	# Градиент — цветами вершин, без текстуры: раньше текстура градиента пересобиралась и
