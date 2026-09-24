@@ -16,6 +16,9 @@ var radius := 16.0
 var size_r := 16.0
 var shape: Array = []
 var color := Color.WHITE
+## Узор и второй цвет особи (у существ — случайные, у тебя — из редактора).
+var pattern := "none"
+var color2 := Color.WHITE
 var parts: Array = []  # [{id, a — радианы, d — глубина: 1 край, 0 середина, lvl}]
 ## Сияющая особь: редкая, пугливая, крепче, и что-нибудь из неё выпадает всегда.
 var golden := false

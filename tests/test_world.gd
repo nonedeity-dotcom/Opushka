@@ -471,3 +471,29 @@ func test_светлячок(c) -> void:
 	a.view_radius = 400.0
 	b.view_radius = 400.0
 	c.ok("светлячок раздвигает туман", b.vision() > a.vision() * 1.25)
+
+func test_свои_не_дерутся(c) -> void:
+	var p := _pond(_evo_with([["filter", 0]], 300.0))
+	p.player.pos = Vector2(5000, 5000)
+	var a := p.spawn("klykach", Vector2(0, 0))
+	var b := p.spawn("klykach", Vector2(a.radius * 1.5, 0))
+	b.heading = PI
+	_run(p, 3.0)
+	c.ok("одинаковые не ранят друг друга", a.hp == a.max_hp and b.hp == b.max_hp)
+	var q := _pond(_evo_with([["filter", 0]], 300.0))
+	q.player.pos = Vector2(5000, 5000)
+	var x := q.spawn("klykach", Vector2(0, 0))
+	var y := q.spawn("hobotnik", Vector2(x.radius * 3.0, 0))
+	_run(q, 6.0)
+	c.ok("хищники разных видов дерутся", x.hp < x.max_hp or y.hp < y.max_hp or not x.alive or not y.alive)
+
+func test_особи_разные(c) -> void:
+	var p := _pond()
+	var cols := {}
+	var pats := {}
+	for i in 30:
+		var m := p.spawn("zelenka", Vector2(i * 100, 0))
+		cols[m.color.to_html()] = true
+		pats[m.pattern] = true
+	c.ok("оттенки разные", cols.size() > 20)
+	c.ok("у некоторых есть узор", pats.size() >= 2)

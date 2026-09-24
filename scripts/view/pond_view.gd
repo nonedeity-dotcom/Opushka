@@ -263,8 +263,8 @@ func _creature(c: Creature) -> void:
 		ghost *= clampf(0.08 + pond.player.eyes * 0.3, 0.08, 1.0)
 	if c.hidden_t > 0.0:
 		ghost *= 0.35
-	var pattern := "none"
-	var col2 := c.color
+	var pattern := c.pattern
+	var col2 := c.color2
 	if c.is_player or c.ally:
 		pattern = pond.evo.pattern
 		col2 = Color(Content.COLORS[pond.evo.color2])

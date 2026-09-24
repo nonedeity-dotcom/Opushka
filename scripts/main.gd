@@ -289,6 +289,8 @@ func _process(delta: float) -> void:
 		return
 	backdrop.drift = pond.player.pos
 	backdrop.biome = pond.biome if pond.biome != "" else "shallows"
+	backdrop.level = evo.level()
+	backdrop.zoom = view.camera.zoom.x
 	t0 = Time.get_ticks_usec()
 	_music(delta)
 	_voice_gap -= delta
@@ -407,7 +409,7 @@ func _handle(events: Array) -> void:
 				if e.level >= Content.LEVELS.size():
 					hud.announce("Многоклеточный!", "Этап клетки пройден. Можно жить дальше: собирать и улучшать части")
 				else:
-					hud.announce("Размер %d" % e.level, "Места на теле больше: %d. Вокруг появятся новые клетки" % evo.slots())
+					hud.announce("Размер %d" % e.level, "Места на теле больше: %d. Вокруг появятся новые клетки — их тени уже видны в глубине" % evo.slots())
 			"zap":
 				if e.by_player or e.to_player:
 					sound.play("zap")

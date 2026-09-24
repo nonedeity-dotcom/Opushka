@@ -654,7 +654,9 @@ func _nearest_prey(m: Creature) -> Creature:
 			continue
 		if not o.is_player and not o.ally and Content.SPECIES[o.species].behavior in ["boss", "giant", "lair"]:
 			continue
-		if o.radius > m.radius * ratio:
+		# Хищники чужих видов — соперники: сцепляются, даже если соперник чуть крупнее.
+		var rival := not o.is_player and not o.ally and _hunts(o)
+		if o.radius > m.radius * (maxf(ratio, 1.6) if rival else ratio):
 			continue
 		var d := m.pos.distance_to(o.pos)
 		# Маскировка: замечают позже.
@@ -706,6 +708,14 @@ func _think(m: Creature, dt: float) -> void:
 	_mob_ability(m)
 	var hunts := _hunts(m)
 	var weak := m.hp < m.max_hp * 0.35
+	# Дать сдачи: вооружённого укусил чужой (не ты) — не бежит, а дерётся, пока силы есть.
+	var foe := m.last_attacker
+	if foe != null and foe.alive and not foe.is_player and not foe.ally and foe.species != m.species and m.calm_t < 3.0 \
+			and not weak and m.armed() and foe.radius < m.radius * 1.8 and m.pos.distance_to(foe.pos) < m.sight:
+		m.ai_state = "fight"
+		m.ai_target = foe
+		m.desire = (foe.pos - m.pos).normalized()
+		return
 	var flee_r := m.sight * (1.0 if b == "skittish" else 0.65)
 	var threat := _nearest_threat(m, flee_r)
 	var runs := b == "grazer" or b == "skittish" or (hunts and weak)
@@ -856,6 +866,7 @@ func spawn(id: String, at: Vector2, golden := false, size := 0.0) -> Creature:
 			size = float(def.radius) * grow_k(def) * rng.randf_range(0.9, 1.1)
 	var bonus := 0 if def.has("scale") else clampi((evo.level() - int(def.levels[0])) / 3, 0, 2)
 	var m := Creature.of_species(id, size, bonus)
+	_vary(m, def)
 	if golden:
 		m.make_golden()
 	m.pos = at
@@ -863,6 +874,21 @@ func spawn(id: String, at: Vector2, golden := false, size := 0.0) -> Creature:
 	m.ai_t = rng.randf() * 0.2
 	mobs.append(m)
 	return m
+
+## Каждая особь чуть своя: оттенок, форма, у некоторых — узор. Вид узнаётся, но стайка
+## не выглядит одинаковыми копиями.
+func _vary(m: Creature, def: Dictionary) -> void:
+	if def.has("scale") or def.behavior == "ambush":
+		return
+	var h := m.color.h + rng.randf_range(-0.035, 0.035)
+	m.color = Color.from_hsv(fposmod(h, 1.0), clampf(m.color.s * rng.randf_range(0.85, 1.15), 0.0, 1.0), clampf(m.color.v * rng.randf_range(0.88, 1.1), 0.0, 1.0))
+	var shape: Array = m.shape.duplicate()
+	for i in shape.size():
+		shape[i] = clampf(float(shape[i]) * rng.randf_range(0.93, 1.07), Content.SHAPE_MIN, Content.SHAPE_MAX)
+	m.shape = shape
+	var roll := rng.randf()
+	m.pattern = "spots" if roll < 0.18 else ("stripes" if roll < 0.3 else ("rings" if roll < 0.38 else "none"))
+	m.color2 = m.color.darkened(0.3) if rng.randf() < 0.6 else m.color.lightened(0.35)
 
 ## Во сколько раз вид крупнее своего обычного: каким он задуман на размере, с которого
 ## появляется, таким и встречается; перерастаешь его — он подрастает, но медленнее тебя.

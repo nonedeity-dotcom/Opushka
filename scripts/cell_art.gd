@@ -411,17 +411,39 @@ static func part_shape(ci: CanvasItem, id: String, color: Color, t: float, bite 
 
 
 ## Значок части для палитры редактора: кусочек тела слева и часть справа.
+## Цвет вида части: сразу видно, что это — рот, оружие, защита, движение, чувство.
+const KIND_COLOR := {"mouth": "#e0a060", "weapon": "#e06a5a", "defense": "#6aa8e0", "move": "#5ac0a0",
+	"sense": "#f0d060", "special": "#b08ae0", "ability": "#e08ac0"}
+
+## Значок части: кружок цвета её вида, в нём — сама часть крупно. Внешняя торчит из
+## краешка тела, внутренняя — посреди клетки, краевая — дугой по краю.
 static func part_icon(ci: CanvasItem, id: String, rect: Rect2, color: Color, t := 0.0, alpha := 1.0) -> void:
-	var s := rect.size.x / 60.0
-	var origin := rect.position + Vector2(rect.size.x * 0.4, rect.size.y * 0.5)
-	if id == "flagellum" or id == "flagellum2":
-		s *= 0.8
-		origin.x -= rect.size.x * 0.12
-	ci.draw_circle(origin + Vector2(-18.0 * s, 0), 18.0 * s, Color(color, 0.9 * alpha))
+	var c := rect.get_center()
+	var R := rect.size.x * 0.5
+	var def: Dictionary = Content.PARTS[id]
+	var kc := Color(KIND_COLOR.get(def.get("kind", "special"), "#9aa4b0"))
+	ci.draw_circle(c, R, Color(kc.darkened(0.55), 0.55 * alpha))
+	ci.draw_arc(c, R * 0.95, 0, TAU, 32, Color(kc, 0.85 * alpha), maxf(1.0, R * 0.07), true)
 	if id in RIM:
-		_rim_part(ci, id, origin + Vector2(-18.0 * s, 0), 18.0 * s, 0.0, 0.0, alpha, [])
+		var bc := c - Vector2(R * 0.2, 0)
+		ci.draw_circle(bc, R * 0.52, Color(color, 0.9 * alpha))
+		_rim_part(ci, id, bc, R * 0.52, 0.0, 0.0, alpha, [])
 		return
-	ci.draw_set_transform(origin + Vector2(-18.0 * s + 18.0 * s * 0.93, 0), 0.0, Vector2(s * 0.9, s * 0.9))
+	if def.get("inner", false):
+		# Внутренняя: окошко-клетка и часть в середине.
+		ci.draw_circle(c, R * 0.7, Color(color, 0.9 * alpha))
+		var si := R / 9.0
+		var off: Vector2 = INNER_CENTER.get(id, Vector2.ZERO)
+		ci.draw_set_transform(c - off * si, 0.0, Vector2(si, si))
+		part_shape(ci, id, color, t, 0.3, alpha)
+		ci.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+		return
+	var sp := R / 11.5
+	if id in ["flagellum", "flagellum2", "serpent", "tentacle", "lantern"]:
+		sp *= 0.72
+	var origin := c - Vector2(R * 0.5, 0)
+	ci.draw_circle(origin - Vector2(R * 0.28, 0), R * 0.36, Color(color, 0.9 * alpha))
+	ci.draw_set_transform(origin, 0.0, Vector2(sp, sp))
 	part_shape(ci, id, color, t, 0.3, alpha)
 	ci.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
