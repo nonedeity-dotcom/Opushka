@@ -365,3 +365,109 @@ func test_рывок_только_с_пузырём(c) -> void:
 	c.ok("пузырь можно поставить", p.evo.place("sac", 150).ok)
 	p.player.sync_player(p.evo)
 	c.ok("с пузырём рывок есть", p.player.can_dash and p.do_dash(p.player))
+
+func test_существа_растут_с_тобой(c) -> void:
+	var small := _pond()
+	var a := small.spawn("kusaka", Vector2(300, 0))
+	var e := _evo_with([["jaws", 0]], 1500.0)
+	var big := _pond(e)
+	var b := big.spawn("kusaka", Vector2(300, 0))
+	c.ok("на большом размере кусака крупнее", b.size_r > a.size_r * 1.35)
+	c.ok("и части у неё сильнее", b.parts[0].lvl > a.parts[0].lvl)
+	c.ok("но ты всё равно растёшь быстрее", b.size_r / big.player.size_r < a.size_r / small.player.size_r)
+
+func test_круги_твёрдые(c) -> void:
+	var p := _pond()
+	var col := p.add_colony(Vector2(200, 0))
+	col.drift = Vector2.ZERO
+	col.vel = Vector2.ZERO
+	_run(p, 3.0, Vector2.RIGHT)
+	c.ok("сквозь круг не проплыть", p.player.pos.distance_to(col.pos) >= col.r + p.player.radius - 1.0)
+	var m := p.spawn("zelenka", Vector2(40, 0))
+	m.ai_goal = Vector2(600, 0)
+	m.ai_state = "wander"
+	var obst := p.add_colony(Vector2(260, 0))
+	obst.drift = Vector2.ZERO
+	obst.pos = m.pos + Vector2(obst.r + m.radius + 30.0, 5.0)
+	var dir := p.avoid(m, Vector2.RIGHT)
+	c.ok("существа огибают круг", absf(dir.y) > 0.2)
+
+func test_стрелок(c) -> void:
+	var p := _pond(_evo_with([["filter", 0], ["cilia", 180]], 150.0))
+	p._safe_t = 0.0
+	var s := p.spawn("plevun", p.player.pos + Vector2(260, 0))
+	var ev := _run(p, 4.0)
+	c.ok("плевун стреляет издалека", ev.any(func(e): return e.t == "shot" and not e.by_player))
+	c.ok("и попадает", p.player.hp < p.player.max_hp or p.player.poison_t > 0.0)
+	c.ok("близко не подплывает", s.pos.distance_to(p.player.pos) > (s.radius + p.player.radius) * 1.5)
+	var q := _pond(_evo_with([["filter", 0], ["needle", 0, 1], ["cilia", 180]], 300.0))
+	q.player.heading = 0.0
+	var z := q.spawn("zelenka", q.player.pos + Vector2(200, 0))
+	z.ai_t = 99.0
+	var ev2 := _run(q, 1.0)
+	c.ok("твой игломёт стреляет сам", ev2.any(func(e): return e.t == "shot" and e.by_player))
+	c.ok("и ранит", z.hp < z.max_hp)
+	q.add_rock("boulder", q.player.pos + Vector2(100, 0))
+	var hp: float = z.hp
+	_run(q, 2.0)
+	c.ok("за камнем не достать", z.hp >= hp - 0.01)
+
+func test_делитель(c) -> void:
+	var p := _pond()
+	var d := p.spawn("delitel", Vector2(400, 0))
+	var n := p.mobs.size()
+	p._hurt(d, d.max_hp * 0.6, p.player, "bite")
+	var ev := _run(p, 0.1)
+	c.ok("ранен до половины — распался", ev.any(func(e): return e.t == "split") and p.mobs.size() == n + 1)
+	var kids := p.mobs.filter(func(m): return m.species == "delitel")
+	c.ok("дети мельче и второй раз не делятся", kids.all(func(k): return k.size_r < d.size_r and k.split_done))
+
+func test_обманка(c) -> void:
+	var p := _pond(_evo_with([["filter", 0], ["cilia", 180]], 100.0))
+	var m := p.spawn("obmanka", p.player.pos + Vector2(300, 0))
+	_run(p, 1.0)
+	c.ok("ждёт на месте", m.pos.distance_to(p.player.pos + Vector2(300, 0)) < 20.0 and m.revealed_t <= 0.0)
+	p.player.pos = m.pos - Vector2(m.radius * 2.0 + 20.0, 0)
+	var ev := _run(p, 0.5)
+	c.ok("подплыл — кусает", ev.any(func(e): return e.t == "ambush") and m.revealed_t > 0.0)
+
+func test_бродячий_гигант(c) -> void:
+	var e := _evo_with([["jaws", 0]], 900.0)
+	var p := _pond(e)
+	p.spawning = true
+	p._roam_t = 0.0
+	var ev := _run(p, 1.0)
+	c.ok("приплыл гигант", ev.any(func(x): return x.t == "roamer"))
+	var g: Creature = p.mobs.filter(func(m): return m.behavior() == "roamer")[0]
+	c.ok("огромный", g.size_r > p.player.size_r * 2.0)
+	var start := g.pos
+	_run(p, 3.0)
+	c.ok("плывёт своим путём", g.pos.distance_to(start) > 30.0)
+	g.alive = false
+	g.player_hit_t = 0.0
+	p._deaths()
+	var reward: String = Content.SPECIES[g.species].drops[0][0]
+	c.ok("награда выпадает всегда", p.events.any(func(x): return x.t == "drop" and x.part == reward))
+
+func test_прилипала(c) -> void:
+	var p := _pond(_evo_with([["filter", 0], ["remora", 180], ["cilia", 90]], 300.0))
+	var host := p.spawn("gigant", p.player.pos + Vector2(-p.player.radius - 5.0, 0))
+	host.ai_t = 99.0
+	p.player.heading = 0.0
+	host.pos = p.player.pos + Vector2(-(p.player.radius + host.radius), 0)
+	var dna := p.evo.dna_total
+	var ev := _run(p, 2.0)
+	c.ok("прилип к крупному", ev.any(func(x): return x.t == "remora_on") and p.player.rider_host == host)
+	c.ok("ест с него крохи", p.evo.dna_total > dna)
+	host.pos += Vector2(0, 200)
+	_run(p, 0.1)
+	c.ok("едет вместе с ним", p.player.pos.distance_to(host.pos) < host.radius + p.player.radius + 5.0)
+	var ev2 := _run(p, 1.0, Vector2.RIGHT)
+	c.ok("ход прочь — отцепился", ev2.any(func(x): return x.t == "remora_off") and p.player.rider_host == null)
+
+func test_светлячок(c) -> void:
+	var a := _pond()
+	var b := _pond(_evo_with([["filter", 0], ["firefly", 0, 1, 0.0]], 100.0))
+	a.view_radius = 400.0
+	b.view_radius = 400.0
+	c.ok("светлячок раздвигает туман", b.vision() > a.vision() * 1.25)

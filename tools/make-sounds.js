@@ -369,6 +369,58 @@ S.music_fight = (() => {
   return normalize(x, 0.45);
 })();
 
+// --- добавлены позже: голоса существ и выстрелы ----------------------------------------
+
+// Мирные: короткий щебет вверх.
+S.chirp = (() => {
+  const x = buf(0.3);
+  mix(x, tone(1300, 0.12, { attack: 0.004, decay: 0.04, harmonics: [1, 0.2], glide: 1.2 }), 0, 0.6);
+  mix(x, tone(1700, 0.1, { attack: 0.004, decay: 0.035, harmonics: [1, 0.2], glide: 0.8 }), 0.09, 0.45);
+  return finish(x, 0.4);
+})();
+
+// Хищники: низкое рычание с дрожью.
+S.growl = (() => {
+  const x = buf(0.7);
+  for (let i = 0; i < x.length; i++) {
+    const t = i / RATE;
+    const f = 90 + 15 * Math.sin(TAU * 7 * t);
+    x[i] = Math.sin(TAU * f * t) * 0.6 + Math.sin(TAU * f * 2.01 * t) * 0.3 + noise() * 0.25;
+    x[i] *= env(t, 0.05, 0.25);
+  }
+  return finish(lowpass(x, 900), 0.55);
+})();
+
+// Гиганты: глубокий гул.
+S.boom = (() => {
+  const x = buf(1.4);
+  mix(x, tone(48, 1.3, { attack: 0.08, decay: 0.5, harmonics: [1, 0.7, 0.4, 0.2], glide: -0.15 }), 0, 0.9);
+  mix(x, burst(0.8, { attack: 0.08, decay: 0.3, lo: 40, hi: 300 }), 0, 0.5);
+  return finish(lowpass(x, 600), 0.7);
+})();
+
+// Паразиты: влажное шипение.
+S.hiss = finish(burst(0.5, { attack: 0.03, decay: 0.15, lo: 2500, hi: 7000 }), 0.35);
+
+// Плевок и выстрел иглой: хлопок с посвистом.
+S.spit = (() => {
+  const x = buf(0.3);
+  mix(x, burst(0.12, { decay: 0.02, lo: 400, hi: 3000 }), 0, 0.8);
+  mix(x, tone(700, 0.2, { attack: 0.002, decay: 0.06, harmonics: [1, 0.3], glide: -1.2 }), 0.01, 0.5);
+  return finish(x, 0.45);
+})();
+
+// Делитель распался: двойной «чпок».
+S.split = finish(mix(bubble(300, 0.18, 3), bubble(420, 0.16, 3), 0.1, 0.8), 0.5);
+
+// Старый кит: протяжная песня.
+S.whale = (() => {
+  const x = buf(2.2);
+  mix(x, tone(220, 2.0, { attack: 0.4, decay: 0.8, harmonics: [1, 0.5, 0.25], glide: 0.35 }), 0, 0.6);
+  mix(x, tone(165, 1.6, { attack: 0.3, decay: 0.6, harmonics: [1, 0.4], glide: -0.2 }), 0.5, 0.4);
+  return finish(lowpass(x, 1500), 0.55);
+})();
+
 fs.mkdirSync(OUT, { recursive: true });
 let total = 0;
 for (const [name, x] of Object.entries(S)) total += writeWav(name, x);

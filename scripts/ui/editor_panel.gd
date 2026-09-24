@@ -490,7 +490,10 @@ func _species_card(id: String) -> PanelContainer:
 	var text := Kit.vbox(4)
 	text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var kind: String = {"grazer": "мирный", "skittish": "пугливый", "drifter": "дрейфует", "hunter": "хищник", "boss": "великан",
-		"giant": "гигант", "lair": "хозяин логова", "parasite": "паразит"}.get(def.behavior, "")
+		"giant": "гигант", "lair": "хозяин логова", "parasite": "паразит", "shooter": "стрелок", "ambush": "обманка",
+		"roamer": "бродячий гигант"}.get(def.behavior, "")
+	if def.get("splits", false):
+		kind += ", делится"
 	if def.has("school"):
 		kind += ", стая"
 	if def.get("invisible", false):

@@ -130,7 +130,9 @@ func step(dt: float, input: Vector2, dash := false) -> void:
 	_safe_t -= dt
 	player.desire = input.limit_length(1.0)
 	if dash:
-		if do_dash(player):
+		if player.rider_host != null:
+			_unride()
+		elif do_dash(player):
 			_shake_off()
 	for m in mobs:
 		_think(m, dt)
@@ -144,6 +146,9 @@ func step(dt: float, input: Vector2, dash := false) -> void:
 	_collide(all)
 	_rock_contacts(all)
 	_colony_contacts(all)
+	_riding(dt)
+	_guns()
+	_shots(dt)
 	_zaps(all)
 	_mate_step(dt)
 	_floating(dt)
@@ -151,6 +156,7 @@ func step(dt: float, input: Vector2, dash := false) -> void:
 	_eat(all)
 	_pickup()
 	_age(dt)
+	_do_splits()
 	_deaths()
 	if player.dna_rate > 0.0 and mode != "arena":
 		_gain(player.dna_rate * dt)
@@ -164,6 +170,7 @@ func step(dt: float, input: Vector2, dash := false) -> void:
 			_manage_t = 0.5
 			_manage()
 		_directing(dt)
+		_roamers(dt)
 		_ally_t -= dt
 		if allies.size() < evo.brood and _ally_t <= 0.0:
 			_ally_t = 45.0
@@ -194,7 +201,8 @@ func _move(c: Creature, dt: float) -> void:
 		spd *= 0.6
 	if c.is_player and biome == "cold" and not c.coldproof:
 		spd *= float(Content.BIOMES.cold.chill)
-	var goal := c.desire * spd
+	var want_dir := c.desire if c.is_player else avoid(c, c.desire)
+	var goal := want_dir * spd
 	# Во время рывка вода тормозит слабее — разгон доносит до цели.
 	var k := 0.8 if c.dash_t > 0.0 else 4.0
 	c.vel = c.vel.lerp(goal, 1.0 - exp(-k * dt))
@@ -236,6 +244,10 @@ func _timers(c: Creature, dt: float) -> void:
 	c.shield_t -= dt
 	c.hidden_t -= dt
 	c.ability_t -= dt
+	c.revealed_t -= dt
+	c.voice_t -= dt
+	for k in c.gun_cd.keys():
+		c.gun_cd[k] -= dt
 	c.age += dt
 	for k in c.hit_cd.keys():
 		c.hit_cd[k] -= dt
@@ -288,6 +300,9 @@ func _collide(all: Array[Creature]) -> void:
 ## x касается y (n — направление от x к y): кусает, колет, травит, таранит.
 func _contact(x: Creature, y: Creature, n: Vector2) -> void:
 	if not x.alive or not y.alive:
+		return
+	# Кто везёт прилипалу, её не кусает.
+	if y.is_player and y.rider_host == x:
 		return
 	var boost := 1.5 if x.dash_t > 0.0 else 1.0
 	var bite: float = x.mouth.get("bite", 0.0)
@@ -353,7 +368,13 @@ func _hurt(y: Creature, dmg: float, from: Creature, kind: String, silent := fals
 		dmg *= float(evo.diff().hurt)
 	if from != null and from.lair != Vector2.INF and kind != "wave":
 		dmg *= LAIR_DAMAGE
+	if from != null and not from.is_player and not from.ally and from.species != "mate" and from.behavior() == "roamer":
+		dmg *= LAIR_DAMAGE
 	y.hp -= dmg
+	if not y.is_player and not y.ally and not y.split_done and y.species != "mate" and Content.SPECIES[y.species].get("splits", false) \
+			and y.hp > 0.0 and y.hp < y.max_hp * 0.5 and y.size_r >= 8.0 and not _to_split.has(y):
+		y.split_done = true
+		_to_split.append(y)
 	# Шипастая броня: обидчику возвращается часть удара (у хозяина логова — вдвое меньше).
 	if y.thorns > 0.0 and from != null and from != y and kind in ["bite", "spike", "grab", "ram", "drain"]:
 		from.hp -= dmg * y.thorns * (0.5 if y.lair != Vector2.INF else 1.0)
@@ -570,6 +591,7 @@ func _reborn() -> void:
 		events.append({"t": "permadeath", "pos": player.pos})
 		return
 	evo.count("deaths")
+	player.rider_host = null
 	# Паразиты остаются там, где тебя съели, — не едут за новой клеткой.
 	for m in mobs:
 		if m.host == player:
@@ -672,6 +694,15 @@ func _think(m: Creature, dt: float) -> void:
 	if b == "lair":
 		_lair_think(m)
 		return
+	if b == "shooter":
+		_shooter_think(m)
+		return
+	if b == "roamer":
+		_roamer_think(m)
+		return
+	if b == "ambush" and m.revealed_t <= 0.0:
+		_ambush_wait(m)
+		return
 	_mob_ability(m)
 	var hunts := _hunts(m)
 	var weak := m.hp < m.max_hp * 0.35
@@ -700,6 +731,9 @@ func _think(m: Creature, dt: float) -> void:
 	if hunts and m.resting <= 0.0:
 		var prey := _nearest_prey(m)
 		if prey != null:
+			if prey == player and m.ai_state != "chase" and m.voice_t <= 0.0:
+				m.voice_t = 10.0
+				events.append({"t": "voice", "kind": voice_of(m), "pos": m.pos, "size": m.size_r})
 			m.ai_state = "chase"
 			m.ai_target = prey
 			m.desire = (prey.pos + prey.vel * 0.3 - m.pos).normalized()
@@ -739,7 +773,7 @@ func _mob_target() -> int:
 	# Кого ты только что съел, того место пустует ещё какое-то время: иначе хищник
 	# ел бы без передышки, а новые приплывали бы прямо под нос.
 	_kills_recent = _kills_recent.filter(func(t): return time - t < KILL_QUIET)
-	return maxi(3, mini(6 + evo.level() / 3, 9) - _kills_recent.size())
+	return maxi(4, mini(8 + evo.level() / 2, 14) - _kills_recent.size())
 
 ## Водоросли гуще на «лугах» — пятнах плавного шума.
 func _spawn_plant(inner: float, outer: float, anywhere := false) -> void:
@@ -802,7 +836,7 @@ func _spawn_mob(anywhere := false, at := Vector2.INF) -> Creature:
 			pick = p[0]
 			break
 	var def: Dictionary = Content.SPECIES[pick]
-	var golden: bool = not def.behavior in ["boss", "giant", "lair"] and not def.has("school") and rng.randf() < Content.GOLDEN_CHANCE
+	var golden: bool = not def.behavior in ["boss", "giant", "lair", "roamer"] and not def.has("school") and rng.randf() < Content.GOLDEN_CHANCE
 	var first := spawn(pick, at, golden)
 	# Стайка появляется вся сразу, кучкой: двое или трое, не больше.
 	var group := rng.randi_range(2, mini(int(def.school), 3)) if def.has("school") else 1
@@ -811,10 +845,17 @@ func _spawn_mob(anywhere := false, at := Vector2.INF) -> Creature:
 	return first
 
 ## Поставить клетку вида id в точку — и для проверок тоже.
-func spawn(id: String, at: Vector2, golden := false) -> Creature:
+func spawn(id: String, at: Vector2, golden := false, size := 0.0) -> Creature:
 	var def: Dictionary = Content.SPECIES[id]
-	# Великаны всегда во много раз больше тебя, каким бы ты ни был.
-	var m := Creature.of_species(id, player.size_r * float(def.scale) if def.has("scale") else 0.0)
+	# Великаны всегда во много раз больше тебя, каким бы ты ни был. Остальные растут вместе
+	# с тобой, но медленнее: хищники остаются опасными, а мелочь — мелочью.
+	if size <= 0.0:
+		if def.has("scale"):
+			size = player.size_r * float(def.scale)
+		else:
+			size = float(def.radius) * grow_k(def) * rng.randf_range(0.9, 1.1)
+	var bonus := 0 if def.has("scale") else clampi((evo.level() - int(def.levels[0])) / 3, 0, 2)
+	var m := Creature.of_species(id, size, bonus)
 	if golden:
 		m.make_golden()
 	m.pos = at
@@ -822,6 +863,11 @@ func spawn(id: String, at: Vector2, golden := false) -> Creature:
 	m.ai_t = rng.randf() * 0.2
 	mobs.append(m)
 	return m
+
+## Во сколько раз вид крупнее своего обычного: каким он задуман на размере, с которого
+## появляется, таким и встречается; перерастаешь его — он подрастает, но медленнее тебя.
+func grow_k(def: Dictionary) -> float:
+	return maxf(1.0, pow(player.size_r / Content.radius_for(int(def.levels[0])), 0.6))
 
 func _manage() -> void:
 	var outer := _plant_outer()
@@ -834,7 +880,8 @@ func _manage() -> void:
 	var far := view_radius + 700.0
 	# Хозяева логов дома ждут дольше, но если уплыл совсем далеко — исчезают и они
 	# (вернёшься — логово снова занято, хозяин целый).
-	mobs = mobs.filter(func(m): return m.pos.distance_to(player.pos) < (far if m.lair == Vector2.INF else far + 2500.0))
+	# Хозяева логов и бродячие гиганты уплывают из памяти позже остальных.
+	mobs = mobs.filter(func(m): return m.pos.distance_to(player.pos) < (far if m.lair == Vector2.INF and m.behavior() != "roamer" else far + 3000.0))
 	capsules = capsules.filter(func(c): return c.pos.distance_to(player.pos) < far)
 	if mode != "arena":
 		for i in mini(_mob_target() - mobs.size(), 3):
@@ -852,9 +899,16 @@ func _manage() -> void:
 			_spawn_colony(view_radius + 40.0, view_radius + 500.0)
 	for m in mobs:
 		var near := m.pos.distance_to(player.pos) < vision() + m.radius
-		if near and not evo.seen.has(m.species) and not (m.invisible and player.eyes <= 0.0):
+		# Обманку, пока она притворяется водорослью, узнаёшь только с двумя глазами.
+		var disguised := m.behavior() == "ambush" and m.revealed_t <= 0.0 and player.eyes < 2.0
+		if near and not evo.seen.has(m.species) and not (m.invisible and player.eyes <= 0.0) and not disguised:
 			evo.seen[m.species] = true
 			events.append({"t": "seen", "species": m.species})
+		if near and not m.voiced and not disguised and not (m.invisible and player.eyes <= 0.0):
+			m.voiced = true
+			var v := voice_of(m)
+			if v != "":
+				events.append({"t": "voice", "kind": v, "pos": m.pos, "size": m.size_r})
 		if near and m.golden and not m.announced:
 			m.announced = true
 			events.append({"t": "golden", "species": m.species, "pos": m.pos})
@@ -1027,15 +1081,320 @@ func _nudge(thing: Dictionary, push: Vector2, pusher_r: float) -> void:
 	var k := clampf(pow(pusher_r / float(thing.r), 2.0) * 0.35, 0.0, 0.8)
 	thing.vel += push * k
 
-## Над кругом можно проплыть — это мягкая подстилка, её не съесть. Круги и камни не
+## Круги плотные: через них не проплыть, их можно лишь чуть подвинуть. Круги и камни не
 ## наезжают друг на друга.
-func _colony_contacts(_all: Array[Creature]) -> void:
+func _colony_contacts(all: Array[Creature]) -> void:
 	for col in colonies:
+		# Круг плотный — через него не проплыть; упрёшься — он чуть отплывёт.
+		for c in all:
+			if not c.alive or c == player and player.rider_host != null:
+				continue
+			var d: Vector2 = c.pos - col.pos
+			var min_d: float = c.radius + col.r
+			if d.length_squared() >= min_d * min_d:
+				continue
+			var dist := d.length()
+			var n := d / dist if dist > 0.001 else Vector2.RIGHT
+			c.pos = col.pos + n * min_d
+			var into := c.vel.dot(-n)
+			if into > 0.0:
+				c.vel += n * into
+				_nudge(col, -n * into, c.radius)
 		for rock in rocks:
 			var d2: Vector2 = col.pos - rock.pos
 			var gap: float = col.r + rock.r
 			if d2.length_squared() < gap * gap and d2.length() > 0.001:
 				col.pos = rock.pos + d2.normalized() * gap
+
+
+# --- выстрелы: плевки ядом и иглы -----------------------------------------------------
+
+## Снаряды в полёте: [{pos, vel, kind, dmg, poison, from, r, t}].
+var shots: Array = []
+const SHOT_LIFE := 1.6
+
+## Кто может стрелять — стреляет: ты и потомки — в ближайшего врага впереди, существа —
+## в свою цель (поворачиваются к ней).
+func _guns() -> void:
+	for c in everyone():
+		if c.guns.is_empty() or not c.alive:
+			continue
+		for i in c.guns.size():
+			if float(c.gun_cd.get(i, 0.0)) > 0.0:
+				continue
+			var g: Dictionary = c.guns[i]
+			var target: Creature = null
+			if c.is_player or c.ally:
+				var best: float = g.range
+				for m in mobs:
+					if not m.alive or m.host != null or m.species == "mate" or (m.behavior() == "ambush" and m.revealed_t <= 0.0):
+						continue
+					var d := c.pos.distance_to(m.pos) - m.radius
+					if d < best and c.faces(g.a, g.arc, m.pos):
+						best = d
+						target = m
+			else:
+				var t: Creature = c.ai_target
+				if t != null and t.alive and c.pos.distance_to(t.pos) - t.radius < float(g.range) and t.hidden_t <= 0.0:
+					c.heading = (t.pos - c.pos).angle() - float(g.a)
+					target = t
+			if target == null:
+				continue
+			c.gun_cd[i] = float(g.reload)
+			var dir := (target.pos + target.vel * 0.25 - c.pos).normalized()
+			var spd := 430.0 * pow(c.size_k(), 0.25)
+			shots.append({"pos": c.pos + dir * c.radius, "vel": dir * spd, "kind": g.kind, "dmg": g.dmg, "poison": g.poison,
+				"from": c, "r": 4.0 * sqrt(c.size_k()), "t": 0.0})
+			events.append({"t": "shot", "kind": g.kind, "pos": c.pos, "by_player": c.is_player})
+
+func _shots(dt: float) -> void:
+	if shots.is_empty():
+		return
+	var all := everyone()
+	var left: Array = []
+	for s in shots:
+		s.t += dt
+		s.pos += s.vel * dt
+		var hit: bool = s.t > SHOT_LIFE
+		# Камни и круги заслоняют — за ними можно спрятаться.
+		for k in rocks + colonies:
+			if not hit and s.pos.distance_to(k.pos) < float(k.r):
+				hit = true
+		var from: Creature = s.from
+		for o in all:
+			if hit:
+				break
+			if o == from or not o.alive or friendly(from, o) or (not from.is_player and not from.ally and o.species == from.species):
+				continue
+			if s.pos.distance_to(o.pos) < o.radius + float(s.r):
+				hit = true
+				_hurt(o, float(s.dmg), from, "shot")
+				if float(s.poison) > 0.0 and o.invuln <= 0.0:
+					o.poison_dps = maxf(o.poison_dps if o.poison_t > 0.0 else 0.0, float(s.poison))
+					o.poison_t = POISON_TIME
+					o.poison_from = from
+				events.append({"t": "shot_hit", "kind": s.kind, "pos": s.pos})
+		if not hit:
+			left.append(s)
+	shots = left
+
+## Стрелок: держится на расстоянии выстрела, подплывёшь вплотную — отплывает.
+func _shooter_think(m: Creature) -> void:
+	var target: Creature = null
+	if player.alive and player.hidden_t <= 0.0 and player.pos.distance_to(m.pos) < m.sight * 1.3 and player.radius < m.radius * 2.5:
+		target = player
+	else:
+		target = _nearest_prey(m)
+	if target == null:
+		m.ai_target = null
+		m.ai_state = "wander"
+		if m.pos.distance_to(m.ai_goal) < m.radius or rng.randf() < 0.03:
+			m.ai_goal = m.pos + Vector2.from_angle(rng.randf() * TAU) * rng.randf_range(80.0, 200.0)
+		m.desire = (m.ai_goal - m.pos).normalized() * 0.45
+		return
+	m.ai_target = target
+	m.ai_state = "aim"
+	var to := target.pos - m.pos
+	var d := to.length()
+	var want := 230.0 * pow(m.size_k(), 0.4)
+	if d < (m.radius + target.radius) * 1.8 or d < want * 0.7:
+		m.desire = -to.normalized()
+	elif d > want * 1.3:
+		m.desire = to.normalized() * 0.8
+	else:
+		m.desire = to.normalized().orthogonal() * (0.5 if m.uid % 2 == 0 else -0.5)
+	if m.voice_t <= 0.0 and target == player:
+		m.voice_t = 10.0
+		events.append({"t": "voice", "kind": "growl", "pos": m.pos, "size": m.size_r})
+
+
+# --- обманка, делитель ------------------------------------------------------------------
+
+## Обманка ждёт, притворившись водорослью; подплыл близко — кусает.
+func _ambush_wait(m: Creature) -> void:
+	m.desire = Vector2.ZERO
+	m.ai_state = "wait"
+	var reach := m.radius * 2.2 + 50.0
+	for o in everyone():
+		if o == m or not o.alive or o.species == m.species or o.hidden_t > 0.0 or friendly(m, o):
+			continue
+		if o.radius > m.radius * 2.0 or m.pos.distance_to(o.pos) > reach + o.radius:
+			continue
+		m.revealed_t = 6.0
+		m.ai_target = o
+		m.ai_state = "chase"
+		m.heading = (o.pos - m.pos).angle()
+		_lunge(m)
+		events.append({"t": "ambush", "pos": m.pos, "to_player": o.is_player})
+		return
+
+## Делитель: ранили до половины — распался на двоих поменьше (они уже не делятся).
+var _to_split: Array = []
+
+func _do_splits() -> void:
+	for m: Creature in _to_split:
+		if not m.alive or not mobs.has(m):
+			continue
+		var size := m.size_r * 0.72
+		var side := Vector2.from_angle(m.heading).orthogonal()
+		for s in [-1.0, 1.0]:
+			var kid := spawn(m.species, m.pos + side * s * m.radius * 0.6, false, size)
+			kid.split_done = true
+			kid.hp = kid.max_hp * 0.8
+			kid.vel = side * s * 160.0
+			kid.player_hit_t = m.player_hit_t
+			kid.last_attacker = m.last_attacker
+			kid.age = 1.0
+		mobs.erase(m)
+		events.append({"t": "split", "pos": m.pos, "color": m.color})
+	_to_split.clear()
+
+
+# --- бродячие гиганты -----------------------------------------------------------------
+
+var _roam_t := 90.0
+
+## Иногда через твою часть океана проплывает гигант — и уплывает дальше.
+func _roamers(dt: float) -> void:
+	if mode != "normal" or evo.level() < 5:
+		return
+	if mobs.any(func(m): return m.behavior() == "roamer"):
+		return
+	_roam_t -= dt
+	if _roam_t > 0.0:
+		return
+	_roam_t = rng.randf_range(150.0, 260.0)
+	var pick := "zmei" if evo.level() >= 6 and rng.randf() < 0.45 else "kit"
+	var dir := Vector2.from_angle(rng.randf() * TAU)
+	var m := spawn(pick, player.pos + dir * (view_radius + 500.0))
+	# Путь — мимо тебя и дальше, на другой край.
+	m.ai_goal = player.pos - dir.rotated(rng.randf_range(-0.4, 0.4)) * (view_radius + 3000.0)
+	events.append({"t": "roamer", "species": pick, "pos": m.pos})
+
+func _roamer_think(m: Creature) -> void:
+	var def: Dictionary = Content.SPECIES[m.species]
+	var close := player.alive and player.hidden_t <= 0.0 and player.pos.distance_to(m.pos) < m.sight * 1.1
+	if def.get("hunts", false) and close and m.resting <= 0.0:
+		if m.stamina <= 0.0:
+			m.resting = REST_TIME
+			m.ai_state = "rest"
+			m.desire *= 0.2
+			return
+		m.ai_state = "chase"
+		m.ai_target = player
+		m.desire = (player.pos + player.vel * 0.3 - m.pos).normalized()
+		if m.pos.distance_to(player.pos) < (m.radius + player.radius) * 1.6 and m.dash_cd <= 0.0:
+			_lunge(m)
+			m.dash_cd = 4.0
+		if m.voice_t <= 0.0:
+			m.voice_t = 12.0
+			events.append({"t": "voice", "kind": "boom", "pos": m.pos, "size": m.size_r})
+		return
+	if m.calm_t < 4.0 and m.last_attacker != null and m.last_attacker.alive:
+		# Мирного разозлили — разворачивается и отбивается.
+		m.ai_state = "guard"
+		m.desire = (m.last_attacker.pos - m.pos).normalized() * 0.5
+		return
+	m.ai_state = "travel"
+	if m.pos.distance_to(m.ai_goal) < m.radius * 2.0:
+		m.ai_goal = m.pos + Vector2.from_angle(rng.randf() * TAU) * 3000.0
+	m.desire = (m.ai_goal - m.pos).normalized() * 0.45
+
+
+# --- прилипала ------------------------------------------------------------------------
+
+var _away_t := 0.0
+
+## Прилип к крупному: едешь с ним, ешь крохи (ДНК и лечение), он тебя не кусает.
+## Отцепиться — рывком, ходом прочь; или сам отпадёшь, если он погибнет.
+func _riding(dt: float) -> void:
+	var p := player
+	if p.rider_host != null:
+		var h := p.rider_host
+		if not h.alive or not mobs.has(h) or p.rider_t > 30.0:
+			_unride()
+			return
+		p.rider_t += dt
+		var dir := Vector2.from_angle(h.heading + p.rider_angle)
+		p.pos = h.pos + dir * (h.radius + p.radius)
+		p.vel = h.vel
+		var side: float = p.remora[0].a if not p.remora.is_empty() else 0.0
+		p.heading = wrapf((-dir).angle() - side, -PI, PI)
+		if mode != "arena":
+			_gain(0.4 * sqrt(p.size_k()) * dt)
+		p.hp = minf(p.max_hp, p.hp + 0.5 * p.size_k() * dt)
+		if p.desire.length() > 0.7 and p.desire.dot(dir) > 0.4:
+			_away_t += dt
+		else:
+			_away_t = 0.0
+		if _away_t > 0.35:
+			_unride()
+		return
+	if p.remora.is_empty() or not p.alive or p.dash_t > 0.0:
+		return
+	for m in mobs:
+		if not m.alive or m.radius < p.radius * 1.3 or m.lair != Vector2.INF or m.host != null:
+			continue
+		if p.pos.distance_to(m.pos) > p.radius + m.radius + 4.0:
+			continue
+		for r in p.remora:
+			if p.faces(r.a, r.arc, m.pos):
+				p.rider_host = m
+				p.rider_angle = wrapf((p.pos - m.pos).angle() - m.heading, -PI, PI)
+				p.rider_t = 0.0
+				_away_t = 0.0
+				evo.count("rides")
+				events.append({"t": "remora_on", "species": m.species, "pos": p.pos})
+				return
+
+func _unride() -> void:
+	var p := player
+	if p.rider_host == null:
+		return
+	var away := (p.pos - p.rider_host.pos).normalized()
+	p.rider_host = null
+	p.vel += away * 180.0
+	p.invuln = maxf(p.invuln, 0.5)
+	events.append({"t": "remora_off", "pos": p.pos})
+
+
+# --- обход кругов и камней, голоса ------------------------------------------------------
+
+## Существа огибают круги и камни, а не упираются в них.
+func avoid(c: Creature, desire: Vector2) -> Vector2:
+	if desire.length() < 0.05:
+		return desire
+	var dir := desire.normalized()
+	for k in colonies + rocks:
+		var to: Vector2 = k.pos - c.pos
+		var reach: float = float(k.r) + c.radius + 70.0
+		if to.length_squared() > reach * reach:
+			continue
+		var along := to.dot(dir)
+		if along <= 0.0:
+			continue
+		var side := to - dir * along
+		if side.length() > float(k.r) + c.radius:
+			continue
+		# Обходим с той стороны, куда ближе.
+		var turn := -side.normalized() if side.length() > 0.001 else dir.orthogonal()
+		dir = (dir + turn * 1.3).normalized()
+	return dir * desire.length()
+
+## Какой голос у вида: мирные щебечут, хищники рычат, гиганты гудят.
+static func voice_of(m: Creature) -> String:
+	match m.behavior():
+		"grazer", "skittish", "drifter":
+			return "chirp"
+		"parasite":
+			return "hiss"
+		"boss", "giant":
+			return "boom"
+		"roamer":
+			return "whale" if m.species == "kit" else "boom"
+		"lair", "mate", "ally":
+			return ""
+	return "growl"
 
 
 # --- пара -----------------------------------------------------------------------------
@@ -1115,7 +1474,7 @@ func current_at(p: Vector2) -> Vector2:
 func vision() -> float:
 	# Глаз разгоняет туман по-настоящему: один — видно почти весь экран, два — весь.
 	var k := clampf(player.eyes / 2.0, 0.0, 1.0)
-	var v := lerpf(player.vision, maxf(player.vision, view_radius * 1.1), k)
+	var v := lerpf(player.vision, maxf(player.vision, view_radius * 1.1), k) * player.light
 	v *= float(Content.BIOMES[biome if biome != "" else "shallows"].vision) * float(evo.diff().vision)
 	# На арене видно весь круг — прятаться там не в чем.
 	return maxf(v * 1.6, arena_radius * 1.15) if mode == "arena" else v
@@ -1462,6 +1821,7 @@ func start_arena() -> void:
 	mobs.clear()
 	rocks.clear()
 	colonies.clear()
+	shots.clear()
 	food.clear()
 	allies.clear()
 	for i in 40:

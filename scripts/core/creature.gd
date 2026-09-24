@@ -70,6 +70,22 @@ var grabs: Array = []  # щупальца: [{a, arc, dmg}]
 var glow := false  # светится — видно сквозь туман
 ## Покупки из магазина (только у игрока): улучшение → уровень.
 var bonus := {}
+## Стрелковые части: [{a, arc, kind, dmg, poison, range, reload}] и сколько до выстрела.
+var guns: Array = []
+var gun_cd := {}
+## Светлячок: во сколько раз шире обзор в тумане.
+var light := 1.0
+## Прилипала: сторона, которой можно прилипнуть, и к кому прилип (только игрок).
+var remora: Array = []  # [{a, arc}]
+var rider_host: Creature = null
+var rider_angle := 0.0
+var rider_t := 0.0
+## Делитель уже распался (второй раз не делится). Обманка раскрыта — сколько ещё секунд.
+var split_done := false
+var revealed_t := 0.0
+## Подал голос, когда показался (звук каждого вида — один раз), и когда погнался.
+var voiced := false
+var voice_t := 0.0
 
 # Что с ней сейчас.
 var desire := Vector2.ZERO  # куда и насколько сильно хочет плыть, длина 0–1
@@ -118,7 +134,8 @@ func _init() -> void:
 
 
 ## size — «рост» для великанов, которые всегда во много раз больше тебя.
-static func of_species(id: String, size := 0.0) -> Creature:
+## lvl_bonus — на сколько уровней сильнее части (на больших размерах существа крепче).
+static func of_species(id: String, size := 0.0, lvl_bonus := 0) -> Creature:
 	var def: Dictionary = Content.SPECIES[id]
 	var c := Creature.new()
 	c.species = id
@@ -130,7 +147,7 @@ static func of_species(id: String, size := 0.0) -> Creature:
 	c.radius = c.size_r * Content.shape_scale(c.shape)
 	c.color = Color(def.color)
 	for p in def.parts:
-		c.parts.append({"id": p[0], "a": deg_to_rad(p[1]), "d": 1.0, "lvl": p[2]})
+		c.parts.append({"id": p[0], "a": deg_to_rad(p[1]), "d": 1.0, "lvl": mini(int(p[2]) + lvl_bonus, Content.PART_MAX_LEVEL)})
 	c.rebuild()
 	c.hp = c.max_hp
 	return c
@@ -187,6 +204,9 @@ func rebuild() -> void:
 	zap_targets = 0
 	armor_all = 0.0
 	grabs = []
+	guns = []
+	remora = []
+	light = 1.0
 	glow = false
 	heatproof = false
 	coldproof = false
@@ -221,6 +241,13 @@ func rebuild() -> void:
 			grabs.append({"a": p.a, "arc": arc, "dmg": def.grab * pw * dmg_k})
 		if def.get("glow", false):
 			glow = true
+		if def.has("light"):
+			light = maxf(light, float(def.light))
+		if def.has("gun"):
+			guns.append({"a": p.a, "arc": arc, "kind": def.gun, "dmg": float(def.dmg) * pw * dmg_k, "poison": float(def.get("poison", 0.0)) * pw * dmg_k,
+				"range": float(def.range) * pow(k, 0.5), "reload": float(def.reload)})
+		if def.get("remora", false):
+			remora.append({"a": p.a, "arc": arc})
 		if def.get("heatproof", false):
 			heatproof = true
 		if def.get("coldproof", false):

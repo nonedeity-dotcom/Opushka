@@ -45,6 +45,8 @@ var _after_mate := false
 var _ach_t := 1.0
 ## Сколько секунд назад было опасно — пока недавно, играет музыка боя.
 var _danger_t := 99.0
+## Голоса существ — не чаще раза в столько секунд, чтобы не сливались в гам.
+var _voice_gap := 0.0
 ## Замер времени частей кадра (только с --profile): имя → [сумма мкс, раз].
 var _prof := {}
 var _prof_on := false
@@ -289,6 +291,7 @@ func _process(delta: float) -> void:
 	backdrop.biome = pond.biome if pond.biome != "" else "shallows"
 	t0 = Time.get_ticks_usec()
 	_music(delta)
+	_voice_gap -= delta
 	_ach_t -= delta
 	if _ach_t <= 0.0:
 		_ach_t = 1.0
@@ -449,6 +452,32 @@ func _handle(events: Array) -> void:
 				hud.editor_btn.badge = ""
 				hud.editor_btn.queue_redraw()
 				get_tree().create_timer(0.9).timeout.connect(_open_editor)
+			"voice":
+				if _voice_gap <= 0.0 and e.pos.distance_to(pond.player.pos) < near:
+					_voice_gap = 0.7
+					# Голос по размеру: крупные — ниже.
+					sound.play(e.kind, clampf(1.5 - float(e.size) / 70.0, 0.55, 1.5))
+			"shot":
+				if e.by_player or e.pos.distance_to(pond.player.pos) < near:
+					sound.play("spit", randf_range(0.9, 1.15) if e.kind == "spit" else randf_range(1.4, 1.6))
+			"split":
+				sound.play("split")
+				if int(evo.stats.get("splits_seen", 0)) < 2:
+					evo.count("splits_seen")
+					hud.toast("Делитель распался на двоих — добивай по одному")
+			"ambush":
+				sound.play("growl", 1.2)
+				if e.to_player:
+					_buzz(30)
+					hud.toast("Это была не водоросль — обманка! С двумя глазами их видно")
+			"roamer":
+				sound.play("whale" if e.species == "kit" else "boom")
+				hud.announce(Content.SPECIES[e.species].name, "Бродячий гигант проплывает рядом. " + Content.SPECIES[e.species].hint)
+			"remora_on":
+				sound.play("place")
+				hud.toast("Прилип к «%s» — ешь с него крохи. Рывок или ход прочь — отцепиться" % Content.SPECIES[e.species].name.to_lower())
+			"remora_off":
+				sound.play("remove")
 			"golden":
 				sound.play("drop", 0.8)
 				hud.toast("Сияющая особь — %s! Из неё обязательно что-то выпадет. Она пугливая" % Content.SPECIES[e.species].name.to_lower())
@@ -565,6 +594,40 @@ func _update_arrows() -> void:
 		if not best.is_empty():
 			list.append({"at": xf * best.pos, "kind": "lair"})
 	hud.indicators.targets = list
+	_update_minimap()
+
+## Мини-карта: всё, что вокруг, в круге радиусом в два с половиной экрана.
+func _update_minimap() -> void:
+	if not hud.minimap.visible:
+		return
+	var p := pond.player
+	var reach := pond.view_radius * 2.5
+	var dots: Array = []
+	var put := func(at: Vector2, col: Color, r: float) -> void:
+		var rel := (at - p.pos) / reach
+		if rel.length() < 1.15:
+			dots.append({"at": rel, "col": col, "r": r})
+	for k in pond.rocks:
+		put.call(k.pos, Color(0.55, 0.6, 0.65, 0.6), 2.0)
+	for col in pond.colonies:
+		put.call(col.pos, Color(0.45, 0.85, 0.45, 0.9), 4.0)
+	for l in pond.lairs_near(reach):
+		if not l.done:
+			put.call(l.pos, Color("#c9a0ff"), 5.0)
+	for m in pond.mobs:
+		if (m.invisible and p.eyes < 1.0) or (m.behavior() == "ambush" and m.revealed_t <= 0.0 and p.eyes < 2.0):
+			continue
+		if m.behavior() == "roamer":
+			put.call(m.pos, Color("#ffa050"), 6.5)
+		elif pond._hunts(m) and m.radius >= p.radius * 0.8:
+			put.call(m.pos, Art.DANGER, 3.5)
+		else:
+			put.call(m.pos, Color(0.85, 0.85, 0.8, 0.7), 2.5)
+	for cap in pond.capsules:
+		put.call(cap.pos, Art.GOLD, 3.5)
+	if pond.mate != null:
+		put.call(pond.mate.pos, Color("#f07aa8"), 4.5)
+	hud.minimap.set_data(dots, p.heading, get_process_delta_time())
 
 
 # --- панели ---------------------------------------------------------------------------

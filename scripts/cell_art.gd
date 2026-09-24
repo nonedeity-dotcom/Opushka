@@ -8,7 +8,7 @@ extends RefCounted
 
 ## Части, которые торчат наружу, — рисуются под телом, чтобы край их прикрывал.
 ## Рты рисуются поверх — у них видна сама пасть на краю тела.
-const OUTSIDE := ["proboscis", "cilia", "flagellum", "flagellum2", "spike", "spike2", "drill", "tentacle", "horn", "lantern", "jet", "sac"]
+const OUTSIDE := ["proboscis", "cilia", "flagellum", "flagellum2", "spike", "spike2", "drill", "tentacle", "horn", "lantern", "jet", "sac", "spit", "needle", "claw", "remora", "serpent"]
 ## Части, что лежат дугой по краю тела.
 const RIM := ["shell", "membrane", "stone_skin", "plates", "thermo", "thorn_armor"]
 
@@ -26,6 +26,8 @@ static func creature(ci: CanvasItem, at: Vector2, r: float, heading: float, colo
 	# Живость: плывёт — тело вытягивается по ходу; вырос — вздрагивает; всё время чуть дышит.
 	var stretch: float = opts.get("stretch", 0.0)
 	var grow: float = opts.get("grow", 0.0)
+	# Мелкое на экране — попроще: без тени, блика и органоидов (на телефоне это заметно легче).
+	var simple: bool = opts.get("simple", false)
 	r *= 1.0 + 0.22 * sin(PI * grow) * grow + 0.015 * sin(t * 2.2 + w)
 	if stretch > 0.01 or not shape.is_empty():
 		var src := shape if not shape.is_empty() else Content.shape_preset("round")
@@ -36,7 +38,7 @@ static func creature(ci: CanvasItem, at: Vector2, r: float, heading: float, colo
 		shape = live
 	# Тело — живая капля своей формы: край чуть колышется.
 	var body := PackedVector2Array()
-	var n := 40
+	var n := 22 if simple else 40
 	for i in n:
 		var th := TAU * i / n
 		var k := 1.0 + 0.025 * sin(3.0 * th + t * 2.0 + w) + 0.018 * sin(5.0 * th - t * 1.4 + w * 2.0)
@@ -45,7 +47,7 @@ static func creature(ci: CanvasItem, at: Vector2, r: float, heading: float, colo
 		var glow := 0.5 + 0.5 * sin(t * 3.0 + w)
 		for g in 3:
 			ci.draw_circle(at, r * (1.5 + g * 0.25 + glow * 0.1), Color(1.0, 0.85, 0.35, 0.07))
-	if opts.get("shadow", true):
+	if opts.get("shadow", true) and not simple:
 		var shadow := PackedVector2Array()
 		for q in body:
 			shadow.append(q + Vector2(r * 0.12, r * 0.18))
@@ -60,14 +62,15 @@ static func creature(ci: CanvasItem, at: Vector2, r: float, heading: float, colo
 	edge.append(body[0])
 	ci.draw_polyline(edge, Color(color.darkened(0.45), alpha), maxf(1.5, r * 0.09), true)
 	var fwd := Vector2.from_angle(heading)
-	Art.ellipse(ci, at + fwd * r * 0.18 + fwd.orthogonal() * r * 0.2, r * 0.55, r * 0.42, Color(1, 1, 1, 0.13 * alpha), heading)
 	# Ядро — ближе к хвосту, органоиды вокруг.
 	var nucleus := at - fwd * r * 0.22 * Content.shape_at(shape, PI)
 	ci.draw_circle(nucleus, r * 0.3, Color(color.darkened(0.3), alpha))
-	ci.draw_circle(nucleus + fwd.orthogonal() * r * 0.08, r * 0.1, Color(color.darkened(0.55), alpha))
-	for i in 3:
-		var a := 1.3 + i * 1.9 + w
-		ci.draw_circle(at + Vector2.from_angle(heading + a) * r * 0.55 * Content.shape_at(shape, a), r * 0.07, Color(color.lightened(0.35), 0.8 * alpha))
+	if not simple:
+		Art.ellipse(ci, at + fwd * r * 0.18 + fwd.orthogonal() * r * 0.2, r * 0.55, r * 0.42, Color(1, 1, 1, 0.13 * alpha), heading)
+		ci.draw_circle(nucleus + fwd.orthogonal() * r * 0.08, r * 0.1, Color(color.darkened(0.55), alpha))
+		for i in 3:
+			var a := 1.3 + i * 1.9 + w
+			ci.draw_circle(at + Vector2.from_angle(heading + a) * r * 0.55 * Content.shape_at(shape, a), r * 0.07, Color(color.lightened(0.35), 0.8 * alpha))
 	for i in parts.size():
 		if not parts[i].id in OUTSIDE:
 			_part(ci, parts[i], at, r, heading, color, t + w, bite, alpha, i == pick, shape, gulp, float(pops.get(i, 1.0)))
@@ -127,7 +130,7 @@ static func part_anchor(p: Dictionary, at: Vector2, r: float, heading: float, sh
 ## Внутренняя часть в своей системе нарисована не с нуля: сдвиг до её середины.
 const INNER_CENTER := {"eye": Vector2(-2.5, 0), "chloroplast": Vector2(-6.0, 0), "electro": Vector2(-1.5, 0), "crystal": Vector2(-2.0, 0),
 	"fat": Vector2(-4.0, 0), "camo": Vector2(-4.0, 0), "ink": Vector2(-4.0, 0), "shield_gland": Vector2(-4.0, 0), "pulse": Vector2(-4.0, 0),
-	"suction": Vector2(-4.0, 0), "life_core": Vector2(-4.0, 0)}
+	"suction": Vector2(-4.0, 0), "life_core": Vector2(-4.0, 0), "firefly": Vector2(-3.0, 0)}
 
 ## Одна часть. Годится и для «примерки» в редакторе.
 static func _part(ci: CanvasItem, p: Dictionary, at: Vector2, r: float, heading: float, color: Color, t: float, bite: float, alpha: float, picked: bool, shape: Array, gulp := 0.0, grow_k := 1.0) -> void:
@@ -348,6 +351,48 @@ static func part_shape(ci: CanvasItem, id: String, color: Color, t: float, bite 
 			ci.draw_circle(Vector2(2.5, 0), 4.2, dark)
 			ci.draw_circle(Vector2(2.5, 0), 2.6, Color("#e89aa8", alpha))
 			ci.draw_circle(Vector2(2.5, 0), 1.2, Color("#6a2a3a", alpha))
+		"spit":
+			# Плевательная железа: зелёный мешочек с раструбом, в раструбе капля яда.
+			Art.ellipse(ci, Vector2(3.0, 0), 5.0, 4.0, Color("#6aa04a", alpha), 0.0, 14)
+			Art.poly(ci, [Vector2(6, -2.5), Vector2(12, -4), Vector2(12, 4), Vector2(6, 2.5)], Color("#4a7a3a", alpha))
+			ci.draw_circle(Vector2(12.5, 0), 2.0 + 0.5 * sin(t * 5.0), Color("#b8f070", 0.9 * alpha))
+		"needle":
+			# Игломёт: трубка с торчащей иглой.
+			ci.draw_rect(Rect2(Vector2(0, -2.5), Vector2(8, 5)), Color("#b09a70", alpha))
+			ci.draw_rect(Rect2(Vector2(0, -2.5), Vector2(8, 5)), Color("#6a5a40", alpha), false, 0.8)
+			Art.poly(ci, [Vector2(8, -1), Vector2(16, 0), Vector2(8, 1)], Color("#f0e6c8", alpha))
+		"claw":
+			# Клешня: два крюка, щёлкают при укусе.
+			var open := 0.25 + 0.5 * absf(sin(bite * PI + t * 0.5))
+			Art.poly(ci, [Vector2(0, -3), Vector2(5, -4), Vector2(5, 4), Vector2(0, 3)], Color("#c0603a", alpha))
+			for side in [-1.0, 1.0]:
+				var pts := PackedVector2Array([Vector2(4.5, side * 1.0), Vector2(9.0, side * (4.5 + open * 2.0)), Vector2(14.0, side * (1.5 + open * 2.5)), Vector2(11.0, side * 0.6)])
+				ci.draw_colored_polygon(pts, Color("#e07a4a", alpha))
+				ci.draw_polyline(pts, Color("#7a3a20", alpha), 0.8, true)
+		"remora":
+			# Прилипала: полосатый диск-присоска.
+			Art.ellipse(ci, Vector2(2.5, 0), 3.0, 6.0, Color("#8090a0", alpha), 0.0, 14)
+			for y in [-3.5, -1.2, 1.2, 3.5]:
+				ci.draw_line(Vector2(0.5, y), Vector2(4.5, y), Color("#dfe6ee", alpha), 0.9)
+		"serpent":
+			# Змеиный хвост: длинная волнистая лента с плавником.
+			var pts := PackedVector2Array()
+			for i in 9:
+				var x := i * 2.2
+				pts.append(Vector2(x, sin(t * 7.0 - i * 0.8) * (0.8 + i * 0.35)))
+			ci.draw_polyline(pts, Color("#2a6a5a", alpha), 3.4, true)
+			ci.draw_polyline(pts, Color("#5ab09a", alpha), 1.4, true)
+			Art.poly(ci, [pts[8] + Vector2(0, -3), pts[8] + Vector2(4, 0), pts[8] + Vector2(0, 3)], Color("#3a8a7a", alpha))
+		"firefly":
+			var glow := 0.6 + 0.4 * sin(t * 3.0)
+			ci.draw_circle(Vector2(-3, 0), 6.5, Color(1.0, 0.95, 0.5, 0.25 * glow * alpha))
+			ci.draw_circle(Vector2(-3, 0), 3.0, Color(1.0, 0.95, 0.6, alpha))
+		"baleen":
+			# Китовый ус: широкая губа с частыми светлыми пластинами.
+			Art.ellipse(ci, Vector2(1.5, 0), 3.0, 8.0, Color("#4a5a6a", alpha), 0.0, 16)
+			for i in 7:
+				var y := -6.0 + i * 2.0
+				ci.draw_line(Vector2(1.0, y), Vector2(7.0, y * 0.8), Color("#e8e0c8", alpha), 1.0)
 		"sac":
 			# Толчковый пузырь: прозрачный мешочек с горлышком, мерно сжимается.
 			var sq := 1.0 + 0.08 * sin(t * 4.0)

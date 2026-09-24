@@ -41,6 +41,8 @@ var indicators: Control
 var hurt_flash: ColorRect
 ## Вспышка находки: крупный значок части посреди экрана.
 var reveal: Control
+## Мини-карта: что вокруг за краем экрана.
+var minimap: Control
 ## Второе умение (чернила, щит, разряд, всасывание) — есть, только если есть такая часть.
 var ability_btn: Control
 var biome_chip: Control
@@ -144,6 +146,8 @@ func _ready() -> void:
 	editor_btn.accent = true
 	editor_btn.pressed.connect(func(): editor_pressed.emit())
 
+	minimap = MiniMap.new()
+	add_child(minimap)
 	reveal = PartReveal.new()
 	reveal.hud = self
 	add_child(reveal)
@@ -167,6 +171,7 @@ func apply_settings(s: Settings, landscape: bool) -> void:
 	for n in [pad, dash, ability_btn, editor_btn, settings_btn, atlas_btn, shop_btn]:
 		n.floating = true
 	indicators.enabled = s.arrows
+	minimap.visible = s.minimap
 	pad.queue_redraw()
 	_layout()
 
@@ -304,6 +309,9 @@ func _layout() -> void:
 	settings_btn.position = Vector2(right - 64, top)
 	atlas_btn.position = Vector2(right - 64 * 2 - 10, top)
 	shop_btn.position = Vector2(right - 64 * 3 - 20, top)
+	var mm := 150.0 * scale
+	minimap.size = Vector2(mm, mm)
+	minimap.position = Vector2(right - mm, top + 76)
 	if _landscape:
 		goal_card.position = Vector2(dna_pill.position.x + dna_pill.size.x + 14, top)
 		goal_card.size = Vector2(minf(560.0, shop_btn.position.x - goal_card.position.x - 14), 64)
@@ -598,3 +606,42 @@ class PartReveal:
 			var font := get_theme_default_font()
 			draw_string_outline(font, at + Vector2(r * 0.55, -r * 0.55), "+1", HORIZONTAL_ALIGNMENT_LEFT, -1, 34, 6, Color(0, 0, 0, 0.6))
 			draw_string(font, at + Vector2(r * 0.55, -r * 0.55), "+1", HORIZONTAL_ALIGNMENT_LEFT, -1, 34, Art.GREEN)
+
+
+## Мини-карта: круг, ты в середине стрелкой. Точки — круги еды (зелёные), логова
+## (фиолетовые), бродячие гиганты (оранжевые), опасные (красные), пара (розовая), находки
+## (золотые). Перерисовывается несколько раз в секунду, а не каждый кадр.
+class MiniMap:
+	extends Control
+	var dots: Array = []  # [{at — от -1 до 1, col, r}]
+	var heading := 0.0
+	var _t := 0.0
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func set_data(d: Array, h: float, delta: float) -> void:
+		_t -= delta
+		if _t > 0.0:
+			return
+		_t = 0.12
+		dots = d
+		heading = h
+		queue_redraw()
+
+	func _draw() -> void:
+		var c := size / 2.0
+		var r := size.x / 2.0
+		draw_circle(c, r, Color(0.03, 0.08, 0.1, 0.6))
+		draw_arc(c, r * 0.5, 0, TAU, 32, Color(1, 1, 1, 0.07), 1.0)
+		for d in dots:
+			var at: Vector2 = d.at
+			if at.length() > 0.96:
+				at = at.normalized() * 0.96
+			# Квадратики, а не кружки: их видеокарта рисует пачкой, а кружки — по одному.
+			var q := float(d.r)
+			draw_rect(Rect2(c + at * r - Vector2(q, q), Vector2(q, q) * 2.0), d.col)
+		var dir := Vector2.from_angle(heading)
+		var tip := c + dir * 9.0
+		draw_colored_polygon(PackedVector2Array([tip, c - dir * 5.0 + dir.orthogonal() * 6.0, c - dir * 5.0 - dir.orthogonal() * 6.0]), Art.TEXT)
+		draw_arc(c, r - 1.0, 0, TAU, 48, Color(1, 1, 1, 0.18), 2.0)

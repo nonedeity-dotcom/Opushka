@@ -17,6 +17,8 @@ var vibration := true
 var show_goal := true
 ## Стрелки у края экрана: к выпавшим частям, а с глазками — и к хищникам.
 var arrows := true
+## Мини-карта в углу.
+var minimap := true
 
 const BUTTON_SCALE := {"small": 0.85, "normal": 1.0, "large": 1.18}
 ## Громкость в децибелах: эффекты и фон. Фон заметно тише — он не должен спорить с делом.
@@ -28,7 +30,7 @@ const CHOICES := {
 	"buttons": ["small", "normal", "large"],
 	"volume": ["quiet", "normal", "loud"],
 }
-const FLAGS := ["sound", "ambience", "music", "vibration", "show_goal", "arrows"]
+const FLAGS := ["sound", "ambience", "music", "vibration", "show_goal", "arrows", "minimap"]
 
 func to_dict() -> Dictionary:
 	var d := {}

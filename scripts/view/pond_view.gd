@@ -142,6 +142,17 @@ func effects(events: Array) -> void:
 						_ring(e.pos, e.r * 9.0, Color("#8fe0d0"), 0.8)
 					"shield":
 						_ring(e.pos, e.r * 1.6, Color("#8ac8ff"), 0.4)
+			"shot":
+				_bits(e.pos, Color("#b8f070") if e.kind == "spit" else Color("#f0e6c8"), 3, 50.0)
+			"shot_hit":
+				_bits(e.pos, Color("#b8f070") if e.kind == "spit" else Color("#f0e6c8"), 6, 80.0)
+			"split":
+				_ring(e.pos, 50.0, e.color, 0.5)
+				_bits(e.pos, e.color, 12, 120.0)
+			"ambush":
+				_ring(e.pos, 60.0, Art.DANGER, 0.5)
+			"remora_on", "remora_off":
+				_ring(e.pos, pond.player.radius * 2.0, Color("#dfe6ee"), 0.5)
 			"boss_phase":
 				_ring(e.pos, 200.0, Color("#c080ff"), 1.0)
 				_shake = 1.0
@@ -213,7 +224,18 @@ func _draw() -> void:
 	_mark("находки, камни")
 	for m in pond.mobs:
 		if view.grow(m.radius * 3.0).has_point(m.pos):
+			# Обманка, пока ждёт, выглядит водорослью; с двумя глазами её видно.
+			if m.behavior() == "ambush" and m.revealed_t <= 0.0 and pond.player.eyes < 2.0:
+				CellArt.plant(self, {"pos": m.pos, "r": m.radius * 0.95, "v": m.uid}, t)
+				continue
 			_creature(m)
+	for s in pond.shots:
+		var dir: Vector2 = s.vel.normalized()
+		if s.kind == "spit":
+			draw_circle(s.pos, s.r * 1.6, Color(0.7, 0.95, 0.4, 0.25))
+			draw_circle(s.pos, s.r, Color("#b8f070"))
+		else:
+			draw_line(s.pos - dir * s.r * 3.0, s.pos + dir * s.r, Color("#f0e6c8"), s.r * 0.7)
 	_mark("существа")
 	if pond.mate != null and view.grow(pond.mate.radius * 3.0).has_point(pond.mate.pos):
 		CellArt.mate(self, pond.mate, t)
@@ -253,6 +275,7 @@ func _creature(c: Creature) -> void:
 		"stretch": clampf(c.vel.length() / maxf(c.speed, 1.0), 0.0, 1.6),
 		# Новая клетка проявляется из мути, а не возникает разом.
 		"ghost": ghost,
+		"simple": not c.is_player and not c.ally and c.size_r * camera.zoom.x < 24.0,
 	})
 	if c.invisible and ghost < 0.5:
 		draw_arc(c.pos, c.radius * (1.0 + 0.05 * sin(t * 5.0)), 0, TAU, 24, Color(0.8, 0.9, 1.0, 0.12), 1.5, true)
