@@ -18,6 +18,7 @@ signal editor_pressed
 signal atlas_pressed
 signal settings_pressed
 signal shop_pressed
+signal pause_pressed
 
 var pad: Control
 var dash: Control
@@ -26,6 +27,7 @@ var editor_btn: Button
 var atlas_btn: Button
 var settings_btn: Button
 var shop_btn: Button
+var pause_btn: Button
 ## Размер, рост, ДНК и здоровье — одной карточкой слева сверху. Старые имена оставлены:
 ## size_pill, dna_pill и hp_bar — это она же.
 var status: Control
@@ -86,7 +88,9 @@ func _ready() -> void:
 	atlas_btn.pressed.connect(func(): atlas_pressed.emit())
 	shop_btn = _round("shop", "Магазин", 64)
 	shop_btn.pressed.connect(func(): shop_pressed.emit())
-	for b in [settings_btn, atlas_btn, shop_btn]:
+	pause_btn = _round("pause", "Пауза", 64)
+	pause_btn.pressed.connect(func(): pause_pressed.emit())
+	for b in [settings_btn, atlas_btn, shop_btn, pause_btn]:
 		b.caption = b.tooltip_text
 
 	# Задача: заголовок, номер, подсказка в одну строку и полоска, если есть что считать.
@@ -190,7 +194,7 @@ func apply_settings(s: Settings, landscape: bool) -> void:
 	pad.visible = s.control == "stick"
 	if not pad.visible:
 		pad.release()
-	for n in [pad, dash, ability_btn, editor_btn, settings_btn, atlas_btn, shop_btn]:
+	for n in [pad, dash, ability_btn, editor_btn, settings_btn, atlas_btn, shop_btn, pause_btn]:
 		n.floating = true
 	indicators.enabled = s.arrows
 	minimap.visible = s.minimap
@@ -266,7 +270,7 @@ func hurt() -> void:
 
 ## Пришлось ли касание на что-то из интерфейса.
 func covers(p: Vector2) -> bool:
-	for n in [pad, dash, ability_btn, editor_btn, settings_btn, atlas_btn, shop_btn, size_pill, dna_pill, hp_bar, goal_card]:
+	for n in [pad, dash, ability_btn, editor_btn, settings_btn, atlas_btn, shop_btn, pause_btn, size_pill, dna_pill, hp_bar, goal_card]:
 		if n.visible and n.get_global_rect().grow(10).has_point(p):
 			return true
 	return false
@@ -335,6 +339,7 @@ func _layout() -> void:
 	settings_btn.position = Vector2(right - 64 - 16, top)
 	atlas_btn.position = Vector2(right - 64 * 2 - 46, top)
 	shop_btn.position = Vector2(right - 64 * 3 - 76, top)
+	pause_btn.position = Vector2(right - 64 * 4 - 106, top)
 	var mm := 150.0 * scale
 	minimap.size = Vector2(mm, mm)
 	minimap.position = Vector2(right - mm, top + 104)
@@ -374,7 +379,7 @@ func _layout_goal() -> void:
 	if status == null or shop_btn == null:
 		return
 	var x := status.position.x + status.size.x + 14
-	var room := shop_btn.position.x - x - 24
+	var room := pause_btn.position.x - x - 24
 	var font := get_theme_default_font()
 	var need := maxf(font.get_string_size(goal_title.text, HORIZONTAL_ALIGNMENT_LEFT, -1, 21).x + 60,
 		font.get_string_size(goal_hint.text, HORIZONTAL_ALIGNMENT_LEFT, -1, 17).x) + 90

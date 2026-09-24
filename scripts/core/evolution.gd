@@ -219,6 +219,31 @@ func remove(index: int) -> Dictionary:
 	body.remove_at(index)
 	return {"ok": true, "message": "Убрано: %s (+%d ДНК)" % [Content.PARTS[p.id].name.to_lower(), Content.PARTS[p.id].cost]}
 
+## Перенести стоящую часть на новое место. ДНК не тратится; не встала — остаётся где была.
+func move(index: int, angle: float, depth := 1.0) -> Dictionary:
+	if index < 0 or index >= body.size():
+		return {"ok": false, "message": ""}
+	var p: Dictionary = body[index]
+	var a := snap(angle)
+	var d := snap_depth(p.id, depth)
+	if d == 0.0:
+		a = 0
+	if a == int(p.a) and is_equal_approx(d, float(p.get("d", 1.0))):
+		return {"ok": true, "message": ""}
+	body.remove_at(index)
+	var check := can_place(p.id, a, d)
+	if not check.ok:
+		body.insert(index, p)
+		return {"ok": false, "message": check.reason}
+	body.insert(index, {"id": p.id, "a": a, "d": d})
+	return {"ok": true, "message": "Перенесено: %s" % Content.PARTS[p.id].name.to_lower()}
+
+## Снять все части — вся ДНК за них возвращается.
+func clear_body() -> Dictionary:
+	var back := cost_used()
+	body.clear()
+	return {"ok": true, "message": "Сняты все части: +%d ДНК" % back}
+
 ## Части тела с уровнями и углами в радианах — для настоящей клетки.
 func body_parts() -> Array:
 	var out: Array = []
@@ -239,21 +264,21 @@ func _shape_fits(new_shape: Array) -> bool:
 	shape = old
 	return ok
 
-func reshape(angle: float, value: float, mirror := false) -> bool:
+func reshape(angle: float, value: float, mirror := false, width := 40.0) -> bool:
 	var before := shape.duplicate()
-	_reshape(angle, value, mirror)
+	_reshape(angle, value, mirror, width)
 	if not _shape_fits(shape):
 		shape = before
 		return false
 	return true
 
-func _reshape(angle: float, value: float, mirror := false) -> void:
+func _reshape(angle: float, value: float, mirror := false, width := 40.0) -> void:
 	value = clampf(value, Content.SHAPE_MIN, Content.SHAPE_MAX)
 	var n := shape.size()
 	for i in n:
 		var ai := 360.0 * i / n
 		for a in ([angle, -angle] if mirror else [angle]):
-			var w := maxf(0.0, 1.0 - angle_gap(ai, a) / 40.0)
+			var w := maxf(0.0, 1.0 - angle_gap(ai, a) / width)
 			if w > 0.0:
 				shape[i] = lerpf(shape[i], value, w * w)
 
@@ -262,6 +287,29 @@ func set_shape(preset: String) -> bool:
 	if not _shape_fits(s):
 		return false
 	shape = s
+	return true
+
+## Всё тело разом: "bigger"/"smaller" — больше/меньше, "longer" — длиннее вдоль (нос и
+## хвост), "wider" — шире в боках. Не влезают части — ничего не меняется.
+func transform_shape(kind: String) -> bool:
+	var n := shape.size()
+	var out: Array = []
+	for i in n:
+		var a := TAU * i / n
+		var v: float = shape[i]
+		match kind:
+			"bigger":
+				v *= 1.08
+			"smaller":
+				v /= 1.08
+			"longer":
+				v *= 1.0 + 0.1 * cos(a) * cos(a) - 0.04 * sin(a) * sin(a)
+			"wider":
+				v *= 1.0 + 0.1 * sin(a) * sin(a) - 0.04 * cos(a) * cos(a)
+		out.append(clampf(v, Content.SHAPE_MIN, Content.SHAPE_MAX))
+	if not _shape_fits(out):
+		return false
+	shape = out
 	return true
 
 ## Сгладить: каждая точка — к среднему соседей.

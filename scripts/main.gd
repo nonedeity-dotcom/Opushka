@@ -12,6 +12,7 @@ const SettingsPanel := preload("res://scripts/ui/settings_panel.gd")
 const SoundBank := preload("res://scripts/sound_bank.gd")
 const MenuPanel := preload("res://scripts/ui/menu_panel.gd")
 const ShopPanel := preload("res://scripts/ui/shop_panel.gd")
+const PausePanel := preload("res://scripts/ui/pause_panel.gd")
 
 var evo: Evolution
 var pond: Pond
@@ -25,6 +26,7 @@ var backdrop: Control
 var fog: ColorRect
 var menu: Control
 var shop: Control
+var pause: Control
 var landscape := true
 ## Ячейка сохранения, в которую играем. 0 — проверочный запуск: не сохраняется.
 var slot := 0
@@ -116,6 +118,7 @@ func _ready() -> void:
 		editor.open(evo, landscape, false))
 	hud.settings_pressed.connect(_open_settings)
 	hud.shop_pressed.connect(_open_shop)
+	hud.pause_pressed.connect(_pause)
 
 	editor = EditorPanel.new()
 	editor.visible = false
@@ -147,6 +150,18 @@ func _ready() -> void:
 	setup.closed.connect(func(): setup.visible = false)
 	setup.changed.connect(_settings_changed)
 	setup.new_world.connect(_to_menu)
+	pause = PausePanel.new()
+	pause.visible = false
+	ui.add_child(pause)
+	pause.resume.connect(func():
+		sound.play("ui")
+		pause.visible = false)
+	pause.settings.connect(func():
+		pause.visible = false
+		_open_settings())
+	pause.to_menu.connect(func():
+		pause.visible = false
+		_to_menu())
 	setup.test_sound.connect(func(id): sound.play(id))
 
 	shop = ShopPanel.new()
@@ -236,6 +251,7 @@ func _to_menu() -> void:
 	setup.visible = false
 	editor.visible = false
 	shop.visible = false
+	pause.visible = false
 	hud.visible = false
 	fog.visible = false
 	menu.open()
@@ -292,7 +308,7 @@ func _process(delta: float) -> void:
 			_prof.clear()
 	var t0 := Time.get_ticks_usec()
 	evo.played += delta
-	var paused: bool = editor.visible or setup.visible or shop.visible
+	var paused: bool = editor.visible or setup.visible or shop.visible or pause.visible
 	# Удар с весом: мир на миг замер (эффекты и камера живут дальше).
 	if _freeze > 0.0 and not paused:
 		_freeze -= delta
@@ -776,6 +792,18 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
 		if pond:
 			_save()
+			# Свернул игру — вернёшься на паузу, а не в самую гущу.
+			if what != NOTIFICATION_WM_CLOSE_REQUEST and not (editor.visible or setup.visible or shop.visible):
+				_pause()
+
+## Пауза.
+func _pause() -> void:
+	if pond == null or pause.visible:
+		return
+	sound.play("ui")
+	hud.pad.release()
+	_fingers.clear()
+	pause.open()
 
 ## Сохранить в свою ячейку. Проверочный запуск (ячейка 0) не сохраняется.
 func _save() -> void:
@@ -885,13 +913,39 @@ func _run_script() -> void:
 		"ghost":
 			var ad := p[1].split(",")
 			editor._preview.ghost = {"a": float(ad[0]), "d": float(ad[1]) if ad.size() > 1 else 1.0}
+			editor._preview.ghost_id = editor.selected
+			editor._refresh_stats()
 		"mode":
 			editor.mode = p[1]
+			editor.parts_shown = p[1] == "parts"
 			editor.rebuild()
 		"pull":
 			var ad := p[1].split(",")
-			editor.evo.reshape(float(ad[0]), float(ad[1]), editor.mirror)
-			editor.shape_done()
+			var before: Array = editor.evo.shape.duplicate()
+			editor.evo.reshape(float(ad[0]), float(ad[1]), editor.mirror, editor.brush)
+			editor.shape_done(before)
+		"grab":
+			# Показать взятую ручку формы (для снимков): номер точки.
+			editor._preview.grab = int(p[1])
+			editor._preview._before = editor.evo.shape.duplicate()
+		"big":
+			editor.big = true
+			editor.rebuild()
+		"hideparts":
+			editor.parts_shown = false
+			editor.rebuild()
+		"carry":
+			# Тащим часть из списка (для снимков): id,x,y — точка экрана.
+			var q := p[1].split(",")
+			editor._select(q[0])
+			editor.carrying = true
+			editor._carry_id = q[0]
+			editor.carry_pos = Vector2(float(q[1]), float(q[2]))
+			var local: Vector2 = editor.carry_pos - editor._preview.global_position
+			editor._preview.ghost = editor._preview._ghost_at(local)
+			editor._preview.ghost_id = q[0]
+			editor._refresh_stats()
+			editor._carry_layer.queue_redraw()
 		"shape":
 			evo.set_shape(p[1])
 			pond.player.sync_player(evo)
@@ -940,6 +994,31 @@ func _run_script() -> void:
 				pond._gain(float(Content.LEVELS[lv].dna) - evo.dna_total + 0.5)
 				view.effects(pond.events)
 				_handle(pond.events)
+		"pause":
+			_pause()
+		"drag":
+			# Провести пальцем от точки к точке (x0,y0,x1,y1) — как настоящее касание.
+			var q := p[1].split(",")
+			var a0 := Vector2(float(q[0]), float(q[1]))
+			var a1 := Vector2(float(q[2]), float(q[3]))
+			var down := InputEventScreenTouch.new()
+			down.position = a0
+			down.pressed = true
+			Input.parse_input_event(down)
+			var steps := 12
+			for i in range(1, steps + 1):
+				var mv := InputEventScreenDrag.new()
+				mv.position = a0.lerp(a1, float(i) / steps)
+				mv.relative = (a1 - a0) / steps
+				Input.parse_input_event(mv)
+			var up := InputEventScreenTouch.new()
+			up.position = a1
+			up.pressed = false
+			Input.parse_input_event(up)
+		"body":
+			print("ТЕЛО: ", evo.body.map(func(b): return "%s@%d" % [b.id, b.a]), " ДНК ", evo.dna_free(), " нос %.2f бок %.2f" % [evo.shape[0], evo.shape[4]])
+		"undo":
+			editor._undo_step(-1)
 		"sounds":
 			setup._sounds_open = true
 			setup.rebuild()

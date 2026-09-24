@@ -117,4 +117,33 @@ static func draw(ci: CanvasItem, name: String, rect: Rect2, col: Color) -> void:
 			ci.draw_circle(Vector2(50, 50), 12, Art.BG)
 			ci.draw_line(Vector2(18, 84), Vector2(82, 16), Art.BG, 12, true)
 			ci.draw_line(Vector2(18, 84), Vector2(82, 16), col, 6, true)
+		"eye":
+			Art.ellipse(ci, Vector2(50, 50), 38, 22, col)
+			ci.draw_circle(Vector2(50, 50), 13, Art.BG)
+			ci.draw_circle(Vector2(50, 50), 7, col)
+		"undo", "redo":
+			# Дуга со стрелкой: назад — влево, вперёд — вправо.
+			var flip := 1.0 if name == "redo" else -1.0
+			var pts := PackedVector2Array()
+			for i in 13:
+				var a := lerpf(-PI * 0.95, PI * 0.25, i / 12.0)
+				pts.append(Vector2(50 + flip * cos(a) * -30.0, 56 + sin(a) * 26.0))
+			ci.draw_polyline(pts, col, 10, true)
+			var tip := Vector2(50 + flip * 30.0, 56 - 3.0)
+			Art.poly(ci, [tip + Vector2(flip * 16, -18), tip + Vector2(flip * 16, 16), tip + Vector2(flip * -14, -2)], col)
+		"expand":
+			for q in [[Vector2(16, 16), 1, 1], [Vector2(84, 16), -1, 1], [Vector2(16, 84), 1, -1], [Vector2(84, 84), -1, -1]]:
+				var o: Vector2 = q[0]
+				ci.draw_line(o, o + Vector2(q[1] * 26, 0), col, 9, true)
+				ci.draw_line(o, o + Vector2(0, q[2] * 26), col, 9, true)
+		"shrink":
+			for q in [[Vector2(40, 40), -1, -1], [Vector2(60, 40), 1, -1], [Vector2(40, 60), -1, 1], [Vector2(60, 60), 1, 1]]:
+				var o: Vector2 = q[0]
+				ci.draw_line(o, o + Vector2(q[1] * 24, 0), col, 9, true)
+				ci.draw_line(o, o + Vector2(0, q[2] * 24), col, 9, true)
+		"pause":
+			ci.draw_rect(Rect2(26, 18, 16, 64), col)
+			ci.draw_rect(Rect2(58, 18, 16, 64), col)
+		"play":
+			Art.poly(ci, [Vector2(28, 16), Vector2(84, 50), Vector2(28, 84)], col)
 	Art.unpen(ci)

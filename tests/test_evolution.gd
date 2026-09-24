@@ -237,3 +237,35 @@ func test_форма_тела(c) -> void:
 	while e.body.size() < cap:
 		e.body.append({"id": "cilia", "a": 15 * e.body.size(), "d": 1.0})
 	c.ok("сжать некуда — форма не меняется", not e.set_shape("round") and e.shape[0] == 1.5)
+
+func test_перенос_и_снять_всё(c) -> void:
+	var e := Evolution.create()
+	e.unlocked.spike = 1
+	e.add_dna(100)
+	e.place("spike", 90)
+	var dna := e.dna_free()
+	var i := e.body.size() - 1
+	c.ok("перенёс шип назад", e.move(i, 150).ok and e.body[i].a == 150)
+	c.eq("ДНК не потрачена", e.dna_free(), dna)
+	var before: Array = e.body.duplicate(true)
+	c.ok("на занятое место не встаёт", not e.move(i, 180).ok or e.body.size() == before.size())
+	c.ok("и остаётся где был", e.body[i].a == 150)
+	var all := e.cost_used()
+	c.ok("снять всё", e.clear_body().ok and e.body.is_empty())
+	c.eq("вся ДНК вернулась", e.dna_free(), dna + all)
+
+func test_форма_кнопками(c) -> void:
+	var e := Evolution.create()
+	c.ok("больше", e.transform_shape("bigger") and e.shape[0] > 1.05 and e.shape[4] > 1.05)
+	var s0: float = e.shape[0]
+	var s4: float = e.shape[4]
+	c.ok("длиннее: нос растёт, бока — нет", e.transform_shape("longer") and e.shape[0] > s0 and e.shape[4] <= s4)
+	var n0: float = e.shape[0]
+	e.reshape(0, 1.5, false, 20.0)
+	var narrow: float = e.shape[1]
+	var w := Evolution.create()
+	w.shape = e.shape.duplicate()
+	w.shape[0] = n0
+	w.reshape(0, 1.5, false, 70.0)
+	c.ok("широкая кисть тянет соседей сильнее", w.shape[2] > e.shape[2])
+	c.ok("узкая — почти только свою точку", narrow < 1.2)

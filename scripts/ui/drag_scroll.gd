@@ -36,7 +36,9 @@ func _input(e: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 	elif e is InputEventScreenDrag and e.index == _index:
 		var dy: float = e.position.y - _from.y
-		if not _dragging and absf(dy) > DEADZONE:
+		var dx: float = e.position.x - _from.x
+		# Листаем, только если палец идёт в основном вверх-вниз: вбок — это перетаскивание.
+		if not _dragging and absf(dy) > DEADZONE and absf(dy) > absf(dx):
 			_dragging = true
 			_from = e.position
 			_start = scroll_vertical
@@ -51,3 +53,9 @@ func _process(delta: float) -> void:
 	if _index == -1 and absf(_speed) > 20.0:
 		scroll_vertical += int(_speed * delta)
 		_speed *= exp(-4.0 * delta)
+
+## Бросить начатое касание: палец теперь тащит что-то другое, список не листать.
+func cancel() -> void:
+	_index = -1
+	_dragging = false
+	_speed = 0.0
