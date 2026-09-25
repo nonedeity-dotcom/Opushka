@@ -8,6 +8,7 @@ var size := 1.0
 var color := Color("#8fd07a")
 var color2 := Color("#5f9a52")
 var leg_count := 4
+var eye_count := 2
 ## Земля: высота в точке (x, z).
 var ground: Callable
 
@@ -37,6 +38,7 @@ var _head_at := Vector3.ZERO
 var _tail_dir := Vector3.BACK
 var _tail_len := 0.8
 var _tail_r := 0.2
+var _tail_tip := Vector3.ZERO
 ## Точки для лепки в редакторе — в осях существа (стоит в нуле, смотрит вперёд).
 var anchors := {}
 ## Из чего собрана каждая часть: ключ (torso, head, mouth, leg0…) → её меши.
@@ -136,7 +138,8 @@ func build_body(c: Color, c2: Color, s: float, parts: Dictionary, pattern := "sp
 		leg_count = 0
 		return
 	var legs_id: String = parts.get("legs", "")
-	leg_count = int(LandParts.PARTS[legs_id].legs) if LandParts.PARTS.has(legs_id) else 0
+	leg_count = LandParts.leg_count(parts, sh)
+	eye_count = LandParts.eye_count(parts, sh)
 	if parts.get("skin", "") == "scales":
 		_mat.roughness = 0.35
 		_mat.metallic_specular = 0.8
@@ -151,7 +154,7 @@ func build_body(c: Color, c2: Color, s: float, parts: Dictionary, pattern := "sp
 		var r: float = sp[i].r
 		rmax = maxf(rmax, sp[i].ry)
 		var m := _mat2 if pattern == "gradient" and i < 2 else _mat
-		_sphere(r, m, Vector3(0, 0, sp[i].z), _body, Vector3(float(sh.width), 0.92 * float(sh.height), maxf(1.0, gap * 0.85 / r)))
+		_sphere(r, m, Vector3(0, sp[i].y, sp[i].z), _body, Vector3(float(sh.width), 0.92 * float(sh.height), maxf(1.0, gap * 0.85 / r)))
 	_pattern(pattern)
 	_skin(parts.get("skin", ""))
 	var front: Dictionary = sp[sp.size() - 1]
@@ -165,16 +168,17 @@ func build_body(c: Color, c2: Color, s: float, parts: Dictionary, pattern := "sp
 		# туловища; двуногий, поднявший туловище, стоит на его нижнем конце — как человек.
 		var len_b := _leg_base * float(sh.leg_len) * ls
 		var len_f := _leg_base * float(sh.leg_len_f) * ls if leg_count > 2 else len_b
+		var rows := int(ceil(leg_count / 2.0))
 		for i in leg_count:
 			var key := "leg%d" % i
-			var side := -1.0 if i % 2 == 0 else 1.0
+			var side := LandParts.leg_side(i, leg_count)
 			var pl := LandParts.place(sh, key, leg_count)
 			var pair := i / 2
-			# Доля «передности» по номеру пары: 1 — передние, 0 — задние.
-			var fk := 0.0 if leg_count <= 2 else 1.0 - float(pair) / (leg_count / 2 - 1)
+			# Доля «передности» по ряду: 1 — передние, 0 — задние.
+			var fk := 0.0 if rows <= 1 else 1.0 - float(pair) / (rows - 1)
 			var th := lerpf(float(sh.leg_thick), float(sh.leg_thick_f) if leg_count > 2 else float(sh.leg_thick), fk) * ls
 			var d := LandParts.dim(sh, key)
-			hips.append({"hip": _surf(float(pl[0]), float(pl[1]), side), "group": (pair + (0 if side < 0 else 1)) % 2,
+			hips.append({"hip": _surf(float(pl[0]), float(pl[1]), side), "group": (pair + (1 if side > 0 else 0)) % 2,
 				"len": lerpf(len_b, len_f, fk) * float(d[0]) * float(d[3]), "th": th * float(d[3]), "xs": float(d[1]), "zs": float(d[2]), "key": key})
 	# Наклон туловища: сколько подняли (прямоходящее — почти стоймя) плюс разница передних и
 	# задних ног. Нос вверх — поворот «назад».
@@ -199,7 +203,7 @@ func build_body(c: Color, c2: Color, s: float, parts: Dictionary, pattern := "sp
 	# Высота: опорные (задние) ноги стоят на земле; туловище и голова — не в земле.
 	var need := 0.0
 	for p in sp:
-		need = maxf(need, p.z * sn + 0.8 * (p.ry * absf(cs) + p.r * absf(sn)))
+		need = maxf(need, p.z * sn - p.y * cs + 0.8 * (p.ry * absf(cs) + p.r * absf(sn)))
 	_body_y = need + 0.08 * size if leg_count == 0 else maxf(need + 0.08 * size, 0.0)
 	if leg_count > 0:
 		# Стоит на самой задней ноге (у двуногого — на обеих).
@@ -215,7 +219,7 @@ func build_body(c: Color, c2: Color, s: float, parts: Dictionary, pattern := "sp
 	var hsc := Vector3(float(hd[1]), float(hd[2]), float(hd[0])) * float(hd[3]) * float(sh.head)
 	var hr := 0.39 * size
 	var reach_z := hr * hsc.z
-	var neck_base := Vector3(0, 0.1 * size, front.z + front.r * 0.55)
+	var neck_base := Vector3(0, 0.1 * size + front.y, front.z + front.r * 0.55)
 	var head := neck_base + U * Vector3(0, 0.12 * size + float(sh.neck_y) * size, reach_z * 0.8 + float(sh.neck_z) * size)
 	_head_at = B * head
 	_grp = "head"
@@ -231,11 +235,15 @@ func build_body(c: Color, c2: Color, s: float, parts: Dictionary, pattern := "sp
 	_body.add_child(_head_node)
 	_sphere(hr, _mat, Vector3.ZERO, _head_node)
 	_grp = "mouth"
-	_mouth(parts.get("mouth", ""), _pivot(_head_node, "mouth", "mouth"))
+	var mp := _pivot(_head_node, "mouth", "mouth")
+	mp.rotation.x = float(sh.rot.get("mouth", 0.0))
+	_mouth(parts.get("mouth", ""), mp)
 	_grp = "eyes"
 	_eyes(parts.get("eyes", ""), _pivot(_head_node, "eyes", "eyes"))
 	_grp = "horns"
-	_head_part(parts.get("head", ""), _pivot(_head_node, "horns", "head"))
+	var hp := _pivot(_head_node, "horns", "head")
+	hp.rotation.x = -float(sh.rot.get("horns", 0.0))
+	_head_part(parts.get("head", ""), hp)
 	_grp = "tail"
 	_tail_part(parts.get("tail", ""))
 	_grp = "back"
@@ -257,7 +265,7 @@ func build_body(c: Color, c2: Color, s: float, parts: Dictionary, pattern := "sp
 		_leg_len = maxf(_leg_len, float(leg.len))
 	# Ручки для лепки — с учётом высоты и наклона туловища.
 	for i in sp.size():
-		anchors["g%d" % i] = _b(Vector3(0, sp[i].ry * 0.92, sp[i].z))
+		anchors["g%d" % i] = _b(Vector3(0, sp[i].ry * 0.92 + sp[i].y, sp[i].z))
 	anchors.len_back = _b(Vector3(0, 0, sp[0].z - sp[0].r))
 	anchors.len_front = _b(Vector3(0, -front.ry * 0.4, front.z + front.r * 0.3))
 	anchors.width = _b(Vector3(LandParts.spine_at(sp, 0.5).rx * 0.95, 0, LandParts.spine_at(sp, 0.5).z))
@@ -277,11 +285,11 @@ func build_body(c: Color, c2: Color, s: float, parts: Dictionary, pattern := "sp
 		anchors["thick:" + k] = Vector3(hw.x * 1.1 + signf(hw.x) * 0.2, lerpf(hw.y, gy, 0.72), hw.z)
 		anchors["feet:" + k] = Vector3(hw.x * 1.2, gy + 0.05, hw.z + 0.15 * size)
 	var mid := LandParts.spine_at(sp, 0.5)
-	anchors.back = _b(Vector3(0, mid.ry + 0.45 * size * LandParts.part_size(sh, "back"), mid.z))
-	anchors.skin = _b(Vector3(mid.rx * 0.9, mid.ry * 0.5, mid.z))
+	anchors.back = _b(Vector3(0, mid.ry + mid.y + 0.45 * size * LandParts.part_size(sh, "back"), mid.z))
+	anchors.skin = _b(Vector3(mid.rx * 0.9, mid.ry * 0.5 + mid.y, mid.z))
 	if _tail:
 		anchors.tail_base = _b(_tail.position + Vector3(0, _tail_r * 1.4, 0))
-		anchors.tail = _b(_tail.position + _tail_dir * _tail_len)
+		anchors.tail = _b(_tail.position + _tail_tip)
 	# У каждой руки: место (у плеча), кисть (длина и наклон), толщина (у локтя).
 	for arm in _arms:
 		var k: String = arm.key
@@ -306,14 +314,14 @@ func build_body(c: Color, c2: Color, s: float, parts: Dictionary, pattern := "sp
 	add_child(shadow)
 	_top = _body_y + (B * head).y + hr * hsc.y
 	for p in sp:
-		_top = maxf(_top, _body_y + (B * Vector3(0, p.ry, p.z)).y)
+		_top = maxf(_top, _body_y + (B * Vector3(0, p.ry + p.y, p.z)).y)
 	_place_feet()
 
 ## Точка на поверхности туловища: t — вдоль (0 хвост … 1 голова), a — по кругу (0 — сбоку
 ## посередине, + выше, − ниже), side — левый бок (−1) или правый (+1).
 func _surf(t: float, a: float, side: float) -> Vector3:
 	var at := LandParts.spine_at(_sp, t)
-	return Vector3(side * at.rx * cos(a) * 0.92, at.ry * sin(a) * 0.92, at.z)
+	return Vector3(side * at.rx * cos(a) * 0.92, at.ry * sin(a) * 0.92 + at.y, at.z)
 
 ## Точка туловища (в его осях) → в осях существа: с высотой и наклоном.
 func _b(v: Vector3) -> Vector3:
@@ -383,61 +391,77 @@ func _pattern(pattern: String) -> void:
 			var thin := 0.035 if pattern == "tiger" else 0.065
 			for i in n:
 				var at := LandParts.spine_at(_sp, 0.92 - i * 0.84 / (n - 1))
-				_sphere(at.r, _mat2, Vector3(0, at.ry * 0.35, at.z), _body, Vector3(0.9 * at.rx / at.r, 0.66 * at.ry / at.r, thin * size / at.r))
+				_sphere(at.r, _mat2, Vector3(0, at.ry * 0.35, at.z) + Vector3(0, at.y, 0), _body, Vector3(0.9 * at.rx / at.r, 0.66 * at.ry / at.r, thin * size / at.r))
 		"rings":
 			for t in [0.25, 0.5, 0.75]:
 				var at := LandParts.spine_at(_sp, t)
-				_sphere(at.r, _mat2, Vector3(0, 0, at.z), _body, Vector3(1.03 * at.rx / at.r, 0.95 * at.ry / at.r, 0.07 * size / at.r))
+				_sphere(at.r, _mat2, Vector3(0, 0, at.z) + Vector3(0, at.y, 0), _body, Vector3(1.03 * at.rx / at.r, 0.95 * at.ry / at.r, 0.07 * size / at.r))
 		"belly":
 			for i in _sp.size():
 				var at: Dictionary = _sp[i]
-				_sphere(at.r * 0.96, _mat2, Vector3(0, -at.ry * 0.3, at.z), _body, Vector3(at.rx / at.r, 0.7 * at.ry / at.r, 1.0))
+				_sphere(at.r * 0.96, _mat2, Vector3(0, -at.ry * 0.3, at.z) + Vector3(0, at.y, 0), _body, Vector3(at.rx / at.r, 0.7 * at.ry / at.r, 1.0))
 		"back":
 			for i in 7:
 				var at := LandParts.spine_at(_sp, 0.95 - i * 0.15)
-				_sphere(0.1 * size, _mat2, Vector3(0, at.ry * 0.9, at.z), _body, Vector3(1.0, 0.5, 2.2))
+				_sphere(0.1 * size, _mat2, Vector3(0, at.ry * 0.9, at.z) + Vector3(0, at.y, 0), _body, Vector3(1.0, 0.5, 2.2))
 		"dots":
 			for i in 16:
 				var at := LandParts.spine_at(_sp, fmod(i * 0.37, 1.0) * 0.9 + 0.05)
 				var a := -1.6 + fmod(i * 1.13, 3.2)
-				_sphere(0.045 * size, _mat2, Vector3(sin(a) * at.rx * 0.97, cos(a) * at.ry * 0.9, at.z), _body)
+				_sphere(0.045 * size, _mat2, Vector3(sin(a) * at.rx * 0.97, cos(a) * at.ry * 0.9, at.z) + Vector3(0, at.y, 0), _body)
 		"leopard":
 			var hole := mat(color.lightened(0.1))
 			for i in 10:
 				var at := LandParts.spine_at(_sp, fmod(i * 0.41, 1.0) * 0.85 + 0.08)
 				var a := -1.4 + fmod(i * 1.37, 2.8)
-				var q := Vector3(sin(a) * at.rx * 0.93, cos(a) * at.ry * 0.87, at.z)
+				var q := Vector3(sin(a) * at.rx * 0.93, cos(a) * at.ry * 0.87 + at.y, at.z)
 				_sphere(0.1 * size, _mat2, q, _body, Vector3(1, 0.45, 1))
 				_sphere(0.055 * size, hole, q * 1.03, _body, Vector3(1, 0.45, 1))
 		_:
 			for q in [[0.85, 0.35], [0.6, -0.4], [0.35, 0.2], [0.12, -0.1]]:
 				var at := LandParts.spine_at(_sp, q[0])
 				var a: float = q[1]
-				_sphere(at.r * 0.3, _mat2, Vector3(sin(a) * at.rx * 0.9, cos(a) * at.ry * 0.85, at.z), _body, Vector3(1, 0.5, 1))
+				_sphere(at.r * 0.3, _mat2, Vector3(sin(a) * at.rx * 0.9, cos(a) * at.ry * 0.85, at.z) + Vector3(0, at.y, 0), _body, Vector3(1, 0.5, 1))
 
 func _tail_part(id: String) -> void:
 	var sh := _shape
 	var rear: Dictionary = _sp[0]
 	_tail = Node3D.new()
-	_tail.position = Vector3(0, 0.05 * size, rear.z - rear.r * 0.7)
+	_tail.position = Vector3(0, 0.05 * size + float(rear.get("y", 0.0)), rear.z - rear.r * 0.7)
 	_body.add_child(_tail)
 	var p := float(sh.tail_pitch)
 	# Наклон хвоста — от земли, а не от туловища: у прямоходящего хвост не в землю.
-	_tail_dir = Basis(Vector3.RIGHT, _pitch).inverse() * Vector3(0, sin(p), -cos(p))
+	var U := Basis(Vector3.RIGHT, _pitch).inverse()
+	_tail_dir = U * Vector3(0, sin(p), -cos(p))
 	var td := LandParts.dim(sh, "tail")
 	_tail_r = rear.r * 0.5 * float(sh.tail_thick) * float(sh.tail_size) * float(td[3])
 	var base := {"tail_long": 1.5, "tail_club": 0.9}.get(id, 0.8) as float
 	_tail_len = base * size * float(sh.tail_len) * float(sh.tail_size) * float(td[0]) * float(td[3])
-	var cone := _cone(_tail_r, _tail_len, _mat, Vector3.ZERO, _tail_dir, _tail)
-	# Ширина и высота хвоста — сечение.
-	cone.basis = cone.basis * Basis.from_scale(Vector3(float(td[1]), 1.0, float(td[2])))
+	# Хвост — из звеньев, всё тоньше к кончику; изгиб закручивает его вверх (+) или вниз.
+	var curl := float(sh.get("tail_curl", 0.0))
+	var n := 6
+	var at := Vector3.ZERO
+	var ang := p
+	var r := _tail_r
+	for i in n:
+		var d := U * Vector3(0, sin(ang), -cos(ang))
+		var seg := _tail_len / n
+		var nr := _tail_r * (1.0 - float(i + 1) / n) + 0.01 * size
+		var mi := _rod(at, at + d * seg * 1.08, (r + nr) / 2.0, _mat, _tail)
+		mi.basis = mi.basis * Basis.from_scale(Vector3(float(td[1]), 1.0, float(td[2])))
+		(mi.mesh as CylinderMesh).top_radius = nr
+		(mi.mesh as CylinderMesh).bottom_radius = r
+		at += d * seg
+		r = nr
+		ang += curl / n
+	_tail_tip = at
+	_tail_dir = (at / maxf(at.length(), 0.001))
 	if id == "tail_club":
-		var club := _tail_dir * _tail_len
 		var k := LandParts.part_size(sh, "tail") * float(sh.tail_thick) * float(sh.tail_size) * float(td[3])
-		_sphere(0.24 * size * k, _mat2, club, _tail)
+		_sphere(0.24 * size * k, _mat2, at, _tail)
 		var bone := mat(Color("#e8dcc0"), 0.5)
 		for d in [Vector3(1, 0, 0), Vector3(-1, 0, 0), Vector3(0, 1, 0), _tail_dir]:
-			_cone(0.07 * size * k, 0.2 * size * k, bone, club + d * 0.18 * size * k, d, _tail)
+			_cone(0.07 * size * k, 0.2 * size * k, bone, at + d * 0.18 * size * k, d, _tail)
 
 func _mouth(id: String, pv: Node3D) -> void:
 	var tooth := mat(Color("#efe6cf"), 0.4)
@@ -466,25 +490,32 @@ func _mouth(id: String, pv: Node3D) -> void:
 			# Рта нет — только тёмная щёлка.
 			_sphere(0.08 * size, mat(Color("#2a1e22"), 1.0), o + Vector3(0, -0.12, 0.04) * size, pv, Vector3(2.2, 0.4, 0.6))
 
+## Глаза — каждый на своём месте головы: вокруг (0 — прямо вперёд), выше/ниже, размер.
 func _eyes(id: String, pv: Node3D) -> void:
+	if id == "":
+		return
 	var white := mat(Color("#f4f4ec"), 0.3)
 	var black := mat(Color("#1e1e28"), 0.2)
-	match id:
-		"":
-			return
-		"eyes_stalk":
-			for side in [-1.0, 1.0]:
-				var base := Vector3(side * 0.16, 0.3, 0.05) * size
-				var top := base + Vector3(side * 0.12, 0.42, 0.08) * size
-				_rod(base, top, 0.04 * size, _mat, pv)
-				_sphere(0.12 * size, white, top, pv)
-				_sphere(0.065 * size, black, top + Vector3(side * 0.02, 0.0, 0.1) * size, pv)
-		_:
-			var k := 1.45 if id == "eyes_big" else 1.0
-			for side in [-1.0, 1.0]:
-				var eye := Vector3(side * 0.22, 0.2, 0.28) * size
-				_sphere(0.14 * size * k, white, eye, pv)
-				_sphere(0.075 * size * k, black, eye + Vector3(side * 0.03, 0.02, 0.1 * k) * size, pv)
+	var hr := 0.39 * size
+	var k := 1.45 if id == "eyes_big" else 1.0
+	for e in eye_count:
+		_grp = "eye%d" % e
+		var pl := LandParts.place(_shape, _grp, leg_count, eye_count)
+		var yaw := float(pl[0])
+		var pitch := float(pl[1])
+		var ek := float(pl[2])
+		var dir := Vector3(sin(yaw) * cos(pitch), sin(pitch), cos(yaw) * cos(pitch))
+		if id == "eyes_stalk":
+			var base := dir * hr * 0.85
+			var top := base + (dir * 0.45 + Vector3.UP).normalized() * 0.42 * size * ek
+			_rod(base, top, 0.04 * size * ek, _mat, pv)
+			_sphere(0.12 * size * ek, white, top, pv)
+			_sphere(0.065 * size * ek, black, top + Vector3(dir.x, 0, dir.z).normalized() * 0.1 * size * ek, pv)
+		else:
+			var eye := dir * hr * 0.9
+			_sphere(0.14 * size * k * ek, white, eye, pv)
+			_sphere(0.075 * size * k * ek, black, eye + dir * 0.1 * size * k * ek, pv)
+	_grp = "eyes"
 
 func _head_part(id: String, pv: Node3D) -> void:
 	match id:
@@ -505,27 +536,29 @@ func _back(id: String) -> void:
 			var horn := mat(Color("#e8dcc0"), 0.5)
 			for i in 5:
 				var at := LandParts.spine_at(_sp, 0.88 - i * 0.18)
-				_cone(0.1 * size * k, (0.42 - absf(i - 1.5) * 0.06) * size * k, horn, Vector3(0, at.ry * 0.78, at.z), Vector3(0, 1, -0.35), _body)
+				_cone(0.1 * size * k, (0.42 - absf(i - 1.5) * 0.06) * size * k, horn, Vector3(0, at.ry * 0.78 + at.y, at.z), Vector3(0, 1, -0.35), _body)
 		"plates":
 			var plate := mat(color2.darkened(0.2), 0.6)
 			for i in 5:
 				var at := LandParts.spine_at(_sp, 0.86 - i * 0.18)
-				_sphere(0.24 * size * k, plate, Vector3(0.1 * (1 if i % 2 == 0 else -1) * size, at.ry * 0.95 + 0.04 * size * k, at.z), _body, Vector3(0.25, 1.0, 0.9))
+				_sphere(0.24 * size * k, plate, Vector3(0.1 * (1 if i % 2 == 0 else -1) * size, at.ry * 0.95 + 0.04 * size * k, at.z) + Vector3(0, at.y, 0), _body, Vector3(0.25, 1.0, 0.9))
 		"sail":
 			var m := mat(color2.lightened(0.15), 0.5)
 			var bone := mat(Color("#e8dcc0"), 0.5)
 			var L: float = _sp[_sp.size() - 1].z - _sp[0].z
 			var mid := LandParts.spine_at(_sp, 0.5)
-			_sphere(0.6 * size, m, Vector3(0, mid.ry * 0.8 + 0.25 * size * k, mid.z), _body, Vector3(0.08, 0.85 * k, maxf(L / (1.2 * size), 0.6)))
+			_sphere(0.6 * size, m, Vector3(0, mid.ry * 0.8 + mid.y + 0.25 * size * k, mid.z), _body, Vector3(0.08, 0.85 * k, maxf(L / (1.2 * size), 0.6)))
 			for i in 5:
 				var at := LandParts.spine_at(_sp, 0.85 - i * 0.175)
 				var hgt := (0.85 - absf(i - 2) * 0.12) * k
-				_rod(Vector3(0, at.ry * 0.7, at.z), Vector3(0, at.ry * 0.7 + hgt * size, at.z - 0.05 * size), 0.03 * size, bone)
-	# Длина — вдоль спины, ширина — вбок, высота — вверх: каждой шипине и пластине.
+				_rod(Vector3(0, at.ry * 0.7 + at.y, at.z), Vector3(0, at.ry * 0.7 + at.y + hgt * size, at.z - 0.05 * size), 0.03 * size, bone)
+	# Длина — вдоль спины, ширина — вбок, высота — вверх: каждой шипине и пластине;
+	# поворот наклоняет их вперёд или назад.
 	var els: Array = groups.get("back", [])
+	var tilt := Basis(Vector3.RIGHT, float(_shape.rot.get("back", 0.0)))
 	for i in range(from, els.size()):
 		var mi: Node3D = els[i]
-		mi.basis = mi.basis * Basis.from_scale(Vector3(float(bd[1]), float(bd[2]), float(bd[0])))
+		mi.basis = tilt * mi.basis * Basis.from_scale(Vector3(float(bd[1]), float(bd[2]), float(bd[0])))
 
 func _skin(id: String) -> void:
 	match id:
@@ -534,13 +567,13 @@ func _skin(id: String) -> void:
 			for i in 12:
 				var a := -1.0 + (i % 3) * 1.0
 				var at := LandParts.spine_at(_sp, 0.9 - int(i / 3) * 0.25)
-				_cone(0.08 * size, 0.16 * size, tuft, Vector3(sin(a) * at.rx * 0.92, cos(a) * at.ry * 0.85, at.z), Vector3(sin(a), cos(a), -0.4), _body)
+				_cone(0.08 * size, 0.16 * size, tuft, Vector3(sin(a) * at.rx * 0.92, cos(a) * at.ry * 0.85 + at.y, at.z), Vector3(sin(a), cos(a), -0.4), _body)
 		"scales":
 			var sc := mat(color2.darkened(0.1), 0.3)
 			for side in [-1.0, 1.0]:
 				for i in 5:
 					var at := LandParts.spine_at(_sp, 0.9 - i * 0.2)
-					_sphere(0.12 * size, sc, Vector3(side * at.rx * 0.95, (0.1 + (i % 2) * 0.2) * at.ry, at.z), _body, Vector3(0.4, 1, 1))
+					_sphere(0.12 * size, sc, Vector3(side * at.rx * 0.95, (0.1 + (i % 2) * 0.2) * at.ry, at.z) + Vector3(0, at.y, 0), _body, Vector3(0.4, 1, 1))
 		"poison_skin":
 			var dot := mat(Color("#c8f040"), 0.4)
 			dot.emission_enabled = true
@@ -549,7 +582,7 @@ func _skin(id: String) -> void:
 			for q in [[0.85, 0.7], [0.65, -0.8], [0.45, 0.3], [0.25, -0.4], [0.1, 0.9], [0.55, 0.0]]:
 				var at := LandParts.spine_at(_sp, q[0])
 				var a: float = q[1]
-				_sphere(0.08 * size, dot, Vector3(sin(a) * at.rx * 0.95, cos(a) * at.ry * 0.88, at.z), _body)
+				_sphere(0.08 * size, dot, Vector3(sin(a) * at.rx * 0.95, cos(a) * at.ry * 0.88, at.z) + Vector3(0, at.y, 0), _body)
 
 ## Руки: плечо → локоть → кисть. Длина, толщина и наклон — из формы; качаются на ходу.
 func _make_arms(id: String) -> void:
@@ -785,7 +818,7 @@ func update(dt: float, at: Vector3, heading: float, vel: Vector3) -> void:
 		_seg(arm.upper, sh, elbow, arm.xs, arm.zs)
 		_seg(arm.lower, elbow, hand, arm.xs, arm.zs)
 		(arm.hand as Node3D).global_position = hand
-		(arm.hand as Node3D).global_rotation = Vector3(0, global_rotation.y, 0)
+		(arm.hand as Node3D).global_rotation = Vector3(0, global_rotation.y, float(_shape.rot.get("hands", 0.0)) * arm.side)
 	if _tail:
 		_tail.rotation.y = sin(_phase * 0.5) * (0.15 + 0.2 * walk)
 	var sh := get_node_or_null("Shadow") as Node3D
@@ -809,7 +842,8 @@ func _pose_leg(leg: Dictionary) -> void:
 	_seg(leg.upper, hip, knee, leg.xs, leg.zs)
 	_seg(leg.lower, knee, foot, leg.xs, leg.zs)
 	(leg.paw as Node3D).global_position = foot + Vector3(0, 0.04 * size, 0)
-	(leg.paw as Node3D).global_rotation = Vector3(0, global_rotation.y, 0)
+	var toe := float(_shape.rot.get("feet", 0.0)) * signf((leg.hip as Vector3).x)
+	(leg.paw as Node3D).global_rotation = Vector3(0, global_rotation.y - toe, 0)
 
 func _seg(mi: MeshInstance3D, p: Vector3, q: Vector3, xs := 1.0, zs := 1.0) -> void:
 	mi.global_position = (p + q) / 2.0

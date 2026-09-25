@@ -163,8 +163,18 @@ static func cost(body: Dictionary, shape := {}) -> int:
 
 static func part_cost(id: String, shape := {}) -> int:
 	var c := int(PARTS[id].cost)
-	if PARTS[id].slot == "arms":
-		c *= arm_pairs(shape)
+	match PARTS[id].slot:
+		"arms":
+			c *= arm_pairs(shape)
+		"legs":
+			# Ноги — за каждую: своё число ног дороже или дешевле обычного набора.
+			var n := int(round(float(shape.get("leg_n", 0.0))))
+			if n > 0:
+				c = int(round(float(c) * n / int(PARTS[id].legs)))
+		"eyes":
+			var n := int(round(float(shape.get("eye_n", 0.0))))
+			if n > 0:
+				c = int(round(float(c) * n / 2.0))
 	return c
 
 ## Сколько пар рук: 1–3.
@@ -213,7 +223,7 @@ static func stats(body: Dictionary, shape := {}) -> Dictionary:
 			if p.has(key):
 				s[key] = true
 		if p.has("legs"):
-			s.legs = p.legs
+			s.legs = leg_count(body, sh)
 	# Форма тела.
 	var bulk := bulk_of(sh)
 	s.hp *= clampf(sqrt(bulk), 0.6, 1.8)
@@ -252,6 +262,16 @@ static func stats(body: Dictionary, shape := {}) -> Dictionary:
 	if not body.has("legs"):
 		s.legs = 0
 		s.speed *= 0.3
+	# Число ног: на одной — прыгаешь медленнее; лишние ноги — чуть крепче.
+	if body.has("legs") and PARTS.has(body.legs):
+		var n := int(s.legs)
+		var base_n := int(PARTS[body.legs].legs)
+		if n == 1:
+			s.speed *= 0.75
+		s.hp += maxf(0.0, n - base_n) * 1.5
+	# Больше глаз — видишь лучше (и наоборот).
+	if body.has("eyes"):
+		s.sight *= clampf(1.0 + 0.08 * (eye_count(body, sh) - 2), 0.8, 1.35)
 	# Поднял туловище — голова выше, видно дальше.
 	s.sight *= 1.0 + 0.15 * clampf(float(sh.torso_pitch), 0.0, 1.5) / 1.5
 	# Быстрее двух обычных не бегает никто — иначе ни стая, ни отшельник не страшны.
@@ -277,15 +297,22 @@ const SHAPE := {
 	"torso": [1.0, 0.5, 2.0], "width": [1.0, 0.5, 2.0], "height": [1.0, 0.5, 2.0], "torso_pitch": [0.0, -0.4, 1.5],
 	"leg_size": [1.0, 0.5, 2.0], "leg_len": [1.0, 0.45, 2.4], "leg_thick": [1.0, 0.5, 2.5],
 	"leg_len_f": [1.0, 0.45, 2.4], "leg_thick_f": [1.0, 0.5, 2.5],
-	"arm_size": [1.0, 0.5, 2.0], "arm_pairs": [1.0, 1.0, 3.0], "arm_len": [1.0, 0.5, 2.5], "arm_thick": [1.0, 0.5, 2.5], "arm_pitch": [0.0, -1.2, 1.4],
+	"arm_size": [1.0, 0.5, 2.0], "arm_pairs": [1.0, 1.0, 3.0],
+	"leg_n": [0.0, 0.0, 8.0], "eye_n": [0.0, 0.0, 6.0], "torso_bend": [0.0, -1.0, 1.0], "tail_curl": [0.0, -2.5, 2.5], "arm_len": [1.0, 0.5, 2.5], "arm_thick": [1.0, 0.5, 2.5], "arm_pitch": [0.0, -1.2, 1.4],
 	"tail_size": [1.0, 0.5, 2.0], "tail_len": [1.0, 0.2, 3.5], "tail_pitch": [0.25, -0.8, 1.3], "tail_thick": [1.0, 0.5, 2.2],
 }
 const GIRTH := [0.9, 1.0, 1.05, 1.0, 0.9]
 ## У каждой части своя длина, ширина, высота и размер: dims[часть] = [Д, Ш, В, Р].
 ## Части: голова, рот, глаза, рога (всё, что на голове), спина, хвост, каждая нога
 ## (leg0…leg5: 0-1 — передние, дальше — к хвосту; чётные — левые) и каждая рука.
-const DIM_KEYS := ["head", "mouth", "eyes", "horns", "back", "tail", "leg0", "leg1", "leg2", "leg3", "leg4", "leg5",
+const DIM_KEYS := ["head", "mouth", "eyes", "horns", "back", "tail", "leg0", "leg1", "leg2", "leg3", "leg4", "leg5", "leg6", "leg7",
 	"arm0", "arm1", "arm2", "arm3", "arm4", "arm5"]
+## Глаза по одному: где на голове — [вокруг головы (0 — прямо вперёд, ± — в стороны),
+## выше/ниже, размер этого глаза].
+const EYE_KEYS := ["eye0", "eye1", "eye2", "eye3", "eye4", "eye5"]
+const EYE_LIMITS := [[-2.6, 2.6], [-1.2, 1.4], [0.4, 2.5]]
+## Поворот частей: наклон рта, рогов и гребня, шипов и пластин, кистей, ступней.
+const ROT_KEYS := ["mouth", "horns", "back", "hands", "feet"]
 ## Где на теле нога или рука: place[часть] = [вдоль туловища 0–1 (0 — хвост, 1 — голова),
 ## выше/ниже (угол по кругу туловища: 0 — сбоку посередине, + выше, − ниже),
 ## наклон (только у рук)]. Нет записи — место по умолчанию.
@@ -298,7 +325,7 @@ const SIZE_LIMITS := [0.5, 2.2]
 const BULK_BASE := 0.9445
 
 static func default_shape() -> Dictionary:
-	var d := {"girth": GIRTH.duplicate(), "sizes": {}, "dims": {}, "place": {}}
+	var d := {"girth": GIRTH.duplicate(), "sizes": {}, "dims": {}, "place": {}, "rot": {}}
 	for k in SHAPE:
 		d[k] = SHAPE[k][0]
 	return d
@@ -331,10 +358,15 @@ static func fix_shape(v: Variant) -> Dictionary:
 	if pl is Dictionary:
 		for k in pl:
 			var a = pl[k]
-			if k is String and DIM_KEYS.has(k) and (k.begins_with("leg") or k.begins_with("arm")) and a is Array and a.size() == 3 \
-					and a.all(func(x): return x is float or x is int):
-				d.place[k] = [clampf(float(a[0]), PLACE_LIMITS[0][0], PLACE_LIMITS[0][1]),
-					clampf(float(a[1]), PLACE_LIMITS[1][0], PLACE_LIMITS[1][1]), clampf(float(a[2]), PLACE_LIMITS[2][0], PLACE_LIMITS[2][1])]
+			var lim: Array = EYE_LIMITS if EYE_KEYS.has(k) else PLACE_LIMITS
+			var ok_key: bool = k is String and (EYE_KEYS.has(k) or (DIM_KEYS.has(k) and (k.begins_with("leg") or k.begins_with("arm"))))
+			if ok_key and a is Array and a.size() == 3 and a.all(func(x): return x is float or x is int):
+				d.place[k] = [clampf(float(a[0]), lim[0][0], lim[0][1]), clampf(float(a[1]), lim[1][0], lim[1][1]), clampf(float(a[2]), lim[2][0], lim[2][1])]
+	var rt = v.get("rot")
+	if rt is Dictionary:
+		for k in rt:
+			if k is String and ROT_KEYS.has(k) and (rt[k] is float or rt[k] is int):
+				d.rot[k] = clampf(float(rt[k]), -1.2, 1.2)
 	var sz = v.get("sizes")
 	if sz is Dictionary:
 		for slot in sz:
@@ -345,18 +377,50 @@ static func fix_shape(v: Variant) -> Dictionary:
 
 ## Длина, ширина, высота и размер части (обычные — единицы).
 ## Место ноги или руки по умолчанию: [вдоль, выше/ниже, наклон].
-static func default_place(key: String, legs: int, tilt := 0.0) -> Array:
+static func default_place(key: String, legs: int, tilt := 0.0, eyes := 2) -> Array:
+	if key.begins_with("eye"):
+		var e := int(key.substr(3))
+		if eyes % 2 == 1 and e == eyes - 1:
+			# Непарный глаз — посередине лба.
+			return [0.0, 0.55 if eyes == 1 else 0.9, 1.15 if eyes == 1 else 0.85]
+		var side := -1.0 if e % 2 == 0 else 1.0
+		var row: Array = [[0.62, 0.5], [0.95, 0.05], [0.35, 1.0]][mini(e / 2, 2)]
+		return [side * float(row[0]), row[1], 1.0]
 	var i := int(key.substr(3))
 	if key.begins_with("arm"):
 		return [[0.86, 0.7, 0.55][i / 2], [0.0, -0.25, -0.45][i / 2], 0.0]
 	var up := clampf(tilt / 1.3, 0.0, 1.0)
-	var ts: Array = {2: [lerpf(0.5, 0.08, up)], 6: [0.82, 0.5, 0.18]}.get(legs, [0.78, 0.22])
-	return [ts[mini(i / 2, ts.size() - 1)], -0.32, 0.0]
+	var rows := int(ceil(legs / 2.0))
+	var ts: Array = {1: [lerpf(0.5, 0.08, up)], 2: [0.78, 0.22], 3: [0.82, 0.5, 0.18], 4: [0.85, 0.62, 0.38, 0.15]}.get(rows, [0.5])
+	# Непарная нога — посередине под брюхом.
+	var mid := legs % 2 == 1 and i == legs - 1
+	return [ts[mini(i / 2, ts.size() - 1)], -1.3 if mid else -0.32, 0.0]
+
+## Сколько ног: своё число или сколько положено этому виду ног (0 — без ног).
+static func leg_count(body: Dictionary, shape: Dictionary) -> int:
+	if not body.has("legs") or not PARTS.has(body.legs):
+		return 0
+	var n := int(round(float(shape.get("leg_n", 0.0))))
+	return n if n > 0 else int(PARTS[body.legs].legs)
+
+## Сколько глаз: своё число или два (0 — без глаз).
+static func eye_count(body: Dictionary, shape: Dictionary) -> int:
+	if not body.has("eyes"):
+		return 0
+	var n := int(round(float(shape.get("eye_n", 0.0))))
+	return n if n > 0 else 2
+
+## Какой бок у ноги: чётные — левые, нечётные — правые, последняя при нечётном
+## числе — посередине (0).
+static func leg_side(i: int, n: int) -> float:
+	if n % 2 == 1 and i == n - 1:
+		return 0.0
+	return -1.0 if i % 2 == 0 else 1.0
 
 ## Где нога или рука на самом деле (своё место или по умолчанию).
-static func place(shape: Dictionary, key: String, legs: int) -> Array:
+static func place(shape: Dictionary, key: String, legs: int, eyes := 2) -> Array:
 	var p = shape.get("place", {}).get(key)
-	return p if p is Array else default_place(key, legs, float(shape.get("torso_pitch", 0.0)))
+	return p if p is Array else default_place(key, legs, float(shape.get("torso_pitch", 0.0)), eyes)
 
 static func dim(shape: Dictionary, key: String) -> Array:
 	return shape.get("dims", {}).get(key, [1.0, 1.0, 1.0, 1.0])
@@ -426,7 +490,9 @@ static func spine(shape: Dictionary, s: float) -> Array:
 	var out: Array = []
 	for i in SPINE:
 		var r := 0.475 * s * float(shape.girth[i]) * t
-		out.append({"z": -L / 2.0 + L * i / (SPINE - 1.0), "r": r, "rx": r * float(shape.get("width", 1.0)), "ry": r * float(shape.get("height", 1.0))})
+		# Изгиб: горб (+) или прогиб (−) — середина выше или ниже концов.
+		var y := float(shape.get("torso_bend", 0.0)) * sin(PI * i / (SPINE - 1.0)) * L * 0.28
+		out.append({"z": -L / 2.0 + L * i / (SPINE - 1.0), "y": y, "r": r, "rx": r * float(shape.get("width", 1.0)), "ry": r * float(shape.get("height", 1.0))})
 	return out
 
 ## Толщина и место на позвоночнике в доле t (0 — хвост, 1 — голова).
@@ -434,7 +500,7 @@ static func spine_at(sp: Array, t: float) -> Dictionary:
 	var f := clampf(t, 0.0, 1.0) * (sp.size() - 1)
 	var i := mini(int(f), sp.size() - 2)
 	var k := f - i
-	return {"z": lerpf(sp[i].z, sp[i + 1].z, k), "r": lerpf(sp[i].r, sp[i + 1].r, k),
+	return {"z": lerpf(sp[i].z, sp[i + 1].z, k), "y": lerpf(sp[i].get("y", 0.0), sp[i + 1].get("y", 0.0), k), "r": lerpf(sp[i].r, sp[i + 1].r, k),
 		"rx": lerpf(sp[i].rx, sp[i + 1].rx, k), "ry": lerpf(sp[i].ry, sp[i + 1].ry, k)}
 
 # --- окрас ----------------------------------------------------------------------------

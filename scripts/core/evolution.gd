@@ -147,6 +147,26 @@ func land_set_arms(pairs: int) -> Dictionary:
 	land_shape.arm_pairs = float(pairs)
 	return {"ok": true, "message": "%d %s" % [pairs * 2, "руки" if pairs * 2 < 5 else "рук"]}
 
+## Сколько ног (1–8) или глаз (1–6): цена — за каждую. Не по карману — не меняется.
+func land_set_count(slot: String, n: int) -> Dictionary:
+	if not land_body.has(slot) or not (slot in ["legs", "eyes"]):
+		return {"ok": false, "message": "Сначала поставь " + ("ноги" if slot == "legs" else "глаза")}
+	var key := "leg_n" if slot == "legs" else "eye_n"
+	n = clampi(n, 1, 8 if slot == "legs" else 6)
+	var was := LandParts.part_cost(land_body[slot], land_shape)
+	var keep: float = land_shape.get(key, 0.0)
+	land_shape[key] = float(n)
+	var now := LandParts.part_cost(land_body[slot], land_shape)
+	if now > was and land_free() < 0:
+		land_shape[key] = keep
+		return {"ok": false, "message": "Не хватает ДНК: нужно ещё %d" % (now - was)}
+	var word := "ног" if slot == "legs" else "глаз"
+	if n == 1:
+		word = "нога" if slot == "legs" else "глаз"
+	elif n < 5:
+		word = "ноги" if slot == "legs" else "глаза"
+	return {"ok": true, "message": "%d %s" % [n, word]}
+
 ## Тело готово к суше: есть туловище и ноги.
 func land_can_walk() -> bool:
 	return land_body.has("torso") and land_body.has("legs")
@@ -167,6 +187,11 @@ func land_put(id: String) -> Dictionary:
 	if cost > free:
 		return {"ok": false, "message": "Не хватает ДНК: нужно %d, свободно %d" % [cost, free]}
 	land_body[slot] = id
+	# Другой вид ног или глаз — число снова обычное для него.
+	if slot == "legs":
+		land_shape.leg_n = 0.0
+	elif slot == "eyes":
+		land_shape.eye_n = 0.0
 	return {"ok": true, "message": "Поставлено: %s" % String(LandParts.PARTS[id].name).to_lower()}
 
 ## Снять часть с места — ДНК возвращается. Ноги не снимаются: вместо них — лапки.
@@ -183,6 +208,10 @@ func land_take(slot: String) -> Dictionary:
 	land_body.erase(slot)
 	if slot == "arms":
 		land_shape.arm_pairs = 1.0
+	elif slot == "legs":
+		land_shape.leg_n = 0.0
+	elif slot == "eyes":
+		land_shape.eye_n = 0.0
 	return {"ok": true, "message": msg}
 
 

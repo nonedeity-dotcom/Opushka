@@ -79,6 +79,21 @@ var _start_body := {}
 var _start_shape := {}
 var _start_paint := {}
 var _undo: Array = []
+var _redo: Array = []
+var _redo_btn: Button
+## Наклон камеры: 0 — вровень с землёй, ~1,35 — сверху.
+var _elev := 0.28
+## Ряд кнопок под верхней полосой: виды, приближение, анимации.
+var _tools: HFlowContainer
+## Анимация в витрине: бег (шаг быстрее), прыжок, укусы.
+var _run := false
+var _jump_t := -1.0
+var _bites := 0
+var _bite_in := 0.0
+## Несём часть с карточки на существо: что, где палец, каким пальцем.
+var _carry := ""
+var _carry_at := Vector2.ZERO
+var _finger_at := Vector2.ZERO
 var _arming_clear := false
 
 const TOP_H := 70.0
@@ -162,6 +177,10 @@ func _build_ui() -> void:
 	_undo_btn.setup("undo", "Отменить", 50)
 	_undo_btn.pressed.connect(undo)
 	row.add_child(_undo_btn)
+	_redo_btn = RoundButton.new()
+	_redo_btn.setup("redo", "Вернуть", 50)
+	_redo_btn.pressed.connect(redo)
+	row.add_child(_redo_btn)
 	_dna = Kit.label("", 24, Art.GREEN, true)
 	_dna.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	row.add_child(_dna)
@@ -173,6 +192,18 @@ func _build_ui() -> void:
 	_done_btn = _button("Выйти на сушу" if first else "Готово", Art.GREEN, try_done)
 	_done_btn.custom_minimum_size = Vector2(210, 50)
 	row.add_child(_done_btn)
+	# Под полосой — виды камеры, приближение и анимации.
+	_tools = HFlowContainer.new()
+	_tools.add_theme_constant_override("h_separation", 6)
+	_tools.add_theme_constant_override("v_separation", 6)
+	add_child(_tools)
+	for t in [["Сбоку", func(): view(PI / 2.0, 0.12)], ["Спереди", func(): view(0.0, 0.12)], ["Сверху", func(): view(_yaw, 1.35)],
+			["+", func(): _zoom = clampf(_zoom / 1.25, 0.45, 2.2)], ["−", func(): _zoom = clampf(_zoom * 1.25, 0.45, 2.2)],
+			["Шаг", func(): anim("walk")], ["Бег", func(): anim("run")], ["Укус", func(): anim("bite")], ["Прыжок", func(): anim("jump")]]:
+		var b := _button(t[0], Color(0.04, 0.08, 0.1, 0.78), t[1])
+		b.custom_minimum_size = Vector2(56 if t[0].length() <= 1 else 0, 42)
+		b.add_theme_font_size_override("font_size", 17)
+		_tools.add_child(b)
 	# Снизу: разделы значками.
 	_catbar = _panel(Color(0.04, 0.08, 0.1, 0.9), 22)
 	add_child(_catbar)
@@ -277,14 +308,17 @@ func _layout() -> void:
 		var dw := w - (iw + 8.0 if ins_on and not narrow else 0.0)
 		_drawer.position = Vector2(x0, h - CAT_H - dh - 8)
 		_drawer.size = Vector2(dw, dh)
-	_msg.position = Vector2(x0 + 10, top_end + 4)
+	_tools.position = Vector2(x0, top_end)
+	_tools.size = Vector2(w - (iw + 8.0 if ins_on and not narrow else 0.0), 0)
+	_msg.position = Vector2(x0 + 10, top_end + maxf(_tools.get_combined_minimum_size().y, 42.0) + 10)
 	_msg.size = Vector2(w - 20 - (iw + 8.0 if ins_on and not narrow else 0.0), 40)
 	if _overlay:
 		_overlay.size = size
 
 ## Куда на экране не падает интерфейс — там и держать существо.
 func _free_rect() -> Rect2:
-	var r := Rect2(0, _top.get_rect().end.y, size.x, _catbar.position.y - _top.get_rect().end.y)
+	var top := _tools.position.y + maxf(_tools.get_combined_minimum_size().y, 42.0)
+	var r := Rect2(0, top, size.x, _catbar.position.y - top)
 	if _drawer.visible:
 		r.size.y -= _drawer.size.y + 8
 	if _insp.visible and _insp.size.y > 340.0:
@@ -293,7 +327,7 @@ func _free_rect() -> Rect2:
 
 ## Касание пришлось на интерфейс (не на витрину).
 func _ui_hit(p: Vector2) -> bool:
-	for n in [_top, _catbar, _drawer, _insp]:
+	for n in [_top, _catbar, _drawer, _insp, _tools]:
 		if n.visible and n.get_global_rect().has_point(p):
 			return true
 	return _overlay != null and _overlay.visible
@@ -304,6 +338,8 @@ func _refresh() -> void:
 	_refresh_stats()
 	_undo_btn.disabled = _undo.is_empty()
 	_undo_btn.modulate.a = 0.4 if _undo.is_empty() else 1.0
+	_redo_btn.disabled = _redo.is_empty()
+	_redo_btn.modulate.a = 0.4 if _redo.is_empty() else 1.0
 	# Разделы.
 	for ch in _cats.get_children():
 		_cats.remove_child(ch)
@@ -453,6 +489,15 @@ func _fill_drawer() -> void:
 	ids.sort_custom(func(a, b): return int(LandParts.PARTS[a].cost) < int(LandParts.PARTS[b].cost))
 	for id in ids:
 		row.add_child(_part_tile(id, cc))
+	# Ноги и глаза: сколько — по одной (или парой, если «обе стороны»).
+	if slot in ["legs", "eyes"] and cur != "":
+		var n := _creature.leg_count if slot == "legs" else _creature.eye_count
+		var step := 2 if mirror else 1
+		var word := "ноги" if slot == "legs" else "глаза"
+		var tm := _action_tile("− %s" % ("пара" if step == 2 else ("нога" if slot == "legs" else "глаз")), "сейчас %d" % n, "trash", func(): set_count(slot, n - step))
+		tm.dim = n - step < 1
+		row.add_child(tm)
+		row.add_child(_action_tile("+ %s" % ("пара" if step == 2 else ("нога" if slot == "legs" else "глаз")), "или тяни карточку " + word + " на тело", "plus", func(): set_count(slot, n + step)))
 	# Руки: сколько их — 2, 4 или 6.
 	if slot == "arms" and cur != "":
 		var one := int(LandParts.PARTS[cur].cost)
@@ -469,9 +514,11 @@ func _part_tile(id: String, cc: Array) -> Control:
 	var cur: String = evo.land_body.get(s, "")
 	var on := cur == id
 	var free := evo.land_free() + (LandParts.part_cost(cur, evo.land_shape) if cur != "" else 0)
-	var price := LandParts.part_cost(id, evo.land_shape)
+	# Другой вид ног или глаз ставится с обычным числом — и цена обычная.
+	var price := LandParts.part_cost(id, evo.land_shape if (on or s == "arms") else {})
 	var need_torso := id != "torso" and not evo.land_body.has("torso")
 	var t := Tile.new()
+	t.ed = self
 	t.part = id
 	t.c = cc[0]
 	t.c2 = cc[1]
@@ -583,6 +630,8 @@ func _fill_insp() -> void:
 	_insp_icon.part = evo.land_body.get(s, "torso") if s != "torso" or sel == "torso" else "torso"
 	if sel == "head":
 		_insp_icon.part = "torso"
+	if sel.begins_with("eye"):
+		_insp_icon.part = evo.land_body.get("eyes", "eyes")
 	_insp_icon.c = cc[0]
 	_insp_icon.c2 = cc[1]
 	_insp_icon.queue_redraw()
@@ -591,7 +640,10 @@ func _fill_insp() -> void:
 	_insp_sub.visible = _insp_sub.text != ""
 	var rows: Array
 	if sel == "torso":
-		rows = [["Поднять туловище", "torso_pitch"], ["Длина", "len"], ["Ширина", "width"], ["Высота", "height"], ["Размер", "torso"]]
+		rows = [["Поднять туловище", "torso_pitch"], ["Горб / прогиб", "torso_bend"], ["Длина", "len"], ["Ширина", "width"], ["Высота", "height"], ["Размер", "torso"]]
+	elif sel.begins_with("eye"):
+		rows = [["Вокруг головы", "place:%s:0" % sel], ["Выше / ниже", "place:%s:1" % sel], ["Размер", "place:%s:2" % sel],
+			["Все глаза — длина", "dim:eyes:0"], ["Все глаза — ширина", "dim:eyes:1"]]
 	else:
 		rows = [["Длина", "dim:%s:0" % sel], ["Ширина", "dim:%s:1" % sel], ["Высота", "dim:%s:2" % sel], ["Размер", "dim:%s:3" % sel]]
 		if sel == "head":
@@ -599,11 +651,13 @@ func _fill_insp() -> void:
 		if sel.begins_with("leg") or sel.begins_with("arm"):
 			rows += [["Вдоль тела", "place:%s:0" % sel], ["Выше / ниже", "place:%s:1" % sel]]
 		if sel.begins_with("arm"):
-			rows.append(["Наклон", "place:%s:2" % sel])
+			rows += [["Наклон", "place:%s:2" % sel], ["Поворот кистей", "rot:hands"]]
 		if sel.begins_with("leg"):
-			rows.append(["Ступни", "size:feet"])
+			rows += [["Ступни", "size:feet"], ["Носки врозь", "rot:feet"]]
 		if sel == "tail":
-			rows.append(["Наклон", "tail_pitch"])
+			rows += [["Наклон", "tail_pitch"], ["Изгиб", "tail_curl"]]
+		if sel in ["mouth", "horns", "back"]:
+			rows.append(["Наклон", "rot:" + sel])
 	for r in rows:
 		var key: String = r[1]
 		var sl := ValueSlider.new()
@@ -613,15 +667,19 @@ func _fill_insp() -> void:
 		var lim: Array
 		if key.begins_with("dim:"):
 			lim = LandParts.DIM_SIZE_LIMITS if key.ends_with(":3") else LandParts.DIM_LIMITS
+		elif key.begins_with("place:eye"):
+			lim = LandParts.EYE_LIMITS[int(key.substr(key.length() - 1))]
 		elif key.begins_with("place:"):
 			lim = LandParts.PLACE_LIMITS[int(key.substr(key.length() - 1))]
+		elif key.begins_with("rot:"):
+			lim = [-1.2, 1.2]
 		elif key.begins_with("size:"):
 			lim = LandParts.SIZE_LIMITS
 		else:
 			lim = [LandParts.SHAPE[key][1], LandParts.SHAPE[key][2]]
 		sl.lo = lim[0]
 		sl.hi = lim[1]
-		sl.angle = key.ends_with("pitch") or key.begins_with("neck")
+		sl.angle = key.ends_with("pitch") or key.begins_with("neck") or key.begins_with("rot:") or key.ends_with("curl") or key.ends_with("bend")
 		sl.custom_minimum_size = Vector2(0, 60)
 		_insp_list.add_child(sl)
 	var small := func(text: String, bg: Color, action: Callable) -> Button:
@@ -629,6 +687,27 @@ func _fill_insp() -> void:
 		b.custom_minimum_size.y = 44
 		b.add_theme_font_size_override("font_size", 17)
 		return b
+	for pair in [["leg", "legs", "Сколько ног", _creature.leg_count, 8], ["eye", "eyes", "Сколько глаз", _creature.eye_count, 6]]:
+		if sel.begins_with(pair[0]) and evo.land_body.has(pair[1]):
+			var line := Kit.hbox(8)
+			var l := Kit.label("%s: %d" % [pair[2], pair[3]], 18, Art.TEXT, true)
+			l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			l.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			line.add_child(l)
+			var step := 2 if mirror else 1
+			var sl: String = pair[1]
+			var n: int = pair[3]
+			var minus := _button("−", Art.CARD_BORDER, func(): set_count.call_deferred(sl, n - step))
+			minus.custom_minimum_size = Vector2(56, 44)
+			minus.disabled = n - step < 1
+			line.add_child(minus)
+			var plus := _button("+", Art.CARD_BORDER, func(): set_count.call_deferred(sl, n + step))
+			plus.custom_minimum_size = Vector2(56, 44)
+			plus.disabled = n + step > int(pair[4])
+			line.add_child(plus)
+			_insp_list.add_child(line)
+			_insp_list.add_child(small.call("Убрать " + ("эту ногу" if pair[0] == "leg" else "этот глаз") + (" (и парную)" if mirror and _pair(sel) != "" else ""),
+				Art.CARD_BORDER, func(): remove_one.call_deferred(sel)))
 	if sel.begins_with("arm") and evo.land_body.has("arms"):
 		# Сколько рук: каждая пара стоит как руки целиком.
 		var one := int(LandParts.PARTS[evo.land_body.arms].cost)
@@ -636,7 +715,7 @@ func _fill_insp() -> void:
 		_insp_list.add_child(Kit.label("Сколько рук (пара — %d ДНК)" % one, 17, Art.TEXT, true))
 		_insp_list.add_child(Kit.segmented([["1", "2"], ["2", "4"], ["3", "6"]], str(was), func(id):
 			set_arms.call_deferred(int(id)), 19, 50))
-	if sel.begins_with("leg") or sel.begins_with("arm"):
+	if sel.begins_with("leg") or sel.begins_with("arm") or sel.begins_with("eye"):
 		_insp_list.add_child(small.call("Обе стороны одинаково: " + ("да" if mirror else "нет"), Art.CARD_BORDER if mirror else Art.CARD, func():
 			mirror = not mirror
 			_refresh.call_deferred()))
@@ -650,8 +729,15 @@ func _fill_insp() -> void:
 	_insp_list.add_child(small.call("Как обычно", Art.CARD_BORDER, func():
 		_snap()
 		if sel == "torso":
-			for k in ["len", "width", "height", "torso", "torso_pitch"]:
+			for k in ["len", "width", "height", "torso", "torso_pitch", "torso_bend"]:
 				evo.land_shape[k] = LandParts.SHAPE[k][0]
+		elif sel == "tail":
+			evo.land_shape.dims.erase("tail")
+			evo.land_shape.tail_curl = 0.0
+			evo.land_shape.tail_pitch = LandParts.SHAPE.tail_pitch[0]
+		elif sel in ["mouth", "horns", "back"]:
+			evo.land_shape.dims.erase(sel)
+			evo.land_shape.rot.erase(sel)
 		else:
 			evo.land_shape.dims.erase(sel)
 			evo.land_shape.place.erase(sel)
@@ -673,8 +759,12 @@ func _fill_insp() -> void:
 # --- действия -------------------------------------------------------------------------
 
 ## Запомнить, как было, — для «Отменить».
+func _state() -> Dictionary:
+	return {"b": evo.land_body.duplicate(), "s": evo.land_shape.duplicate(true), "p": evo.land_paint.duplicate()}
+
 func _snap() -> void:
-	_undo.append({"b": evo.land_body.duplicate(), "s": evo.land_shape.duplicate(true), "p": evo.land_paint.duplicate()})
+	_undo.append(_state())
+	_redo.clear()
 	if _undo.size() > 60:
 		_undo.pop_front()
 	if _undo_btn:
@@ -685,12 +775,94 @@ func _snap() -> void:
 func undo() -> void:
 	if _undo.is_empty():
 		return
-	var u: Dictionary = _undo.pop_back()
+	_redo.append(_state())
+	_restore(_undo.pop_back())
+	changed.emit(true, true)
+	_after_change("Отменил")
+
+## Вернуть отменённое.
+func redo() -> void:
+	if _redo.is_empty():
+		return
+	_undo.append(_state())
+	_restore(_redo.pop_back())
+	changed.emit(true, false)
+	_after_change("Вернул")
+
+func _restore(u: Dictionary) -> void:
 	evo.land_body = u.b
 	evo.land_shape = u.s
 	evo.land_paint = u.p
+	if not _creature.groups.has(sel):
+		sel = ""
+
+## Вид камеры: откуда смотреть (угол вокруг) и как высоко.
+func view(yaw: float, elev: float) -> void:
+	_yaw_to = yaw
+	_elev = elev
+
+## Показать, как существо двигается: шаг, бег, укус, прыжок.
+func anim(kind: String) -> void:
+	match kind:
+		"walk":
+			_run = false
+			_walk_t = 4.0
+		"run":
+			_run = true
+			_walk_t = 3.0
+		"bite":
+			_bites = 3
+			_bite_in = 0.0
+		"jump":
+			_jump_t = 0.0
+	changed.emit(true, false)
+
+## Сколько ног или глаз. Ноги и глаза по одному — каждый со своим местом.
+func set_count(s_: String, n: int) -> void:
+	_snap()
+	var r := evo.land_set_count(s_, n)
+	changed.emit(r.ok, false)
+	if not r.ok:
+		_undo.pop_back()
+	_after_change(r.message)
+	if r.ok and not _creature.groups.has(sel):
+		select(_default_sel(s_))
+		_refresh()
+
+## Убрать одну ногу или глаз (и парную, если «обе стороны»): следующие сдвигаются.
+func remove_one(key: String) -> void:
+	var s_ := _slot_of(key)
+	var pre := "leg" if s_ == "legs" else "eye"
+	var n := _creature.leg_count if s_ == "legs" else _creature.eye_count
+	var gone := [int(key.substr(3))]
+	var pk := _pair(key)
+	if mirror and pk != "" and int(pk.substr(3)) < n:
+		gone.append(int(pk.substr(3)))
+	if n - gone.size() < 1:
+		_toast("Хотя бы одна должна остаться — или сними целиком")
+		return
+	_snap()
+	var sh: Dictionary = evo.land_shape
+	var keep_dims := []
+	var keep_place := []
+	for i in n:
+		if gone.has(i):
+			continue
+		keep_dims.append(sh.dims.get("%s%d" % [pre, i]))
+		keep_place.append(sh.place.get("%s%d" % [pre, i]))
+	for i in n:
+		sh.dims.erase("%s%d" % [pre, i])
+		sh.place.erase("%s%d" % [pre, i])
+	for j in keep_dims.size():
+		if keep_dims[j] != null:
+			sh.dims["%s%d" % [pre, j]] = keep_dims[j]
+		if keep_place[j] != null:
+			sh.place["%s%d" % [pre, j]] = keep_place[j]
+	sh["leg_n" if s_ == "legs" else "eye_n"] = float(n - gone.size())
+	evo.land_shape = LandParts.fix_shape(sh)
+	select("")
 	changed.emit(true, true)
-	_after_change("Отменил")
+	_after_change("Убрано")
 
 ## Сколько пар рук (1–3).
 func set_arms(pairs: int) -> void:
@@ -774,6 +946,17 @@ func try_done() -> void:
 func _input(e: InputEvent) -> void:
 	if not is_visible_in_tree() or _box == null or (_overlay and _overlay.visible):
 		return
+	if e is InputEventScreenTouch or e is InputEventScreenDrag:
+		_finger_at = e.position
+	# Несут часть с карточки — следим за пальцем, отпустили — ставим.
+	if _carry != "":
+		if e is InputEventScreenDrag:
+			_carry_at = e.position
+		elif e is InputEventScreenTouch and not e.pressed:
+			drop_carry.call_deferred(e.position)
+			_fingers.clear()
+			_drag = -1
+		return
 	if e is InputEventScreenTouch:
 		if e.pressed:
 			if _ui_hit(e.position) or _fingers.has(e.index):
@@ -826,7 +1009,9 @@ func _input(e: InputEvent) -> void:
 			if not _tap:
 				_sculpt(_grab, e.relative)
 		elif not _tap:
+			# Вбок — повернуть, вверх-вниз — посмотреть выше или ниже.
 			_yaw -= e.relative.x * 0.01
+			_elev = clampf(_elev + e.relative.y * 0.006, -0.05, 1.4)
 			_yaw_to = 1000.0
 
 func _finger_gap() -> float:
@@ -852,7 +1037,7 @@ func _process(delta: float) -> void:
 	var vel := Vector3.ZERO
 	if _walk_t > 0.0:
 		_walk_t -= delta
-		var spd := 2.2 * float(LandParts.stats(evo.land_body, evo.land_shape).speed)
+		var spd := 2.2 * float(LandParts.stats(evo.land_body, evo.land_shape).speed) * (2.2 if _run else 1.0)
 		_walk_a += delta * spd / 2.2
 		var next := Vector3(sin(_walk_a) * 2.2, 0.0, cos(_walk_a) * 2.2)
 		vel = (next - _pos) / maxf(delta, 0.001)
@@ -866,7 +1051,21 @@ func _process(delta: float) -> void:
 		_heading = lerp_angle(_heading, atan2(to.x, to.z), 1.0 - exp(-6.0 * delta))
 	else:
 		_heading = lerp_angle(_heading, 0.0, 1.0 - exp(-3.0 * delta))
-	_creature.update(delta, _pos, _heading, vel)
+	# Прыжок — дважды, радостно; укус — три броска подряд.
+	var jy := 0.0
+	if _jump_t >= 0.0:
+		_jump_t += delta
+		var q := fmod(_jump_t, 0.7) / 0.7
+		jy = 4.0 * 0.7 * q * (1.0 - q)
+		if _jump_t >= 1.4:
+			_jump_t = -1.0
+	if _bites > 0:
+		_bite_in -= delta
+		if _bite_in <= 0.0:
+			_bites -= 1
+			_bite_in = 0.35
+			_creature.lunge()
+	_creature.update(delta, _pos + Vector3(0, jy, 0), _heading, vel)
 	# Камера — чтобы существо было целиком и там, где его не закрывает интерфейс.
 	var free := _free_rect()
 	# Свободного места меньше — чуть отъехать, но не так, чтобы существо стало крошкой:
@@ -875,7 +1074,7 @@ func _process(delta: float) -> void:
 	var ext := _creature.extent()
 	var dist := ((6.0 if _walk_t > 0.0 or _pos.length() > 0.3 else 2.6) + ext * 1.45) * fit * _zoom
 	var target := Vector3(0, clampf(ext * 0.35, 0.5, 2.4), 0)
-	var want := target + Vector3(sin(_yaw) * dist, 0.6 + dist * 0.2, cos(_yaw) * dist)
+	var want := target + Vector3(sin(_yaw) * cos(_elev), sin(_elev), cos(_yaw) * cos(_elev)) * dist
 	_cam.position = _cam.position.lerp(want, 1.0 - exp(-5.0 * delta)) if _cam.position != Vector3.ZERO else want
 	_cam.look_at(target, Vector3.UP)
 	# Сдвиг кадра: центр существа — в середину свободного места.
@@ -1016,13 +1215,17 @@ func _slot_of(key: String) -> String:
 		return "legs"
 	if key.begins_with("arm"):
 		return "arms"
+	if key.begins_with("eye"):
+		return "eyes"
 	return {"torso": "torso", "head": "torso", "mouth": "mouth", "eyes": "eyes", "horns": "head", "back": "back", "tail": "tail"}.get(key, "")
 
 ## Обычное значение ползунка — для отметки на дорожке.
 func default_value(key: String) -> float:
 	if key.begins_with("place:"):
 		var q := key.split(":")
-		return float(LandParts.default_place(q[1], _creature.leg_count, float(evo.land_shape.get("torso_pitch", 0.0)))[int(q[2])])
+		return float(LandParts.default_place(q[1], _creature.leg_count, float(evo.land_shape.get("torso_pitch", 0.0)), _creature.eye_count)[int(q[2])])
+	if key.begins_with("rot:"):
+		return 0.0
 	if LandParts.SHAPE.has(key):
 		return float(LandParts.SHAPE[key][0])
 	return 1.0
@@ -1034,6 +1237,8 @@ func _default_sel(s: String) -> String:
 			return "leg0" if evo.land_body.has("legs") else ""
 		"arms":
 			return "arm1" if evo.land_body.has("arms") else ""
+		"eyes":
+			return "eye1" if _creature.eye_count > 1 else ("eye0" if _creature.eye_count == 1 else "")
 		"head":
 			return "horns" if evo.land_body.has("head") else ""
 		"skin", "paint":
@@ -1047,11 +1252,17 @@ func sel_name(key: String) -> String:
 	if key.begins_with("leg"):
 		var i := int(key.substr(3))
 		var n := _creature.leg_count
-		var side := "левая" if i % 2 == 0 else "правая"
+		var sd := LandParts.leg_side(i, n)
+		var side := "посередине" if sd == 0.0 else ("левая" if sd < 0.0 else "правая")
 		if n <= 2:
 			return "Нога — " + side
-		var row: String = ["передняя", "средняя" if n == 6 else "задняя", "задняя"][i / 2]
-		return "Нога — %s %s" % [row, side]
+		return "Нога %d из %d — %s" % [i + 1, n, side]
+	if key.begins_with("eye"):
+		var i := int(key.substr(3))
+		var n := _creature.eye_count
+		if n % 2 == 1 and i == n - 1:
+			return "Глаз — средний"
+		return "Глаз — %s%s" % ["левый" if i % 2 == 0 else "правый", "" if n <= 2 else ", %d-я пара" % (i / 2 + 1)]
 	if key.begins_with("arm"):
 		var i := int(key.substr(3))
 		var side := "левая" if i % 2 == 0 else "правая"
@@ -1063,10 +1274,156 @@ func sel_name(key: String) -> String:
 ## Пара части: левая ↔ правая нога того же ряда, левая ↔ правая рука.
 func _pair(key: String) -> String:
 	if key.begins_with("leg"):
-		return "leg%d" % (int(key.substr(3)) ^ 1)
+		var i := int(key.substr(3))
+		var n := _creature.leg_count
+		if LandParts.leg_side(i, n) == 0.0 or (i ^ 1) >= n:
+			return ""
+		return "leg%d" % (i ^ 1)
 	if key.begins_with("arm"):
 		return "arm%d" % (int(key.substr(3)) ^ 1)
+	if key.begins_with("eye"):
+		var i := int(key.substr(3))
+		var n := _creature.eye_count
+		if n % 2 == 1 and i == n - 1:
+			return ""
+		return "eye%d" % (i ^ 1) if (i ^ 1) < n else ""
 	return ""
+
+## Точка на поверхности туловища под пальцем: {t, a, side} или пусто (мимо).
+func surface_hit(p: Vector2) -> Dictionary:
+	if _creature._sp.is_empty():
+		return {}
+	var best := {}
+	var best_d := 90.0
+	var cam_side := signf((_creature.global_transform.affine_inverse() * _cam.global_position).x)
+	for side in [cam_side if cam_side != 0.0 else 1.0, -cam_side if cam_side != 0.0 else -1.0]:
+		for ti in 26:
+			var t := ti / 25.0
+			for ai in 21:
+				var a := -1.45 + ai * 0.145
+				var w: Vector3 = _creature.global_transform * _creature._b(_creature._surf(t, a, side))
+				if _cam.is_position_behind(w):
+					continue
+				var dd := _cam.unproject_position(w).distance_to(p)
+				if dd < best_d:
+					best_d = dd
+					best = {"t": t, "a": a, "side": side}
+		if not best.is_empty():
+			return best
+	return best
+
+## Точка на голове под пальцем: {yaw, pitch} или пусто.
+func head_hit(p: Vector2) -> Dictionary:
+	var hn: Node3D = _creature._head_node
+	if hn == null:
+		return {}
+	var best := {}
+	var best_d := 80.0
+	var hr := 0.39 * _creature.size * 0.9
+	for yi in 33:
+		var yaw := -2.4 + yi * 0.15
+		for pi_ in 21:
+			var pitch := -1.0 + pi_ * 0.115
+			var dir := Vector3(sin(yaw) * cos(pitch), sin(pitch), cos(yaw) * cos(pitch))
+			var w := hn.global_transform * (dir * hr)
+			var toward_cam := (_cam.global_position - w).dot(hn.global_transform.basis * dir) > 0.0
+			if not toward_cam or _cam.is_position_behind(w):
+				continue
+			var dd := _cam.unproject_position(w).distance_to(p)
+			if dd < best_d:
+				best_d = dd
+				best = {"yaw": yaw, "pitch": pitch}
+	return best
+
+## Начали нести часть с карточки (повели пальцем вверх из ряда).
+func begin_carry(id: String, at: Vector2) -> void:
+	_carry = id
+	_carry_at = at
+	changed.emit(true, false)
+
+## Отпустили часть над существом: ставится туда. Ноги, руки, глаза — ещё одна (или пара)
+## прямо в это место.
+func drop_carry(at: Vector2) -> void:
+	var id := _carry
+	_carry = ""
+	if id == "" or _ui_hit(at):
+		return
+	var s_: String = LandParts.PARTS[id].slot
+	var local := at - _box.global_position
+	var had: bool = evo.land_body.get(s_, "") == id
+	_snap()
+	var msg := ""
+	if not had:
+		var r := evo.land_put(id)
+		if not r.ok:
+			_undo.pop_back()
+			changed.emit(false, false)
+			_toast(r.message)
+			return
+		msg = r.message
+		_rebuild_creature(false)
+	var sh: Dictionary = evo.land_shape
+	match s_:
+		"legs", "arms":
+			var hit := surface_hit(local)
+			if not hit.is_empty():
+				var add := 2 if mirror else 1
+				var key := ""
+				if s_ == "legs":
+					var n := _creature.leg_count
+					if had and n + add <= 8:
+						sh.leg_n = float(n + add)
+						key = "leg%d" % n
+					elif not had:
+						sh.leg_n = float(add)
+						key = "leg0"
+				else:
+					var pairs := LandParts.arm_pairs(sh)
+					if had and pairs < 3:
+						sh.arm_pairs = float(pairs + 1)
+						key = "arm%d" % (pairs * 2)
+					elif not had:
+						key = "arm0"
+				if key != "":
+					var i := int(key.substr(3))
+					var side_key := key if (float(hit.side) < 0.0) == (i % 2 == 0) else "%s%d" % [key.substr(0, 3), i + 1]
+					sh.place[side_key] = [hit.t, hit.a, 0.0]
+					var other := "%s%d" % [key.substr(0, 3), i ^ 1 if side_key == key else i]
+					if add == 2:
+						sh.place[other] = [hit.t, hit.a, 0.0]
+					evo.land_shape = LandParts.fix_shape(sh)
+					if evo.land_free() < 0:
+						_restore(_undo.pop_back())
+						changed.emit(false, false)
+						_after_change("Не хватает ДНК")
+						return
+					msg = "Поставлено сюда"
+					sel = side_key
+		"eyes":
+			var hh := head_hit(local)
+			if not hh.is_empty():
+				var n := _creature.eye_count if had else 0
+				var add := 1 if (not mirror or absf(float(hh.yaw)) < 0.15) else 2
+				if n + add <= 6:
+					sh.eye_n = float(n + add)
+					sh.place["eye%d" % n] = [hh.yaw, hh.pitch, 1.0]
+					if add == 2:
+						sh.place["eye%d" % (n + 1)] = [-float(hh.yaw), hh.pitch, 1.0]
+					evo.land_shape = LandParts.fix_shape(sh)
+					if evo.land_free() < 0:
+						_restore(_undo.pop_back())
+						changed.emit(false, false)
+						_after_change("Не хватает ДНК")
+						return
+					msg = "Глаз — сюда"
+					sel = "eye%d" % n
+	changed.emit(true, false)
+	_rebuild_creature(false)
+	if not _creature.groups.has(sel):
+		select(_default_sel(s_))
+	else:
+		select(sel)
+	_after_change(msg)
 
 ## Кружки выбранной части, которые сейчас есть на существе: [[ручка, вид, точка на экране]].
 func handles() -> Array:
@@ -1078,6 +1435,16 @@ func handles() -> Array:
 		list = [["place:" + sel, "move"], ["len:" + sel, "updown"], ["thick:" + sel, "thick"], ["feet:" + sel, "size"]]
 	elif sel.begins_with("arm"):
 		list = [["place:" + sel, "move"], ["hand:" + sel, "move"], ["thick:" + sel, "thick"]]
+	elif sel.begins_with("eye") and _creature.groups.has(sel):
+		# Глаз: кружок на нём самом — тянешь по голове.
+		var ms: Array = _creature.groups[sel]
+		var c := Vector3.ZERO
+		for mi in ms:
+			c += (mi as Node3D).global_position
+		c /= maxf(ms.size(), 1)
+		if not _cam.is_position_behind(c):
+			out.append(["place:" + sel, "move", _cam.unproject_position(c), c])
+		return out
 	for h in list:
 		var id: String = h[0]
 		if not _creature.anchors.has(id):
@@ -1119,15 +1486,30 @@ func _sculpt(id: String, rel: Vector2) -> void:
 			var dm: Array = LandParts.dim(sh, part).duplicate()
 			match kind:
 				"place":
-					# Двигаешь основание по телу: вбок на экране — вдоль туловища, вверх-вниз —
-					# выше или ниже по боку.
-					var pl: Array = LandParts.place(sh, part, _creature.leg_count).duplicate()
-					var sp: Array = _creature._sp
-					var L: float = maxf(sp[sp.size() - 1].z - sp[0].z, 0.2)
-					var at := LandParts.spine_at(sp, float(pl[0]))
-					pl[0] = float(pl[0]) + d.z / L
-					pl[1] = float(pl[1]) + d.y / maxf(at.ry, 0.1)
-					sh.place[part] = pl
+					# Основание едет по телу за пальцем (глаз — по голове). Парная часть —
+					# зеркально.
+					if part != key:
+						continue
+					var pl: Array = LandParts.place(sh, key, _creature.leg_count, _creature.eye_count).duplicate()
+					if key.begins_with("eye"):
+						var hh := head_hit(_finger_at - _box.global_position)
+						if hh.is_empty():
+							continue
+						pl[0] = hh.yaw
+						pl[1] = hh.pitch
+					else:
+						var hit := surface_hit(_finger_at - _box.global_position)
+						if hit.is_empty():
+							continue
+						pl[0] = hit.t
+						pl[1] = hit.a
+					sh.place[key] = pl
+					var pk := _pair(key)
+					if mirror and pk != "":
+						var pp: Array = LandParts.place(sh, pk, _creature.leg_count, _creature.eye_count).duplicate()
+						pp[0] = -float(pl[0]) if key.begins_with("eye") else float(pl[0])
+						pp[1] = pl[1]
+						sh.place[pk] = pp
 				"len":
 					var base := 1.0
 					for leg in _creature._legs:
@@ -1206,7 +1588,9 @@ func _sculpt(id: String, rel: Vector2) -> void:
 func shape_value(key: String) -> float:
 	if key.begins_with("place:"):
 		var q := key.split(":")
-		return float(LandParts.place(evo.land_shape, q[1], _creature.leg_count)[int(q[2])])
+		return float(LandParts.place(evo.land_shape, q[1], _creature.leg_count, _creature.eye_count)[int(q[2])])
+	if key.begins_with("rot:"):
+		return float(evo.land_shape.rot.get(key.substr(4), 0.0))
 	if key.begins_with("dim:"):
 		var q := key.split(":")
 		return float(LandParts.dim(evo.land_shape, q[1])[int(q[2])])
@@ -1221,9 +1605,13 @@ func set_shape_value(key: String, v: float) -> void:
 		for part in [q[1], _pair(q[1]) if mirror else ""]:
 			if part == "":
 				continue
-			var pl: Array = LandParts.place(sh, part, _creature.leg_count).duplicate()
-			pl[int(q[2])] = v
+			var pl: Array = LandParts.place(sh, part, _creature.leg_count, _creature.eye_count).duplicate()
+			# У глаз «вокруг головы» зеркалится: левый — влево, правый — вправо.
+			var flip: bool = part != q[1] and part.begins_with("eye") and q[2] == "0"
+			pl[int(q[2])] = -v if flip else v
 			sh.place[part] = pl
+	elif key.begins_with("rot:"):
+		sh.rot[key.substr(4)] = v
 	elif key.begins_with("dim:"):
 		var q := key.split(":")
 		for part in [q[1], _pair(q[1]) if mirror else ""]:
@@ -1413,6 +1801,18 @@ class HandleLayer:
 			return
 		var font := get_theme_default_font()
 		var t := Time.get_ticks_msec() / 1000.0
+		if ed._carry != "":
+			# Несомая часть под пальцем.
+			var at: Vector2 = ed._carry_at + Vector2(0, -60)
+			draw_circle(at, 46, Color(0.05, 0.08, 0.1, 0.8))
+			draw_arc(at, 46, 0, TAU, 40, Art.GREEN, 3, true)
+			var cc: Array = ed._colors()
+			LandIcons.draw(self, ed._carry, Rect2(at - Vector2(32, 32), Vector2(64, 64)), cc[0], cc[1])
+			var hint := "Отпусти на существе"
+			var w := font.get_string_size(hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 18).x
+			draw_string_outline(font, at + Vector2(-w / 2.0, 72), hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, 6, Color(0, 0, 0, 0.6))
+			draw_string(font, at + Vector2(-w / 2.0, 72), hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Art.TEXT)
+			return
 		for h in ed.handles():
 			var p: Vector2 = h[2]
 			var kind: String = h[1]
@@ -1485,11 +1885,13 @@ class ValueSlider:
 		var font := get_theme_default_font()
 		draw_string(font, Vector2(16, 24), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 19, Art.TEXT)
 		var num := "×" + LandParts._num(snappedf(v, 0.05))
-		if key.begins_with("place:") and key.ends_with(":0"):
+		if key.begins_with("place:eye") and key.ends_with(":2"):
+			num = "×" + LandParts._num(snappedf(v, 0.05))
+		elif key.begins_with("place:") and key.ends_with(":0") and not key.begins_with("place:eye"):
 			num = "%d%%" % int(round(v * 100.0))
 		elif key.begins_with("place:"):
 			num = "%d°" % int(round(rad_to_deg(v)))
-		elif key.ends_with("pitch"):
+		elif key.begins_with("rot:") or key.ends_with("curl") or key.ends_with("pitch"):
 			num = "%d°" % int(round(rad_to_deg(v)))
 		elif angle:
 			num = ("%+.1f" % v).replace(".", ",")
@@ -1622,6 +2024,9 @@ class CatButton:
 class Tile:
 	extends Control
 	signal pressed
+	var ed: Control
+	var _press := Vector2.ZERO
+	var _carried := false
 	var part := ""
 	var ui_icon := ""
 	var c := Color.WHITE
@@ -1637,8 +2042,20 @@ class Tile:
 		mouse_filter = Control.MOUSE_FILTER_STOP
 
 	func _gui_input(e: InputEvent) -> void:
-		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT and not e.pressed:
-			var sc := get_parent().get_parent() as ScrollContainer
+		var sc := get_parent().get_parent() as ScrollContainer
+		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT and e.pressed:
+			_press = e.position
+			_carried = false
+		elif e is InputEventMouseMotion and (e.button_mask & MOUSE_BUTTON_MASK_LEFT) and not _carried and ed and part != "" and part != "torso":
+			# Повёл карточку вверх — несёшь часть на существо.
+			var dv: Vector2 = e.position - _press
+			if -dv.y > 28.0 and absf(dv.y) > absf(dv.x) and not (sc and sc.get("_dragging")):
+				_carried = true
+				ed.begin_carry(part, get_global_mouse_position())
+		elif e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT and not e.pressed:
+			if _carried:
+				_carried = false
+				return
 			if sc and sc.get("_dragging"):
 				return
 			accept_event()

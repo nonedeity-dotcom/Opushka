@@ -344,3 +344,33 @@ func test_место_рук_и_ног(c) -> void:
 	e.land_shape.place = {"arm1": [0.4, 0.8, -0.3]}
 	var back := Evolution.from_dict(JSON.parse_string(JSON.stringify(e.to_dict())))
 	c.eq("место сохраняется", back.land_shape.place.arm1, [0.4, 0.8, -0.3])
+
+func test_число_ног_и_глаз(c) -> void:
+	var e := _evo()
+	e.dna_total = 400.0
+	e.land_start()
+	e.land_put("legs4")
+	var free := e.land_free()
+	c.ok("пять ног", e.land_set_count("legs", 5).ok and LandParts.leg_count(e.land_body, e.land_shape) == 5)
+	c.eq("пятая нога — за свою цену", e.land_free(), free - (int(round(20.0 * 5 / 4)) - 20))
+	c.eq("непарная — посередине", LandParts.leg_side(4, 5), 0.0)
+	c.ok("одна нога — прыгает медленнее", LandParts.stats({"torso": "torso", "legs": "legs2"}, {"leg_n": 1.0}).speed < LandParts.stats({"torso": "torso", "legs": "legs2"}, {}).speed)
+	e.land_put("legs6")
+	c.eq("сменил вид ног — число обычное", LandParts.leg_count(e.land_body, e.land_shape), 6)
+	c.ok("три глаза", e.land_set_count("eyes", 3).ok and LandParts.eye_count(e.land_body, e.land_shape) == 3)
+	c.ok("больше глаз — видно дальше", LandParts.stats(e.land_body, e.land_shape).sight > LandParts.stats(e.land_body, LandParts.default_shape()).sight)
+	e.dna_total = 0.0
+	c.ok("восемь ног не по карману", not e.land_set_count("legs", 8).ok)
+	var back := Evolution.from_dict(JSON.parse_string(JSON.stringify(e.to_dict())))
+	c.eq("число глаз сохраняется", LandParts.eye_count(back.land_body, back.land_shape), 3)
+
+func test_поворот_и_изгиб(c) -> void:
+	var sh := LandParts.fix_shape({"rot": {"horns": 5.0, "wings": 1.0}, "torso_bend": 0.8, "tail_curl": 9.0,
+		"place": {"eye2": [0.3, 1.2, 1.5], "eye9": [0, 0, 1]}})
+	c.eq("поворот в пределах", sh.rot.horns, 1.2)
+	c.ok("чужого поворота нет", not sh.rot.has("wings"))
+	c.eq("изгиб хвоста в пределах", sh.tail_curl, LandParts.SHAPE.tail_curl[2])
+	c.eq("место глаза", sh.place.eye2, [0.3, 1.2, 1.5])
+	c.ok("чужого глаза нет", not sh.place.has("eye9"))
+	var sp := LandParts.spine(sh, 1.0)
+	c.ok("горб: середина выше концов", float(sp[2].y) > float(sp[0].y) + 0.2 and absf(float(sp[0].y)) < 0.01)

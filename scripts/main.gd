@@ -1223,6 +1223,19 @@ func _run_script() -> void:
 		"lpick":
 			land_editor.select(p[1])
 			land_editor._refresh()
+		"lcount":
+			var q := p[1].split(",")
+			land_editor.set_count(q[0], int(q[1]))
+		"lcarry":
+			# Пронести часть с карточки и отпустить в точке экрана: lcarry:id,x,y
+			var q := p[1].split(",")
+			land_editor.begin_carry(q[0], Vector2(float(q[1]), float(q[2])))
+			land_editor.drop_carry(Vector2(float(q[1]), float(q[2])))
+		"lview":
+			var q := p[1].split(",")
+			land_editor.view(float(q[0]), float(q[1]))
+		"lanim":
+			land_editor.anim(p[1])
 		"larms":
 			land_editor.set_arms(int(p[1]))
 		"lfold":
