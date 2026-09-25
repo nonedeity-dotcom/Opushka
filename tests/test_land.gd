@@ -53,7 +53,13 @@ func test_соседи(c) -> void:
 		l.step(1.0 / 30.0, Vector2.ZERO)
 	c.ok("бродят", l.mobs.any(func(m): return starts.has(m.uid) and (m.pos as Vector3).distance_to(starts[m.uid]) > 5.0))
 	c.ok("и не лезут в море", l.mobs.all(func(m): return not l.terrain.is_water(m.pos.x, m.pos.z)))
-	c.ok("есть все трое: бродяги, стаи, отшельники", ["wander", "pack", "hermit"].all(func(k): return l.mobs.any(func(m): return m.kind == k)))
+	c.ok("есть все трое: стаи, отшельники, гиганты", ["pack", "hermit", "giant"].all(func(k): return l.mobs.any(func(m): return m.kind == k)))
+	c.ok("твоего размера — только стаи", l.mobs.all(func(m): return m.kind == "pack" or m.size >= 1.8))
+	c.ok("отшельники вдвое крупнее, гиганты — огромные", l.mobs.all(func(m): return m.kind != "hermit" or (m.size >= 1.8 and m.size <= 2.4)) and l.mobs.all(func(m): return m.kind != "giant" or m.size >= 3.5))
+	var kinds := {}
+	for m in l.mobs:
+		kinds[m.sp] = true
+	c.ok("разных видов много (%d)" % kinds.size(), kinds.size() >= 10)
 
 ## Поставить тебя рядом с точкой, лицом к ней.
 func _face(l: Land, at: Vector3, gap: float) -> void:
@@ -292,32 +298,126 @@ func test_находки(c) -> void:
 	l._find("relic", l.pos)
 	c.eq("всё найдено — ДНК", l.dna - dna, 20.0)
 
-func test_хищник_и_туша(c) -> void:
+## Хищная стая и травоядная: номера гнёзд.
+func _pair_nests(l: Land) -> Array:
+	var meat := -1
+	var plant := -1
+	for i in l.nests.size():
+		var diet: String = LandSpecies.SPECIES[l.nests[i].sp].diet
+		if diet == "meat" and not LandSpecies.SPECIES[l.nests[i].sp].get("night", false) and meat < 0:
+			meat = i
+		elif diet == "plant" and plant < 0:
+			plant = i
+	return [meat, plant]
+
+## Встать подальше от всех (чтобы никто тебя не замечал).
+func _away(l: Land) -> void:
+	l.pos = l._land_point(0.0, 200.0)
+	for tries in 200:
+		if l.mobs.all(func(m): return (m.pos as Vector3).distance_to(l.pos) > 40.0):
+			return
+		l.pos = l._land_point(0.0, 200.0)
+
+func test_хищная_стая_и_туша(c) -> void:
 	var l := _land()
-	l.day = 0.2
-	var hunter: Dictionary = l.mobs.filter(func(m): return m.kind == "hunter")[0]
-	var prey: Dictionary = l.mobs.filter(func(m): return m.kind == "wander")[0]
+	l.day = 0.1
+	var pn := _pair_nests(l)
+	var hunter: Dictionary = l.mobs.filter(func(m): return m.nest == pn[0] and not m.leader)[0]
+	var prey: Dictionary = l.mobs.filter(func(m): return m.nest == pn[1] and not m.leader)[0]
 	l.mobs = [hunter, prey]
-	prey.pos = hunter.pos + Vector3(4.0, 0, 0)
-	if l.terrain.is_water(prey.pos.x, prey.pos.z):
-		prey.pos = hunter.pos
-	l.pos = l._land_point(0.0, 150.0)
-	while l.pos.distance_to(hunter.pos) < 60.0:
-		l.pos = l._land_point(0.0, 150.0)
+	# Сборщик ушёл далеко от своего гнезда — прямо к хищнику.
+	prey.pos = l._near_land(hunter.pos, 5.0)
+	prey.task = "forage"
+	prey.target = {"t": "bush", "i": 0}
+	hunter.task = "hunt"
+	hunter.prey = prey.uid
+	_away(l)
 	var killed := false
 	for i in 30 * 40:
 		l.step(1.0 / 30.0, Vector2.ZERO)
 		if not l.carcasses.is_empty():
 			killed = true
 			break
-	c.ok("хищник загрыз бродягу — осталась туша", killed)
+	c.ok("хищная стая загрызла сборщика — осталась туша", killed)
 	c.ok("ДНК за чужую добычу не дают", l.dna == 0.0)
-	var cc: Dictionary = l.carcasses[0]
+	var food0: int = l.nests[pn[0]].food
+	var stored := false
+	for i in 30 * 60:
+		l.step(1.0 / 30.0, Vector2.ZERO)
+		if int(l.nests[pn[0]].food) > food0:
+			stored = true
+			break
+	c.ok("поела и унесла мясо в своё гнездо", stored)
+	var cc: Dictionary = {"uid": 999, "pos": l.pos + Vector3(1.0, 0, 0), "meat": 3, "t": 60.0, "size": 1.0}
+	l.carcasses = [cc]
 	l.mobs = []
 	l.bushes = []
-	_face(l, cc.pos, 1.2)
+	l.drops = []
 	l.step(1.0 / 30.0, Vector2.ZERO)
 	c.ok("доел тушу — +ДНК", l.dna > 0.0 and cc.meat == 2 and l.events.any(func(x): return x.t == "meat"))
+
+func test_стая_носит_еду(c) -> void:
+	var l := _land()
+	l.day = 0.1
+	var pn := _pair_nests(l)
+	var n: int = pn[1]
+	_only(l, func(m): return m.nest == n)
+	_away(l)
+	var nest: Dictionary = l.nests[n]
+	var food0: int = nest.food
+	var far := 0.0
+	var carried := false
+	for i in 30 * 90:
+		l.step(1.0 / 30.0, Vector2.ZERO)
+		for m in l.mobs:
+			far = maxf(far, (m.pos as Vector3).distance_to(nest.pos))
+			if m.carry == "fruit":
+				carried = true
+		if int(nest.food) > food0:
+			break
+	c.ok("уходят от гнезда за едой (до %.0f м)" % far, far > Land.NEST_ROAM + 3.0)
+	c.ok("несут плоды в пасти", carried)
+	c.ok("и складывают в гнездо", int(nest.food) > food0)
+	nest.food = Land.FOOD_MAX
+	var size0 := l.mobs.size()
+	nest.respawn = 0.0
+	l.step(1.0 / 30.0, Vector2.ZERO)
+	c.ok("из запасов стая растёт", l.mobs.size() == size0 + 1 or size0 >= Land.MAX_PACK)
+	var dna := l.dna
+	nest.eggs = 0
+	nest.food = 2
+	_face(l, nest.pos, 1.0)
+	l.step(1.0 / 30.0, Vector2.ZERO)
+	c.ok("стащил из запасов — +ДНК и стая злится", l.dna > dna and l.events.any(func(x): return x.t == "stash") and l.mobs.all(func(m): return m.angry > 0.0))
+
+func test_плоды_на_дереве(c) -> void:
+	var l := _land()
+	l.mobs = []
+	var t: Dictionary = l.trees.filter(func(x): return x.kind == "fruit")[0]
+	c.ok("на плодовом дереве висят плоды", t.fruits == Land.TREE_FRUITS)
+	_face(l, t.pos, Land.trunk(t) + 1.2)
+	l.bushes = []
+	l.step(1.0 / 30.0, Vector2.ZERO, true)
+	c.ok("ударил дерево — плоды упали", l.events.any(func(x): return x.t == "fruit_fall") and t.fruits < Land.TREE_FRUITS and not l.drops.is_empty())
+	var d: Dictionary = l.drops[0]
+	var dna := l.dna
+	l.pos = d.pos
+	l.step(1.0 / 30.0, Vector2.ZERO)
+	c.ok("подобрал упавший плод — +ДНК", l.dna > dna and not l.drops.has(d))
+	var oak: Dictionary = l.trees.filter(func(x): return x.kind != "fruit")[0]
+	_face(l, oak.pos, Land.trunk(oak) + 1.2)
+	var n := l.drops.size()
+	l.bite_cd = 0.0
+	l.step(1.0 / 30.0, Vector2.ZERO, true)
+	c.ok("с простого дерева ничего не падает, но оно качается", oak.hit > 0.0 and l.drops.size() == n)
+	var toward := Vector2(oak.pos.x - l.pos.x, oak.pos.z - l.pos.z).normalized()
+	for i in 30 * 2:
+		l.step(1.0 / 30.0, toward)
+	c.ok("сквозь ствол не пройти", Vector2(l.pos.x - oak.pos.x, l.pos.z - oak.pos.z).length() >= Land.trunk(oak) + 0.4)
+	var ter := Terrain.new(5)
+	var plain := ter.build_mesh()
+	var worn := ter.build_mesh([{"a": Vector2(0, 0), "b": Vector2(30, 0), "r": 4.0}])
+	c.ok("тропа протоптана — земля другого цвета", plain.surface_get_arrays(0)[Mesh.ARRAY_COLOR] != worn.surface_get_arrays(0)[Mesh.ARRAY_COLOR])
 
 func test_вожак(c) -> void:
 	var l := _land()
@@ -325,7 +425,7 @@ func test_вожак(c) -> void:
 	var boss: Array = l.mobs.filter(func(m): return m.leader)
 	c.eq("у стаи один вожак", boss.size(), 1)
 	var lead: Dictionary = boss[0]
-	c.ok("вожак крупнее и крепче", lead.size > 1.2 and lead.max_hp > 14.0 * 1.2 * 1.2 * 2.0)
+	c.ok("вожак крупнее и крепче", l.mobs.all(func(m): return m == lead or (lead.size > m.size and lead.max_hp > m.max_hp * 1.5)))
 	lead.hp = 1.0
 	_face(l, lead.pos, float(lead.size) * 0.7 + 0.8)
 	l.step(1.0 / 30.0, Vector2.ZERO, true)
@@ -343,36 +443,42 @@ func test_день_и_ночь(c) -> void:
 	c.eq("ночь — темно", Land.daylight(0.75), 0.0)
 	c.ok("закат — между", Land.daylight(0.6) > 0.0 and Land.daylight(0.6) < 1.0)
 	var l := _land()
-	l.day = 0.75
-	var w: Dictionary = l.mobs.filter(func(m): return m.kind == "wander")[0]
-	var hunter: Dictionary = l.mobs.filter(func(m): return m.kind == "hunter")[0]
-	l.mobs = [w]
-	l.pos = l._land_point(0.0, 150.0)
-	while l.pos.distance_to(w.pos) < 30.0:
-		l.pos = l._land_point(0.0, 150.0)
-	var at: Vector3 = w.pos
-	for i in 30 * 5:
+	l.day = 0.72
+	var pn := _pair_nests(l)
+	var n: int = pn[1]
+	_only(l, func(m): return m.nest == n)
+	_away(l)
+	for i in 30 * 20:
 		l.step(1.0 / 30.0, Vector2.ZERO)
-	c.ok("ночью бродяга спит", (w.pos as Vector3).distance_to(at) < 0.5)
-	# Хищник: ночью бросается издалека, днём — нет.
-	for night in [true, false]:
+	c.ok("ночью травоядные спят в гнезде", l.mobs.all(func(m): return (m.pos as Vector3).distance_to(l.nests[n].pos) < 5.0 and m.task == "home"))
+	# Ночники: днём спят, ночью выходят на охоту.
+	var night := -1
+	for i in l.nests.size():
+		if LandSpecies.SPECIES[l.nests[i].sp].get("night", false):
+			night = i
+	c.ok("есть ночная стая", night >= 0)
+	for is_night in [false, true]:
 		var l2 := _land()
-		l2.day = 0.75 if night else 0.2
-		var h: Dictionary = l2.mobs.filter(func(m): return m.kind == "hunter")[0]
-		l2.mobs = [h]
-		_face(l2, h.pos, 10.0)
-		var hurt := false
-		for i in 30 * 6:
+		l2.day = 0.72 if is_night else 0.1
+		var ns: Dictionary = l2.nests[night]
+		var hunters: Array = l2.mobs.filter(func(m): return m.nest == night)
+		var prey: Dictionary = l2.mobs.filter(func(m): return m.kind == "pack" and LandSpecies.SPECIES[m.sp].diet == "plant" and not m.leader)[0]
+		prey.pos = l2._near_land(ns.pos, 20.0)
+		prey.task = "forage"
+		l2.mobs = hunters + [prey]
+		_away(l2)
+		var out := false
+		for i in 30 * 20:
 			l2.step(1.0 / 30.0, Vector2.ZERO)
-			if l2.events.any(func(x): return x.t == "hurt"):
-				hurt = true
-		c.ok(("ночью хищник нападает" if night else "днём хищник не трогает, если не подходить"), hurt == night)
+			if hunters.any(func(m): return m.task == "hunt"):
+				out = true
+		c.ok("ночники охотятся ночью" if is_night else "днём ночники спят", out == is_night)
 
 func test_гиганты(c) -> void:
 	var l := _land()
 	var gs: Array = l.mobs.filter(func(m): return m.kind == "giant")
 	c.eq("на острове три гиганта", gs.size(), Land.GIANTS)
-	c.ok("огромные и очень крепкие", gs.all(func(g): return g.size >= 3.0 and g.max_hp > 250.0))
+	c.ok("огромные и очень крепкие", gs.all(func(g): return g.size >= 3.5 and g.max_hp > 300.0))
 	for i in 30 * 30:
 		l.step(1.0 / 30.0, Vector2.ZERO)
 	c.ok("держатся своих мест", gs.all(func(g): return (g.pos as Vector3).distance_to(g.home) < Land.GIANT_HOME + 5.0))

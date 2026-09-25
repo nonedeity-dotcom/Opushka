@@ -375,9 +375,7 @@ func _land_event(e: Dictionary) -> void:
 			sound.play("kill")
 			_buzz(30)
 			if e.kind == "hermit":
-				land_hud.say("Отшельник повержен! +%d ДНК" % int(e.dna))
-			elif e.kind == "hunter":
-				land_hud.say("Хищник повержен! +%d ДНК" % int(e.dna))
+				land_hud.say("%s повержен! +%d ДНК" % [LandSpecies.SPECIES[e.sp].name, int(e.dna)])
 		"death":
 			sound.play("death")
 			_buzz(120)
@@ -404,7 +402,7 @@ func _land_event(e: Dictionary) -> void:
 		"giant_down":
 			sound.play("boss")
 			_buzz(150)
-			land_hud.say("Гигант повержен!")
+			land_hud.say("%s повержен!" % LandSpecies.SPECIES[e.sp].name)
 			_save()
 		"nest_moved":
 			sound.play("place")
@@ -417,6 +415,17 @@ func _land_event(e: Dictionary) -> void:
 			land_hud.say("+%d ДНК — туша" % int(e.dna))
 		"hunt":
 			sound.play("growl", randf_range(1.2, 1.4))
+		"tree_hit":
+			sound.play("hit", randf_range(0.6, 0.75))
+			_buzz(15)
+		"fruit_fall":
+			sound.play("drop", randf_range(0.9, 1.2))
+		"stash":
+			sound.play("eat", randf_range(0.9, 1.1))
+			_buzz(20)
+			land_hud.say("+%d ДНК из запасов стаи — они в ярости!" % int(e.dna))
+		"poisoned":
+			sound.play("poison")
 		"night":
 			land_hud.say("Ночь: хищники видят дальше — лучше в гнездо")
 		"day":
@@ -1262,6 +1271,32 @@ func _run_script() -> void:
 			l.pos = Vector3(float(q[0]), l.terrain.height(float(q[0]), float(q[1])), float(q[1]))
 		"yaw":
 			land_world.cam_yaw = deg_to_rad(float(p[1]))
+		"lcam":
+			# Камера: наклон (градусы) и во сколько раз дальше.
+			var q := p[1].split(",")
+			land_world.cam_pitch = deg_to_rad(float(q[0]))
+			if q.size() > 1:
+				land_world.cam_zoom = float(q[1])
+		"llineup":
+			# Все виды рядами перед тобой (для снимков): стаи, за ними отшельники, дальше гиганты.
+			var l: Land = land_world.land
+			l.frozen = true
+			l.mobs.clear()
+			for row in [["pack", 5.0], ["hermit", 11.0], ["giant", 21.0]]:
+				var ids := LandSpecies.of_tier(row[0])
+				var w := 0.0
+				for sid in ids:
+					w += float(LandSpecies.SPECIES[sid].size[1]) * 2.4
+				var x := -w / 2.0
+				for sid in ids:
+					var sp: Dictionary = LandSpecies.SPECIES[sid]
+					var sz: float = sp.size[1]
+					x += sz * 1.2
+					var at := l.pos + Vector3(x, 0, float(row[1]))
+					at.y = l.terrain.height(at.x, at.z)
+					var m := l._add_mob(row[0], sid, at, sz, sp.colors[0][0], sp.colors[0][1], 0 if row[0] == "pack" else -1)
+					m.heading = PI
+					x += sz * 1.2
 		"lday":
 			# Время суток: 0 — утро, 0,75 — ночь.
 			land_world.land.day = float(p[1])
@@ -1272,6 +1307,15 @@ func _run_script() -> void:
 			var at := Vector3.ZERO
 			if q[0] == "relic":
 				at = l.relics[0].pos
+			elif q[0] == "nest":
+				at = l.nests[int(q[2]) if q.size() > 2 else 0].pos
+			elif q[0] == "tree":
+				at = l.trees.filter(func(t): return t.kind == "fruit")[0].pos
+			elif q[0] == "carrier":
+				for m in l.mobs:
+					if m.carry != "":
+						at = m.pos
+						break
 			else:
 				for m in l.mobs:
 					if m.kind == q[0]:
@@ -1279,6 +1323,8 @@ func _run_script() -> void:
 						break
 			at += Vector3(float(q[1]) if q.size() > 1 else 6.0, 0, 0)
 			l.pos = Vector3(at.x, l.terrain.height(at.x, at.z), at.z)
+			l.heading = -PI / 2.0  # лицом к тому, к чему подошли
+			land_world.cam_yaw = PI / 2.0 + 0.5
 		"landbite":
 			land_world.bite_pressed = true
 		"lput":
@@ -1317,6 +1363,8 @@ func _run_script() -> void:
 			land_editor._after_change("")
 		"ltoggle":
 			land_editor.toggle_part(p[1])
+		"lcamprint":
+			print("КАМЕРА: наклон %.0f°, поворот %.2f, дальше ×%.2f" % [rad_to_deg(land_world.cam_pitch), land_world.cam_yaw, land_world.cam_zoom])
 		"lplace_print":
 			print("МЕСТО: ", land_editor.evo.land_shape.place)
 		"lhit":

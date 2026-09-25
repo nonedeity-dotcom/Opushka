@@ -226,6 +226,7 @@ func _process(delta: float) -> void:
 			g = m
 	_boss.visible = g != null and not intro
 	if g != null:
+		_boss_name.text = LandSpecies.SPECIES[g.sp].name
 		_boss_line.k = g.hp / g.max_hp
 		_boss_line.queue_redraw()
 	# Окаменелость рядом — подсказка.
@@ -267,7 +268,12 @@ func _on_nest() -> void:
 	world._trees()
 	world.happened.emit({"t": "nest_moved", "pos": world.land.pos})
 
-## Палец справа (не на кнопке) — крутит камеру вокруг тебя.
+## Палец справа (не на кнопке) — крутит камеру вокруг тебя (вбок) и наклоняет (вверх-вниз).
+## Второй палец рядом — щипок: ближе или дальше.
+var _cam_fingers := {}  # номер пальца → где он
+var _pinch_d := 0.0
+var _pinch_zoom := 1.0
+
 func _input(e: InputEvent) -> void:
 	if not is_visible_in_tree() or world == null:
 		return
@@ -277,12 +283,39 @@ func _input(e: InputEvent) -> void:
 		return
 	if e is InputEventScreenTouch:
 		var on_bite: bool = e.position.distance_to(bite_btn.get_global_rect().get_center()) < bite_btn.size.x * 0.7
-		if e.pressed and _cam_index == -1 and e.position.x > size.x * 0.4 and e.position.y > 110 and not on_bite:
+		if e.pressed and e.position.x > size.x * 0.4 and e.position.y > 110 and not on_bite and not _on_button(e.position):
+			_cam_fingers[e.index] = e.position
 			_cam_index = e.index
-		elif not e.pressed and e.index == _cam_index:
-			_cam_index = -1
-	elif e is InputEventScreenDrag and e.index == _cam_index:
-		world.cam_yaw -= e.relative.x * 0.006
+			_pinch_start()
+		elif not e.pressed and _cam_fingers.has(e.index):
+			_cam_fingers.erase(e.index)
+			_cam_index = _cam_fingers.keys()[0] if not _cam_fingers.is_empty() else -1
+			_pinch_start()
+	elif e is InputEventScreenDrag and _cam_fingers.has(e.index):
+		_cam_fingers[e.index] = e.position
+		world.cam_touch_t = 0.0
+		if _cam_fingers.size() >= 2:
+			var ps: Array = _cam_fingers.values()
+			var d: float = (ps[0] as Vector2).distance_to(ps[1])
+			if _pinch_d > 10.0:
+				world.cam_zoom = clampf(_pinch_zoom * _pinch_d / maxf(d, 1.0), 0.55, 2.2)
+		else:
+			world.cam_yaw -= e.relative.x * 0.006
+			world.cam_pitch = clampf(world.cam_pitch + e.relative.y * 0.004, LandWorld.PITCH_MIN, LandWorld.PITCH_MAX)
+
+func _pinch_start() -> void:
+	if _cam_fingers.size() >= 2:
+		var ps: Array = _cam_fingers.values()
+		_pinch_d = (ps[0] as Vector2).distance_to(ps[1])
+		_pinch_zoom = world.cam_zoom
+	else:
+		_pinch_d = 0.0
+
+func _on_button(p: Vector2) -> bool:
+	for b in [get_node("Back"), _body_btn, _nest_btn]:
+		if (b as Control).visible and (b as Control).get_global_rect().grow(10).has_point(p):
+			return true
+	return false
 
 ## Полоска здоровья: красная, по краю — тёмная подложка.
 class HpLine:

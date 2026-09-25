@@ -108,7 +108,7 @@ func test_броня_и_сдача(c) -> void:
 	var hard := _land({"legs": "stubs", "back": "back_spikes", "skin": "poison_skin"})
 	var dmg := {}
 	for l in [soft, hard]:
-		var h: Dictionary = l._add_mob("hermit", l.pos + Vector3(2.5, 0, 0), 2.0, "#555555", 4)
+		var h: Dictionary = l._add_mob("hermit", "hornback", l.pos + Vector3(2.5, 0, 0), 2.0, "#555555", "#333333")
 		h.hp = 1000.0
 		h.max_hp = 1000.0
 		var got := 0.0
@@ -122,7 +122,7 @@ func test_броня_и_сдача(c) -> void:
 	c.ok("отшельник кусал обоих", dmg[soft][0] > 0.0 and dmg[hard][0] > 0.0)
 	c.ok("шипы и яд ранят кусачего (%.0f)" % dmg[hard][1], dmg[hard][1] > 10.0 and dmg[soft][1] == 0.0)
 	var armored := _land({"legs": "stubs", "back": "plates"})
-	var h: Dictionary = armored._add_mob("hermit", armored.pos + Vector3(2.5, 0, 0), 2.0, "#555555", 4)
+	var h: Dictionary = armored._add_mob("hermit", "hornback", armored.pos + Vector3(2.5, 0, 0), 2.0, "#555555", "#333333")
 	var first := 0.0
 	for i in 30 * 3:
 		armored.step(1.0 / 30.0, Vector2.ZERO)
