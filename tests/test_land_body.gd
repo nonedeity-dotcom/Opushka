@@ -311,3 +311,36 @@ func test_прямоходящий(c) -> void:
 	e.land_shape = up
 	var back := Evolution.from_dict(JSON.parse_string(JSON.stringify(e.to_dict())))
 	c.eq("наклон сохраняется", back.land_shape.torso_pitch, 1.3)
+
+func test_много_рук(c) -> void:
+	var e := _evo()
+	e.dna_total = 400.0
+	e.land_start()
+	c.ok("без рук пар не прибавить", not e.land_set_arms(2).ok)
+	e.land_put("arms")
+	var free := e.land_free()
+	c.ok("четыре руки", e.land_set_arms(2).ok)
+	c.eq("вторая пара стоит как руки", e.land_free(), free - int(LandParts.PARTS.arms.cost))
+	c.eq("цена рук — за обе пары", LandParts.part_cost("arms", e.land_shape), 2 * int(LandParts.PARTS.arms.cost))
+	var one := LandParts.stats(e.land_body, LandParts.default_shape())
+	c.ok("больше рук — сильнее бьёшь", LandParts.stats(e.land_body, e.land_shape).bite > one.bite)
+	var before := e.land_free()
+	c.ok("сменил на клешни — цена за обе пары", e.land_put("arms_claw").ok and e.land_free() == before + 2 * int(LandParts.PARTS.arms.cost) - 2 * int(LandParts.PARTS.arms_claw.cost))
+	e.land_take("arms")
+	c.eq("убрал руки — пары сбросились", LandParts.arm_pairs(e.land_shape), 1)
+	e.land_put("arms")
+	e.dna_total = 0.0
+	var r := e.land_set_arms(3)
+	c.ok("шесть рук не по карману — не ставятся: " + r.message, not r.ok and LandParts.arm_pairs(e.land_shape) == 1)
+
+func test_место_рук_и_ног(c) -> void:
+	var sh := LandParts.fix_shape({"place": {"leg2": [0.9, 0.5, 0.0], "arm3": [5, -9, 0.2], "head": [0, 0, 0], "leg0": [1, 2]}})
+	c.eq("своё место у ноги", sh.place.leg2, [0.9, 0.5, 0.0])
+	c.eq("в пределах", sh.place.arm3, [1.0, LandParts.PLACE_LIMITS[1][0], 0.2])
+	c.ok("у головы места нет, кривое — выброшено", not sh.place.has("head") and not sh.place.has("leg0"))
+	c.eq("по умолчанию — как раньше", LandParts.place(sh, "leg0", 4)[0], 0.78)
+	var e := _evo()
+	e.land_start()
+	e.land_shape.place = {"arm1": [0.4, 0.8, -0.3]}
+	var back := Evolution.from_dict(JSON.parse_string(JSON.stringify(e.to_dict())))
+	c.eq("место сохраняется", back.land_shape.place.arm1, [0.4, 0.8, -0.3])

@@ -1223,6 +1223,8 @@ func _run_script() -> void:
 		"lpick":
 			land_editor.select(p[1])
 			land_editor._refresh()
+		"larms":
+			land_editor.set_arms(int(p[1]))
 		"lfold":
 			land_editor.set_collapsed(p[1] == "1")
 		"lclear":

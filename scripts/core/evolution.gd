@@ -103,7 +103,7 @@ func dna_free() -> int:
 # --- суша ----------------------------------------------------------------------------
 
 func land_cost() -> int:
-	return LandParts.cost(land_body)
+	return LandParts.cost(land_body, land_shape)
 
 ## Свободная ДНК на суше: общая ДНК минус тело суши (тело клетки здесь не в счёт).
 func land_free() -> int:
@@ -133,6 +133,20 @@ func land_clear() -> Dictionary:
 	land_shape = LandParts.blank_shape()
 	return {"ok": true, "message": "Пусто: начинай с туловища (+%d ДНК)" % back}
 
+## Сколько пар рук (1–3). Каждая пара стоит как руки целиком.
+func land_set_arms(pairs: int) -> Dictionary:
+	pairs = clampi(pairs, 1, 3)
+	if not land_body.has("arms"):
+		return {"ok": false, "message": "Сначала поставь руки"}
+	var was := LandParts.arm_pairs(land_shape)
+	if was == pairs:
+		return {"ok": true, "message": ""}
+	var one := int(LandParts.PARTS[land_body.arms].cost)
+	if one * (pairs - was) > land_free():
+		return {"ok": false, "message": "Не хватает ДНК: нужно %d, свободно %d" % [one * (pairs - was), land_free()]}
+	land_shape.arm_pairs = float(pairs)
+	return {"ok": true, "message": "%d %s" % [pairs * 2, "руки" if pairs * 2 < 5 else "рук"]}
+
 ## Тело готово к суше: есть туловище и ноги.
 func land_can_walk() -> bool:
 	return land_body.has("torso") and land_body.has("legs")
@@ -146,10 +160,10 @@ func land_put(id: String) -> Dictionary:
 		return {"ok": true, "message": ""}
 	if slot != "torso" and not land_body.has("torso"):
 		return {"ok": false, "message": "Сначала туловище — к нему всё крепится"}
-	var cost: int = LandParts.PARTS[id].cost
+	var cost: int = LandParts.part_cost(id, land_shape)
 	var free := land_free()
 	if land_body.has(slot):
-		free += int(LandParts.PARTS[land_body[slot]].cost)
+		free += LandParts.part_cost(land_body[slot], land_shape)
 	if cost > free:
 		return {"ok": false, "message": "Не хватает ДНК: нужно %d, свободно %d" % [cost, free]}
 	land_body[slot] = id
@@ -165,8 +179,11 @@ func land_take(slot: String) -> Dictionary:
 		var back := land_cost()
 		land_body.clear()
 		return {"ok": true, "message": "Пусто: всё снято (+%d ДНК)" % back}
+	var msg := "Убрано: %s (+%d ДНК)" % [String(LandParts.PARTS[id].name).to_lower(), LandParts.part_cost(id, land_shape)]
 	land_body.erase(slot)
-	return {"ok": true, "message": "Убрано: %s (+%d ДНК)" % [String(LandParts.PARTS[id].name).to_lower(), int(LandParts.PARTS[id].cost)]}
+	if slot == "arms":
+		land_shape.arm_pairs = 1.0
+	return {"ok": true, "message": msg}
 
 
 # --- магазин --------------------------------------------------------------------------

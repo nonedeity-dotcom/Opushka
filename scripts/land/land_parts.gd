@@ -153,12 +153,23 @@ static func from_sea(sea_body: Array) -> Dictionary:
 		kept.append([id, land_id])
 	return {"body": body, "kept": kept, "gone": gone}
 
-static func cost(body: Dictionary) -> int:
+## Цена тела. Руки — за каждую пару (4 руки — вдвое, 6 — втрое).
+static func cost(body: Dictionary, shape := {}) -> int:
 	var sum := 0
 	for slot in body:
 		if PARTS.has(body[slot]):
-			sum += int(PARTS[body[slot]].cost)
+			sum += part_cost(body[slot], shape)
 	return sum
+
+static func part_cost(id: String, shape := {}) -> int:
+	var c := int(PARTS[id].cost)
+	if PARTS[id].slot == "arms":
+		c *= arm_pairs(shape)
+	return c
+
+## Сколько пар рук: 1–3.
+static func arm_pairs(shape: Dictionary) -> int:
+	return clampi(int(round(float(shape.get("arm_pairs", 1.0)))), 1, 3)
 
 static func slot_name(slot: String) -> String:
 	for s in SLOTS:
@@ -224,6 +235,11 @@ static func stats(body: Dictionary, shape := {}) -> Dictionary:
 	s.speed *= clampf(0.75 + 0.25 * leg_len, 0.7, 1.35) * (1.0 - 0.05 * (leg_thick - 1.0))
 	s.speed /= 1.0 + 0.03 * heavy
 	s.bite += (float(sh.head) * dim_k(sh, "head") - 1.0) * 3.0
+	if body.has("arms") and PARTS.has(body.arms):
+		# Каждая лишняя пара рук бьёт и достаёт ещё немного.
+		var extra := arm_pairs(sh) - 1
+		s.bite += float(PARTS[body.arms].get("bite", 0.0)) * 0.6 * extra
+		s.reach += 0.2 * extra
 	if body.has("arms"):
 		var a0 := dim(sh, "arm0")
 		var a1 := dim(sh, "arm1")
@@ -261,14 +277,19 @@ const SHAPE := {
 	"torso": [1.0, 0.5, 2.0], "width": [1.0, 0.5, 2.0], "height": [1.0, 0.5, 2.0], "torso_pitch": [0.0, -0.4, 1.5],
 	"leg_size": [1.0, 0.5, 2.0], "leg_len": [1.0, 0.45, 2.4], "leg_thick": [1.0, 0.5, 2.5],
 	"leg_len_f": [1.0, 0.45, 2.4], "leg_thick_f": [1.0, 0.5, 2.5],
-	"arm_size": [1.0, 0.5, 2.0], "arm_len": [1.0, 0.5, 2.5], "arm_thick": [1.0, 0.5, 2.5], "arm_pitch": [0.0, -1.2, 1.4],
+	"arm_size": [1.0, 0.5, 2.0], "arm_pairs": [1.0, 1.0, 3.0], "arm_len": [1.0, 0.5, 2.5], "arm_thick": [1.0, 0.5, 2.5], "arm_pitch": [0.0, -1.2, 1.4],
 	"tail_size": [1.0, 0.5, 2.0], "tail_len": [1.0, 0.2, 3.5], "tail_pitch": [0.25, -0.8, 1.3], "tail_thick": [1.0, 0.5, 2.2],
 }
 const GIRTH := [0.9, 1.0, 1.05, 1.0, 0.9]
 ## У каждой части своя длина, ширина, высота и размер: dims[часть] = [Д, Ш, В, Р].
 ## Части: голова, рот, глаза, рога (всё, что на голове), спина, хвост, каждая нога
 ## (leg0…leg5: 0-1 — передние, дальше — к хвосту; чётные — левые) и каждая рука.
-const DIM_KEYS := ["head", "mouth", "eyes", "horns", "back", "tail", "leg0", "leg1", "leg2", "leg3", "leg4", "leg5", "arm0", "arm1"]
+const DIM_KEYS := ["head", "mouth", "eyes", "horns", "back", "tail", "leg0", "leg1", "leg2", "leg3", "leg4", "leg5",
+	"arm0", "arm1", "arm2", "arm3", "arm4", "arm5"]
+## Где на теле нога или рука: place[часть] = [вдоль туловища 0–1 (0 — хвост, 1 — голова),
+## выше/ниже (угол по кругу туловища: 0 — сбоку посередине, + выше, − ниже),
+## наклон (только у рук)]. Нет записи — место по умолчанию.
+const PLACE_LIMITS := [[0.0, 1.0], [-1.45, 1.45], [-1.5, 1.5]]
 const DIM_LIMITS := [0.3, 3.0]
 const DIM_SIZE_LIMITS := [0.4, 2.5]
 const GIRTH_LIMITS := [0.35, 2.0]
@@ -277,7 +298,7 @@ const SIZE_LIMITS := [0.5, 2.2]
 const BULK_BASE := 0.9445
 
 static func default_shape() -> Dictionary:
-	var d := {"girth": GIRTH.duplicate(), "sizes": {}, "dims": {}}
+	var d := {"girth": GIRTH.duplicate(), "sizes": {}, "dims": {}, "place": {}}
 	for k in SHAPE:
 		d[k] = SHAPE[k][0]
 	return d
@@ -306,6 +327,14 @@ static func fix_shape(v: Variant) -> Dictionary:
 			if k is String and DIM_KEYS.has(k) and a is Array and a.size() == 4 and a.all(func(x): return x is float or x is int):
 				d.dims[k] = [clampf(float(a[0]), DIM_LIMITS[0], DIM_LIMITS[1]), clampf(float(a[1]), DIM_LIMITS[0], DIM_LIMITS[1]),
 					clampf(float(a[2]), DIM_LIMITS[0], DIM_LIMITS[1]), clampf(float(a[3]), DIM_SIZE_LIMITS[0], DIM_SIZE_LIMITS[1])]
+	var pl = v.get("place")
+	if pl is Dictionary:
+		for k in pl:
+			var a = pl[k]
+			if k is String and DIM_KEYS.has(k) and (k.begins_with("leg") or k.begins_with("arm")) and a is Array and a.size() == 3 \
+					and a.all(func(x): return x is float or x is int):
+				d.place[k] = [clampf(float(a[0]), PLACE_LIMITS[0][0], PLACE_LIMITS[0][1]),
+					clampf(float(a[1]), PLACE_LIMITS[1][0], PLACE_LIMITS[1][1]), clampf(float(a[2]), PLACE_LIMITS[2][0], PLACE_LIMITS[2][1])]
 	var sz = v.get("sizes")
 	if sz is Dictionary:
 		for slot in sz:
@@ -315,6 +344,20 @@ static func fix_shape(v: Variant) -> Dictionary:
 	return d
 
 ## Длина, ширина, высота и размер части (обычные — единицы).
+## Место ноги или руки по умолчанию: [вдоль, выше/ниже, наклон].
+static func default_place(key: String, legs: int, tilt := 0.0) -> Array:
+	var i := int(key.substr(3))
+	if key.begins_with("arm"):
+		return [[0.86, 0.7, 0.55][i / 2], [0.0, -0.25, -0.45][i / 2], 0.0]
+	var up := clampf(tilt / 1.3, 0.0, 1.0)
+	var ts: Array = {2: [lerpf(0.5, 0.08, up)], 6: [0.82, 0.5, 0.18]}.get(legs, [0.78, 0.22])
+	return [ts[mini(i / 2, ts.size() - 1)], -0.32, 0.0]
+
+## Где нога или рука на самом деле (своё место или по умолчанию).
+static func place(shape: Dictionary, key: String, legs: int) -> Array:
+	var p = shape.get("place", {}).get(key)
+	return p if p is Array else default_place(key, legs, float(shape.get("torso_pitch", 0.0)))
+
 static func dim(shape: Dictionary, key: String) -> Array:
 	return shape.get("dims", {}).get(key, [1.0, 1.0, 1.0, 1.0])
 

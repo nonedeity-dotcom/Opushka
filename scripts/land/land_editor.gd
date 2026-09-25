@@ -68,6 +68,7 @@ var _drawer_box: VBoxContainer
 var _insp: PanelContainer
 var _insp_icon: Control
 var _insp_title: Label
+var _insp_sub: Label
 var _insp_list: VBoxContainer
 ## Прокрутка панели выбранной части (ползунок, пока его тянут, её останавливает).
 var _scroll: ScrollContainer
@@ -153,7 +154,7 @@ func _build_ui() -> void:
 	_handles.ed = self
 	add_child(_handles)
 	# Сверху: отменить, ДНК, что умеет тело, готово.
-	_top = _panel(Color(0.04, 0.08, 0.1, 0.82), 0)
+	_top = _panel(Color(0.04, 0.08, 0.1, 0.86), 22)
 	add_child(_top)
 	var row := Kit.hbox(12)
 	_top.add_child(row)
@@ -173,7 +174,7 @@ func _build_ui() -> void:
 	_done_btn.custom_minimum_size = Vector2(210, 50)
 	row.add_child(_done_btn)
 	# Снизу: разделы значками.
-	_catbar = _panel(Color(0.04, 0.08, 0.1, 0.9), 0)
+	_catbar = _panel(Color(0.04, 0.08, 0.1, 0.9), 22)
 	add_child(_catbar)
 	var cs := TouchHScroll.new()
 	_catbar.add_child(cs)
@@ -193,11 +194,17 @@ func _build_ui() -> void:
 	_insp_icon = PartIcon.new()
 	_insp_icon.custom_minimum_size = Vector2(48, 48)
 	head.add_child(_insp_icon)
-	_insp_title = Kit.label("", 21, Art.TEXT, true)
-	_insp_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var names := Kit.vbox(0)
+	names.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	names.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_insp_title = Kit.label("", 19, Art.TEXT, true)
+	# Длинное имя («Рука — правая, 2-я пара») переносится, а не обрезается.
 	_insp_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_insp_title.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	head.add_child(_insp_title)
+	names.add_child(_insp_title)
+	_insp_sub = Kit.label("", 16, Art.MUTED)
+	_insp_sub.clip_text = true
+	names.add_child(_insp_sub)
+	head.add_child(names)
 	var close := RoundButton.new()
 	close.setup("close", "Закрыть", 42)
 	close.pressed.connect(func():
@@ -222,48 +229,65 @@ func _build_ui() -> void:
 func _drawer_h() -> float:
 	return 262.0 if slot == "paint" else 206.0
 
+## Вырез камеры и закруглённые углы: безопасная зона экрана, переведённая в наши точки
+## (как у экрана океана) — плашки не уходят под них.
+func _safe() -> Rect2:
+	var win := Vector2(DisplayServer.window_get_size())
+	var safe := Rect2(DisplayServer.get_display_safe_area())
+	if win.x <= 0 or safe.size.x <= 0:
+		return Rect2(Vector2.ZERO, size)
+	var k := size / win
+	return Rect2(safe.position * k, safe.size * k).intersection(Rect2(Vector2.ZERO, size))
+
 func _layout() -> void:
 	if _box == null or _top == null:
 		return
-	var w := size.x
-	var h := size.y
+	# Поля: от края экрана (и выреза) — как у остального интерфейса игры.
+	var safe := _safe()
+	var m := 12.0
+	var x0 := safe.position.x + m
+	var y0 := safe.position.y + m
+	var w := safe.size.x - 2.0 * m
+	var yb := safe.end.y - m
 	_box.position = Vector2.ZERO
 	_box.size = size
 	_handles.position = Vector2.ZERO
 	_handles.size = size
-	_top.position = Vector2.ZERO
+	_top.position = Vector2(x0, y0)
 	_top.size = Vector2(w, TOP_H)
-	_catbar.position = Vector2(0, h - CAT_H)
+	_catbar.position = Vector2(x0, yb - CAT_H)
 	_catbar.size = Vector2(w, CAT_H)
+	var h := yb
 	var narrow := w < 1000.0
 	var ins_on := sel != "" and not collapsed
 	var dr_on := slot != "" and not collapsed and not (narrow and ins_on)
 	_insp.visible = ins_on
 	_drawer.visible = dr_on
-	var iw := minf(INSP_W, w - 20.0)
+	var iw := minf(INSP_W, w)
+	var top_end := y0 + TOP_H + 8.0
 	if ins_on:
 		if narrow:
-			_insp.position = Vector2(10, h - CAT_H - 330)
-			_insp.size = Vector2(w - 20, 322)
+			_insp.position = Vector2(x0, h - CAT_H - 338)
+			_insp.size = Vector2(w, 330)
 		else:
-			_insp.position = Vector2(w - iw - 10, TOP_H + 8)
-			_insp.size = Vector2(iw, h - TOP_H - CAT_H - 16)
+			_insp.position = Vector2(x0 + w - iw, top_end)
+			_insp.size = Vector2(iw, h - CAT_H - 8.0 - top_end)
 	if dr_on:
 		var dh := _drawer_h()
-		var dw := w - 20.0 - (iw + 10.0 if ins_on and not narrow else 0.0)
-		_drawer.position = Vector2(10, h - CAT_H - dh - 8)
+		var dw := w - (iw + 8.0 if ins_on and not narrow else 0.0)
+		_drawer.position = Vector2(x0, h - CAT_H - dh - 8)
 		_drawer.size = Vector2(dw, dh)
-	_msg.position = Vector2(20, TOP_H + 12)
-	_msg.size = Vector2(w - 40 - (iw + 10.0 if ins_on and not narrow else 0.0), 40)
+	_msg.position = Vector2(x0 + 10, top_end + 4)
+	_msg.size = Vector2(w - 20 - (iw + 8.0 if ins_on and not narrow else 0.0), 40)
 	if _overlay:
 		_overlay.size = size
 
 ## Куда на экране не падает интерфейс — там и держать существо.
 func _free_rect() -> Rect2:
-	var r := Rect2(0, TOP_H, size.x, size.y - TOP_H - CAT_H)
+	var r := Rect2(0, _top.get_rect().end.y, size.x, _catbar.position.y - _top.get_rect().end.y)
 	if _drawer.visible:
 		r.size.y -= _drawer.size.y + 8
-	if _insp.visible and size.x >= 1000.0:
+	if _insp.visible and _insp.size.y > 340.0:
 		r.size.x -= _insp.size.x + 10
 	return r
 
@@ -419,7 +443,7 @@ func _fill_drawer() -> void:
 		return
 	var cur: String = evo.land_body.get(slot, "")
 	if cur != "":
-		row.add_child(_action_tile("Снять", "+%d ДНК" % int(LandParts.PARTS[cur].cost), "trash", func():
+		row.add_child(_action_tile("Снять", "+%d ДНК" % LandParts.part_cost(cur, evo.land_shape), "trash", func():
 			_snap()
 			var r := evo.land_take(slot)
 			select("")
@@ -429,6 +453,14 @@ func _fill_drawer() -> void:
 	ids.sort_custom(func(a, b): return int(LandParts.PARTS[a].cost) < int(LandParts.PARTS[b].cost))
 	for id in ids:
 		row.add_child(_part_tile(id, cc))
+	# Руки: сколько их — 2, 4 или 6.
+	if slot == "arms" and cur != "":
+		var one := int(LandParts.PARTS[cur].cost)
+		var was := LandParts.arm_pairs(evo.land_shape)
+		for n in [1, 2, 3]:
+			var t := _action_tile("%d %s" % [n * 2, "руки" if n < 3 else "рук"], "стоит" if n == was else "%+d ДНК" % (one * (n - was)), "plus", func(): set_arms(n), false)
+			t.on = n == was
+			row.add_child(t)
 
 ## Карточка части: значок, название, цена или «стоит», одна строка — что даёт.
 func _part_tile(id: String, cc: Array) -> Control:
@@ -436,7 +468,8 @@ func _part_tile(id: String, cc: Array) -> Control:
 	var s: String = p.slot
 	var cur: String = evo.land_body.get(s, "")
 	var on := cur == id
-	var free := evo.land_free() + (int(LandParts.PARTS[cur].cost) if cur != "" else 0)
+	var free := evo.land_free() + (LandParts.part_cost(cur, evo.land_shape) if cur != "" else 0)
+	var price := LandParts.part_cost(id, evo.land_shape)
 	var need_torso := id != "torso" and not evo.land_body.has("torso")
 	var t := Tile.new()
 	t.part = id
@@ -445,9 +478,9 @@ func _part_tile(id: String, cc: Array) -> Control:
 	t.title = p.name
 	var sum := LandParts.summary(id)
 	t.sub = "сначала туловище" if need_torso else (sum.split(" · ")[0] if sum != "" else "")
-	t.price = "стоит" if on else ("даром" if int(p.cost) == 0 else "%d ДНК" % int(p.cost))
+	t.price = "стоит" if on else ("даром" if price == 0 else "%d ДНК" % price)
 	t.on = on
-	t.dim = not on and (need_torso or int(p.cost) > free)
+	t.dim = not on and (need_torso or price > free)
 	t.custom_minimum_size = Vector2(168, 146)
 	t.pressed.connect(func():
 		if on:
@@ -553,10 +586,9 @@ func _fill_insp() -> void:
 	_insp_icon.c = cc[0]
 	_insp_icon.c2 = cc[1]
 	_insp_icon.queue_redraw()
-	var pname := ""
-	if evo.land_body.has(s) and s != "torso":
-		pname = " · " + String(LandParts.PARTS[evo.land_body[s]].name).to_lower()
-	_insp_title.text = sel_name(sel) + pname
+	_insp_title.text = sel_name(sel)
+	_insp_sub.text = String(LandParts.PARTS[evo.land_body[s]].name) if evo.land_body.has(s) and s != "torso" else ""
+	_insp_sub.visible = _insp_sub.text != ""
 	var rows: Array
 	if sel == "torso":
 		rows = [["Поднять туловище", "torso_pitch"], ["Длина", "len"], ["Ширина", "width"], ["Высота", "height"], ["Размер", "torso"]]
@@ -564,8 +596,10 @@ func _fill_insp() -> void:
 		rows = [["Длина", "dim:%s:0" % sel], ["Ширина", "dim:%s:1" % sel], ["Высота", "dim:%s:2" % sel], ["Размер", "dim:%s:3" % sel]]
 		if sel == "head":
 			rows += [["Шея вперёд", "neck_z"], ["Шея вверх", "neck_y"]]
+		if sel.begins_with("leg") or sel.begins_with("arm"):
+			rows += [["Вдоль тела", "place:%s:0" % sel], ["Выше / ниже", "place:%s:1" % sel]]
 		if sel.begins_with("arm"):
-			rows.append(["Наклон рук", "arm_pitch"])
+			rows.append(["Наклон", "place:%s:2" % sel])
 		if sel.begins_with("leg"):
 			rows.append(["Ступни", "size:feet"])
 		if sel == "tail":
@@ -579,6 +613,8 @@ func _fill_insp() -> void:
 		var lim: Array
 		if key.begins_with("dim:"):
 			lim = LandParts.DIM_SIZE_LIMITS if key.ends_with(":3") else LandParts.DIM_LIMITS
+		elif key.begins_with("place:"):
+			lim = LandParts.PLACE_LIMITS[int(key.substr(key.length() - 1))]
 		elif key.begins_with("size:"):
 			lim = LandParts.SIZE_LIMITS
 		else:
@@ -593,6 +629,13 @@ func _fill_insp() -> void:
 		b.custom_minimum_size.y = 44
 		b.add_theme_font_size_override("font_size", 17)
 		return b
+	if sel.begins_with("arm") and evo.land_body.has("arms"):
+		# Сколько рук: каждая пара стоит как руки целиком.
+		var one := int(LandParts.PARTS[evo.land_body.arms].cost)
+		var was := LandParts.arm_pairs(evo.land_shape)
+		_insp_list.add_child(Kit.label("Сколько рук (пара — %d ДНК)" % one, 17, Art.TEXT, true))
+		_insp_list.add_child(Kit.segmented([["1", "2"], ["2", "4"], ["3", "6"]], str(was), func(id):
+			set_arms.call_deferred(int(id)), 19, 50))
 	if sel.begins_with("leg") or sel.begins_with("arm"):
 		_insp_list.add_child(small.call("Обе стороны одинаково: " + ("да" if mirror else "нет"), Art.CARD_BORDER if mirror else Art.CARD, func():
 			mirror = not mirror
@@ -611,14 +654,16 @@ func _fill_insp() -> void:
 				evo.land_shape[k] = LandParts.SHAPE[k][0]
 		else:
 			evo.land_shape.dims.erase(sel)
+			evo.land_shape.place.erase(sel)
 			if mirror:
 				evo.land_shape.dims.erase(_pair(sel))
+				evo.land_shape.place.erase(_pair(sel))
 			if sel == "head":
 				evo.land_shape.neck_z = 0.0
 				evo.land_shape.neck_y = 0.0
 		_after_change.call_deferred("Как обычно")))
 	if s != "torso" and evo.land_body.has(s):
-		_insp_list.add_child(small.call("Убрать: %s (+%d ДНК)" % [String(LandParts.PARTS[evo.land_body[s]].name).to_lower(), int(LandParts.PARTS[evo.land_body[s]].cost)], Color(0.4, 0.2, 0.22), func():
+		_insp_list.add_child(small.call("Убрать: %s (+%d ДНК)" % [String(LandParts.PARTS[evo.land_body[s]].name).to_lower(), LandParts.part_cost(evo.land_body[s], evo.land_shape)], Color(0.4, 0.2, 0.22), func():
 			_snap()
 			var r := evo.land_take(s)
 			select("")
@@ -646,6 +691,17 @@ func undo() -> void:
 	evo.land_paint = u.p
 	changed.emit(true, true)
 	_after_change("Отменил")
+
+## Сколько пар рук (1–3).
+func set_arms(pairs: int) -> void:
+	_snap()
+	var r := evo.land_set_arms(pairs)
+	changed.emit(r.ok, false)
+	if not r.ok:
+		_undo.pop_back()
+	elif not sel.begins_with("arm") or int(sel.substr(3)) >= pairs * 2:
+		sel = "arm1"
+	_after_change(r.message)
 
 func apply_preset(i: int) -> void:
 	_snap()
@@ -962,6 +1018,15 @@ func _slot_of(key: String) -> String:
 		return "arms"
 	return {"torso": "torso", "head": "torso", "mouth": "mouth", "eyes": "eyes", "horns": "head", "back": "back", "tail": "tail"}.get(key, "")
 
+## Обычное значение ползунка — для отметки на дорожке.
+func default_value(key: String) -> float:
+	if key.begins_with("place:"):
+		var q := key.split(":")
+		return float(LandParts.default_place(q[1], _creature.leg_count, float(evo.land_shape.get("torso_pitch", 0.0)))[int(q[2])])
+	if LandParts.SHAPE.has(key):
+		return float(LandParts.SHAPE[key][0])
+	return 1.0
+
 ## Какую часть выбрать, когда открыли место: у ног — переднюю левую, у рук — правую…
 func _default_sel(s: String) -> String:
 	match s:
@@ -988,7 +1053,11 @@ func sel_name(key: String) -> String:
 		var row: String = ["передняя", "средняя" if n == 6 else "задняя", "задняя"][i / 2]
 		return "Нога — %s %s" % [row, side]
 	if key.begins_with("arm"):
-		return "Рука — левая" if key == "arm0" else "Рука — правая"
+		var i := int(key.substr(3))
+		var side := "левая" if i % 2 == 0 else "правая"
+		if LandParts.arm_pairs(evo.land_shape) == 1:
+			return "Рука — " + side
+		return "Рука — %s, %d-я пара" % [side, i / 2 + 1]
 	return {"torso": "Туловище", "head": "Голова", "mouth": "Рот", "eyes": "Глаза", "horns": "Рога и гребень", "back": "Спина", "tail": "Хвост"}.get(key, key)
 
 ## Пара части: левая ↔ правая нога того же ряда, левая ↔ правая рука.
@@ -996,7 +1065,7 @@ func _pair(key: String) -> String:
 	if key.begins_with("leg"):
 		return "leg%d" % (int(key.substr(3)) ^ 1)
 	if key.begins_with("arm"):
-		return "arm1" if key == "arm0" else "arm0"
+		return "arm%d" % (int(key.substr(3)) ^ 1)
 	return ""
 
 ## Кружки выбранной части, которые сейчас есть на существе: [[ручка, вид, точка на экране]].
@@ -1004,8 +1073,12 @@ func handles() -> Array:
 	var out: Array = []
 	if _creature == null or _walk_t > 0.0 or _pos.length() > 0.3 or (_overlay and _overlay.visible):
 		return out
-	var grp := "leg" if sel.begins_with("leg") else ("arm" if sel.begins_with("arm") else sel)
-	for h in SEL_HANDLES.get(grp, []):
+	var list: Array = SEL_HANDLES.get(sel, [])
+	if sel.begins_with("leg"):
+		list = [["place:" + sel, "move"], ["len:" + sel, "updown"], ["thick:" + sel, "thick"], ["feet:" + sel, "size"]]
+	elif sel.begins_with("arm"):
+		list = [["place:" + sel, "move"], ["hand:" + sel, "move"], ["thick:" + sel, "thick"]]
+	for h in list:
 		var id: String = h[0]
 		if not _creature.anchors.has(id):
 			continue
@@ -1035,6 +1108,50 @@ func _sculpt(id: String, rel: Vector2) -> void:
 	var wd := (_cam.global_basis.x * rel.x - _cam.global_basis.y * rel.y) * per_px
 	var d: Vector3 = _creature.global_basis.inverse() * wd
 	var grow := (rel.x - rel.y) / 150.0
+	# Ноги и руки: у каждой свои кружки — «вид:часть».
+	if ":" in id:
+		var q := id.split(":")
+		var kind: String = q[0]
+		var key: String = q[1]
+		for part in [key, _pair(key) if mirror else ""]:
+			if part == "":
+				continue
+			var dm: Array = LandParts.dim(sh, part).duplicate()
+			match kind:
+				"place":
+					# Двигаешь основание по телу: вбок на экране — вдоль туловища, вверх-вниз —
+					# выше или ниже по боку.
+					var pl: Array = LandParts.place(sh, part, _creature.leg_count).duplicate()
+					var sp: Array = _creature._sp
+					var L: float = maxf(sp[sp.size() - 1].z - sp[0].z, 0.2)
+					var at := LandParts.spine_at(sp, float(pl[0]))
+					pl[0] = float(pl[0]) + d.z / L
+					pl[1] = float(pl[1]) + d.y / maxf(at.ry, 0.1)
+					sh.place[part] = pl
+				"len":
+					var base := 1.0
+					for leg in _creature._legs:
+						if leg.key == key:
+							base = float(leg.len) / maxf(float(LandParts.dim(sh, key)[0]), 0.01)
+					dm[0] = float(dm[0]) + d.y / (0.85 * maxf(base, 0.1))
+				"thick":
+					dm[1] = float(dm[1]) + grow
+					dm[2] = float(dm[2]) + grow
+				"feet":
+					sh.sizes.feet = LandParts.part_size(sh, "feet") + grow / 2.0
+				"hand":
+					var v: Vector3 = (_creature.anchors["hand:" + key] as Vector3) + d - _creature.arm_shoulder(key)
+					var unit := 0.74 * float(sh.arm_len) * float(sh.arm_size) * float(dm[3])
+					dm[0] = v.length() / maxf(unit, 0.05)
+					var rest := Vector3(0.1, -0.75, 0.6).normalized()
+					var pl: Array = LandParts.place(sh, part, _creature.leg_count).duplicate()
+					pl[2] = wrapf(atan2(v.y, v.z) - atan2(rest.y, rest.z), -PI, PI) - float(sh.arm_pitch)
+					sh.place[part] = pl
+			if kind in ["len", "thick", "hand"]:
+				sh.dims[part] = dm
+		evo.land_shape = LandParts.fix_shape(sh)
+		_dirty = true
+		return
 	match id:
 		"g0", "g1", "g2", "g3", "g4":
 			# Как в лепке клетки: соседние места подтягиваются мягче — без ступенек.
@@ -1087,6 +1204,9 @@ func _sculpt(id: String, rel: Vector2) -> void:
 	_dirty = true
 
 func shape_value(key: String) -> float:
+	if key.begins_with("place:"):
+		var q := key.split(":")
+		return float(LandParts.place(evo.land_shape, q[1], _creature.leg_count)[int(q[2])])
 	if key.begins_with("dim:"):
 		var q := key.split(":")
 		return float(LandParts.dim(evo.land_shape, q[1])[int(q[2])])
@@ -1096,7 +1216,15 @@ func shape_value(key: String) -> float:
 
 func set_shape_value(key: String, v: float) -> void:
 	var sh: Dictionary = evo.land_shape
-	if key.begins_with("dim:"):
+	if key.begins_with("place:"):
+		var q := key.split(":")
+		for part in [q[1], _pair(q[1]) if mirror else ""]:
+			if part == "":
+				continue
+			var pl: Array = LandParts.place(sh, part, _creature.leg_count).duplicate()
+			pl[int(q[2])] = v
+			sh.place[part] = pl
+	elif key.begins_with("dim:"):
 		var q := key.split(":")
 		for part in [q[1], _pair(q[1]) if mirror else ""]:
 			if part == "":
@@ -1114,6 +1242,20 @@ func set_shape_value(key: String, v: float) -> void:
 ## Подпись у кружка, пока его держат: что меняется и насколько.
 func handle_label(id: String) -> String:
 	var sh: Dictionary = evo.land_shape
+	if ":" in id:
+		var q := id.split(":")
+		var nn := func(v: float) -> String: return "×" + LandParts._num(snappedf(v, 0.05))
+		match q[0]:
+			"place":
+				return "переставить"
+			"len":
+				return "длина " + nn.call(LandParts.dim(sh, q[1])[0])
+			"thick":
+				return "толщина " + nn.call(LandParts.dim(sh, q[1])[1])
+			"feet":
+				return "ступни " + nn.call(LandParts.part_size(sh, "feet"))
+			"hand":
+				return "рука " + nn.call(LandParts.dim(sh, q[1])[0])
 	var n := func(v: float) -> String: return "×" + LandParts._num(snappedf(v, 0.05))
 	match id:
 		"g0", "g1", "g2", "g3", "g4":
@@ -1343,7 +1485,11 @@ class ValueSlider:
 		var font := get_theme_default_font()
 		draw_string(font, Vector2(16, 24), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 19, Art.TEXT)
 		var num := "×" + LandParts._num(snappedf(v, 0.05))
-		if key.ends_with("pitch"):
+		if key.begins_with("place:") and key.ends_with(":0"):
+			num = "%d%%" % int(round(v * 100.0))
+		elif key.begins_with("place:"):
+			num = "%d°" % int(round(rad_to_deg(v)))
+		elif key.ends_with("pitch"):
 			num = "%d°" % int(round(rad_to_deg(v)))
 		elif angle:
 			num = ("%+.1f" % v).replace(".", ",")
@@ -1354,7 +1500,7 @@ class ValueSlider:
 		var k := clampf((v - lo) / (hi - lo), 0.0, 1.0)
 		draw_style_box(Kit.box(Art.GREEN_DARK, 4, Color(0, 0, 0, 0), 0), Rect2(t.position, Vector2(t.size.x * k, t.size.y)))
 		# Отметка «обычное».
-		var d: float = LandParts.SHAPE[key][0] if LandParts.SHAPE.has(key) else 1.0
+		var d: float = ed.default_value(key)
 		var dk := clampf((d - lo) / (hi - lo), 0.0, 1.0)
 		draw_line(Vector2(t.position.x + t.size.x * dk, t.position.y - 5), Vector2(t.position.x + t.size.x * dk, t.end.y + 5), Color(1, 1, 1, 0.35), 2)
 		var c := Vector2(t.position.x + t.size.x * k, t.get_center().y)

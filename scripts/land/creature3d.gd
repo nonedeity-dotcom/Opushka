@@ -158,36 +158,39 @@ func build_body(c: Color, c2: Color, s: float, parts: Dictionary, pattern := "sp
 	# Ноги: сперва где бёдра и какой длины ноги — от этого наклон и высота туловища.
 	# Пары вдоль туловища, ходят накрест; у каждой свои длина, ширина, высота.
 	var tilt := float(sh.torso_pitch)
-	var up_k := clampf(tilt / 1.3, 0.0, 1.0)
 	var hips: Array = []
 	var ls := float(sh.leg_size)
 	if leg_count > 0:
-		# Двуногий, поднявший туловище, стоит на его нижнем конце — как человек.
-		var ts: Array = {2: [lerpf(0.5, 0.08, up_k)], 6: [0.82, 0.5, 0.18]}.get(leg_count, [0.78, 0.22])
+		# Где каждая нога — своё место на теле (передвинули) или по умолчанию: пары вдоль
+		# туловища; двуногий, поднявший туловище, стоит на его нижнем конце — как человек.
 		var len_b := _leg_base * float(sh.leg_len) * ls
 		var len_f := _leg_base * float(sh.leg_len_f) * ls if leg_count > 2 else len_b
-		var group := 0
-		for j in ts.size():
-			var t: float = ts[j]
-			var at := LandParts.spine_at(sp, t)
-			# Доля «передности»: 1 — передние, 0 — задние, посередине — среднее.
-			var fk := 0.0 if ts.size() == 1 else 1.0 - float(j) / (ts.size() - 1)
+		for i in leg_count:
+			var key := "leg%d" % i
+			var side := -1.0 if i % 2 == 0 else 1.0
+			var pl := LandParts.place(sh, key, leg_count)
+			var pair := i / 2
+			# Доля «передности» по номеру пары: 1 — передние, 0 — задние.
+			var fk := 0.0 if leg_count <= 2 else 1.0 - float(pair) / (leg_count / 2 - 1)
 			var th := lerpf(float(sh.leg_thick), float(sh.leg_thick_f) if leg_count > 2 else float(sh.leg_thick), fk) * ls
-			for side in [-1.0, 1.0]:
-				var key := "leg%d" % hips.size()
-				var d := LandParts.dim(sh, key)
-				hips.append({"hip": Vector3(side * at.rx * 0.8, -at.ry * 0.25, at.z), "group": (group + (0 if side < 0 else 1)) % 2,
-					"len": lerpf(len_b, len_f, fk) * float(d[0]) * float(d[3]), "th": th * float(d[3]), "xs": float(d[1]), "zs": float(d[2]), "key": key})
-			group += 1
+			var d := LandParts.dim(sh, key)
+			hips.append({"hip": _surf(float(pl[0]), float(pl[1]), side), "group": (pair + (0 if side < 0 else 1)) % 2,
+				"len": lerpf(len_b, len_f, fk) * float(d[0]) * float(d[3]), "th": th * float(d[3]), "xs": float(d[1]), "zs": float(d[2]), "key": key})
 	# Наклон туловища: сколько подняли (прямоходящее — почти стоймя) плюс разница передних и
 	# задних ног. Нос вверх — поворот «назад».
 	var leg_pitch := 0.0
+	var fi := 0
+	var ri := 0
+	for i in hips.size():
+		if hips[i].hip.z > hips[fi].hip.z:
+			fi = i
+		if hips[i].hip.z < hips[ri].hip.z:
+			ri = i
 	if leg_count > 2:
-		var lb0 := (float(hips[hips.size() - 1].len) + float(hips[hips.size() - 2].len)) / 2.0
-		var lf0 := (float(hips[0].len) + float(hips[1].len)) / 2.0
-		var dz: float = hips[0].hip.z - hips[hips.size() - 1].hip.z
-		if absf(dz) > 0.01:
-			leg_pitch = asin(clampf(-0.85 * (lf0 - lb0) / dz, -0.65, 0.65))
+		# Самая передняя и самая задняя нога: разница длины — наклон.
+		var dz: float = hips[fi].hip.z - hips[ri].hip.z
+		if absf(dz) > 0.05:
+			leg_pitch = asin(clampf(-0.85 * (float(hips[fi].len) - float(hips[ri].len)) / dz, -0.65, 0.65))
 	_pitch = clampf(-tilt + leg_pitch, -1.55, 0.7)
 	var B := Basis(Vector3.RIGHT, _pitch)
 	var U := B.inverse()
@@ -199,8 +202,9 @@ func build_body(c: Color, c2: Color, s: float, parts: Dictionary, pattern := "sp
 		need = maxf(need, p.z * sn + 0.8 * (p.ry * absf(cs) + p.r * absf(sn)))
 	_body_y = need + 0.08 * size if leg_count == 0 else maxf(need + 0.08 * size, 0.0)
 	if leg_count > 0:
-		var hb: Vector3 = hips[hips.size() - 1].hip
-		var lb := (float(hips[hips.size() - 1].len) + float(hips[maxi(hips.size() - 2, 0)].len)) / 2.0
+		# Стоит на самой задней ноге (у двуногого — на обеих).
+		var hb: Vector3 = hips[ri].hip
+		var lb: float = hips[ri].len
 		_body_y = maxf(0.85 * lb - (hb.y * cs - hb.z * sn), need + 0.08 * size)
 	elif need <= 0.0:
 		_body_y = rmax * 0.85
@@ -263,24 +267,27 @@ func build_body(c: Color, c2: Color, s: float, parts: Dictionary, pattern := "sp
 	anchors.mouth = _b(head + _head_node.basis * Vector3(0, -0.15, hr + 0.25 * size))
 	anchors.eyes = _b(head + _head_node.basis * Vector3(0.25, 0.25, 0.3) * size)
 	anchors.horns = _b(head + _head_node.basis * Vector3(0.3, 0.45, -0.1) * size)
-	if leg_count > 0:
-		var front_hip: Vector3 = hips[1].hip
-		anchors.legs = _b(front_hip)
-		if leg_count > 2:
-			anchors.legs_back = _b(hips[hips.size() - 1].hip)
-		anchors.leg_thick = Vector3(front_hip.x * 1.25, float(hips[1].len) * 0.3, front_hip.z)
-		anchors.feet = Vector3(front_hip.x * 1.25, 0.05, front_hip.z + 0.15 * size)
-		anchors.claws = anchors.feet + Vector3(0, 0.05, 0.25 * size * LandParts.part_size(sh, "feet"))
+	# У каждой ноги: место (у бедра), длина (у колена), толщина, ступня.
+	for h in hips:
+		var hw := _b(h.hip as Vector3)
+		var k: String = h.key
+		var gy := maxf(hw.y - float(h.len) * 0.85, 0.0)
+		anchors["place:" + k] = hw
+		anchors["len:" + k] = Vector3(hw.x * 1.1, lerpf(hw.y, gy, 0.5), hw.z)
+		anchors["thick:" + k] = Vector3(hw.x * 1.1 + signf(hw.x) * 0.2, lerpf(hw.y, gy, 0.72), hw.z)
+		anchors["feet:" + k] = Vector3(hw.x * 1.2, gy + 0.05, hw.z + 0.15 * size)
 	var mid := LandParts.spine_at(sp, 0.5)
 	anchors.back = _b(Vector3(0, mid.ry + 0.45 * size * LandParts.part_size(sh, "back"), mid.z))
 	anchors.skin = _b(Vector3(mid.rx * 0.9, mid.ry * 0.5, mid.z))
 	if _tail:
 		anchors.tail_base = _b(_tail.position + Vector3(0, _tail_r * 1.4, 0))
 		anchors.tail = _b(_tail.position + _tail_dir * _tail_len)
+	# У каждой руки: место (у плеча), кисть (длина и наклон), толщина (у локтя).
 	for arm in _arms:
-		if arm.side > 0:
-			anchors.arms = _b((arm.shoulder as Vector3) + (arm.dir as Vector3) * float(arm.reach))
-			anchors.arm_thick = _b((arm.shoulder as Vector3) + (arm.dir as Vector3) * float(arm.reach) * 0.45 + Vector3(0.15, 0, 0))
+		var k: String = arm.key
+		anchors["place:" + k] = _b(arm.shoulder as Vector3)
+		anchors["hand:" + k] = _b((arm.shoulder as Vector3) + (arm.dir as Vector3) * float(arm.reach))
+		anchors["thick:" + k] = _b((arm.shoulder as Vector3) + (arm.dir as Vector3) * float(arm.reach) * 0.45 + Vector3(0.15 * arm.side, 0, 0))
 	# Тень-пятно под телом: дёшево, а существо «стоит» на земле.
 	var shadow := MeshInstance3D.new()
 	var disc := CylinderMesh.new()
@@ -302,15 +309,21 @@ func build_body(c: Color, c2: Color, s: float, parts: Dictionary, pattern := "sp
 		_top = maxf(_top, _body_y + (B * Vector3(0, p.ry, p.z)).y)
 	_place_feet()
 
+## Точка на поверхности туловища: t — вдоль (0 хвост … 1 голова), a — по кругу (0 — сбоку
+## посередине, + выше, − ниже), side — левый бок (−1) или правый (+1).
+func _surf(t: float, a: float, side: float) -> Vector3:
+	var at := LandParts.spine_at(_sp, t)
+	return Vector3(side * at.rx * cos(a) * 0.92, at.ry * sin(a) * 0.92, at.z)
+
 ## Точка туловища (в его осях) → в осях существа: с высотой и наклоном.
 func _b(v: Vector3) -> Vector3:
 	return Vector3(0, _body_y, 0) + Basis(Vector3.RIGHT, _pitch) * v
 
 ## Для лепки: плечо правой руки, основание хвоста и длина «обычного» хвоста, высота ног,
 ## и насколько существо велико (чтобы камера его целиком видела).
-func arm_shoulder() -> Vector3:
+func arm_shoulder(key := "arm1") -> Vector3:
 	for arm in _arms:
-		if arm.side > 0:
+		if arm.key == key:
 			return _b(arm.shoulder as Vector3)
 	return Vector3.ZERO
 
@@ -543,18 +556,19 @@ func _make_arms(id: String) -> void:
 	if id == "":
 		return
 	var sh := _shape
-	var at := LandParts.spine_at(_sp, 0.86)
 	var asz := float(sh.arm_size)
-	for side in [-1.0, 1.0]:
-		# У каждой руки свои длина, ширина, высота и размер.
-		var key := "arm0" if side < 0 else "arm1"
+	for i in LandParts.arm_pairs(sh) * 2:
+		var side := -1.0 if i % 2 == 0 else 1.0
+		# У каждой руки своё место, длина, ширина, высота, размер и наклон.
+		var key := "arm%d" % i
 		_grp = key
 		var d := LandParts.dim(sh, key)
+		var pl := LandParts.place(sh, key, leg_count)
 		var ln := float(sh.arm_len) * asz * float(d[0]) * float(d[3])
 		var th := float(sh.arm_thick) * asz * float(d[3])
 		# Руки висят вниз по-земному, как бы ни стояло туловище.
-		var dir := Basis(Vector3.RIGHT, _pitch).inverse() * Vector3(side * 0.1, -0.75, 0.6).normalized().rotated(Vector3.RIGHT, -float(sh.arm_pitch))
-		var arm := {"side": side, "shoulder": Vector3(side * at.rx * 0.85, 0.0, at.z), "dir": dir, "reach": 0.74 * size * ln,
+		var dir := Basis(Vector3.RIGHT, _pitch).inverse() * Vector3(side * 0.1, -0.75, 0.6).normalized().rotated(Vector3.RIGHT, -float(sh.arm_pitch) - float(pl[2]))
+		var arm := {"side": side, "shoulder": _surf(float(pl[0]), float(pl[1]), side), "dir": dir, "reach": 0.74 * size * ln,
 			"claw": id == "arms_claw", "xs": float(d[1]), "zs": float(d[2]), "key": key}
 		var seg := 0.43 * size * ln
 		arm.seg = seg
