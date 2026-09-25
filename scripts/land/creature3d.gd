@@ -154,16 +154,66 @@ func build_body(c: Color, c2: Color, s: float, parts: Dictionary, pattern := "sp
 		_sphere(r, m, Vector3(0, 0, sp[i].z), _body, Vector3(float(sh.width), 0.92 * float(sh.height), maxf(1.0, gap * 0.85 / r)))
 	_pattern(pattern)
 	_skin(parts.get("skin", ""))
-	# Голова — впереди, на шее: чем дальше голову вынесли, тем длиннее шея. У головы
-	# свои длина, ширина, высота; всё, что на ней, растягивается вместе с ней.
 	var front: Dictionary = sp[sp.size() - 1]
+	# Ноги: сперва где бёдра и какой длины ноги — от этого наклон и высота туловища.
+	# Пары вдоль туловища, ходят накрест; у каждой свои длина, ширина, высота.
+	var tilt := float(sh.torso_pitch)
+	var up_k := clampf(tilt / 1.3, 0.0, 1.0)
+	var hips: Array = []
+	var ls := float(sh.leg_size)
+	if leg_count > 0:
+		# Двуногий, поднявший туловище, стоит на его нижнем конце — как человек.
+		var ts: Array = {2: [lerpf(0.5, 0.08, up_k)], 6: [0.82, 0.5, 0.18]}.get(leg_count, [0.78, 0.22])
+		var len_b := _leg_base * float(sh.leg_len) * ls
+		var len_f := _leg_base * float(sh.leg_len_f) * ls if leg_count > 2 else len_b
+		var group := 0
+		for j in ts.size():
+			var t: float = ts[j]
+			var at := LandParts.spine_at(sp, t)
+			# Доля «передности»: 1 — передние, 0 — задние, посередине — среднее.
+			var fk := 0.0 if ts.size() == 1 else 1.0 - float(j) / (ts.size() - 1)
+			var th := lerpf(float(sh.leg_thick), float(sh.leg_thick_f) if leg_count > 2 else float(sh.leg_thick), fk) * ls
+			for side in [-1.0, 1.0]:
+				var key := "leg%d" % hips.size()
+				var d := LandParts.dim(sh, key)
+				hips.append({"hip": Vector3(side * at.rx * 0.8, -at.ry * 0.25, at.z), "group": (group + (0 if side < 0 else 1)) % 2,
+					"len": lerpf(len_b, len_f, fk) * float(d[0]) * float(d[3]), "th": th * float(d[3]), "xs": float(d[1]), "zs": float(d[2]), "key": key})
+			group += 1
+	# Наклон туловища: сколько подняли (прямоходящее — почти стоймя) плюс разница передних и
+	# задних ног. Нос вверх — поворот «назад».
+	var leg_pitch := 0.0
+	if leg_count > 2:
+		var lb0 := (float(hips[hips.size() - 1].len) + float(hips[hips.size() - 2].len)) / 2.0
+		var lf0 := (float(hips[0].len) + float(hips[1].len)) / 2.0
+		var dz: float = hips[0].hip.z - hips[hips.size() - 1].hip.z
+		if absf(dz) > 0.01:
+			leg_pitch = asin(clampf(-0.85 * (lf0 - lb0) / dz, -0.65, 0.65))
+	_pitch = clampf(-tilt + leg_pitch, -1.55, 0.7)
+	var B := Basis(Vector3.RIGHT, _pitch)
+	var U := B.inverse()
+	var cs := cos(_pitch)
+	var sn := sin(_pitch)
+	# Высота: опорные (задние) ноги стоят на земле; туловище и голова — не в земле.
+	var need := 0.0
+	for p in sp:
+		need = maxf(need, p.z * sn + 0.8 * (p.ry * absf(cs) + p.r * absf(sn)))
+	_body_y = need + 0.08 * size if leg_count == 0 else maxf(need + 0.08 * size, 0.0)
+	if leg_count > 0:
+		var hb: Vector3 = hips[hips.size() - 1].hip
+		var lb := (float(hips[hips.size() - 1].len) + float(hips[maxi(hips.size() - 2, 0)].len)) / 2.0
+		_body_y = maxf(0.85 * lb - (hb.y * cs - hb.z * sn), need + 0.08 * size)
+	elif need <= 0.0:
+		_body_y = rmax * 0.85
+	# Голова — впереди, на шее. Шея и голова — «по-земному»: как бы ни стояло туловище,
+	# морда смотрит вперёд, «вверх» у шеи — к небу. У головы свои длина, ширина, высота;
+	# всё, что на ней, растягивается вместе с ней.
 	var hd := LandParts.dim(sh, "head")
 	var hsc := Vector3(float(hd[1]), float(hd[2]), float(hd[0])) * float(hd[3]) * float(sh.head)
 	var hr := 0.39 * size
 	var reach_z := hr * hsc.z
 	var neck_base := Vector3(0, 0.1 * size, front.z + front.r * 0.55)
-	var head := neck_base + Vector3(0, 0.12 * size + float(sh.neck_y) * size, reach_z * 0.8 + float(sh.neck_z) * size)
-	_head_at = head
+	var head := neck_base + U * Vector3(0, 0.12 * size + float(sh.neck_y) * size, reach_z * 0.8 + float(sh.neck_z) * size)
+	_head_at = B * head
 	_grp = "head"
 	var n := neck_base.distance_to(head)
 	var hmin := hr * minf(hsc.x, hsc.y)
@@ -173,8 +223,7 @@ func build_body(c: Color, c2: Color, s: float, parts: Dictionary, pattern := "sp
 		for k in range(1, steps):
 			_sphere(nr, _mat, neck_base.lerp(head, float(k) / steps), _body)
 	_head_node = Node3D.new()
-	_head_node.position = head
-	_head_node.scale = hsc
+	_head_node.transform = Transform3D(U * Basis.from_scale(hsc), head)
 	_body.add_child(_head_node)
 	_sphere(hr, _mat, Vector3.ZERO, _head_node)
 	_grp = "mouth"
@@ -188,52 +237,17 @@ func build_body(c: Color, c2: Color, s: float, parts: Dictionary, pattern := "sp
 	_grp = "back"
 	_back(parts.get("back", ""))
 	_make_arms(parts.get("arms", ""))
-	# Ноги: пары вдоль туловища, ходят накрест; у каждой свои длина, ширина, высота.
-	var hips: Array = []
-	var r_hip := 0.0
-	if leg_count > 0:
-		var ts: Array = {2: [0.5], 6: [0.82, 0.5, 0.18]}.get(leg_count, [0.78, 0.22])
-		var ls := float(sh.leg_size)
-		var len_b := _leg_base * float(sh.leg_len) * ls
-		var len_f := _leg_base * float(sh.leg_len_f) * ls if leg_count > 2 else len_b
-		var hooves := 1.25 if parts.get("feet", "") == "hooves" else 1.0
-		var group := 0
-		for j in ts.size():
-			var t: float = ts[j]
-			var at := LandParts.spine_at(sp, t)
-			r_hip = maxf(r_hip, at.ry)
-			# Доля «передности»: 1 — передние, 0 — задние, посередине — среднее.
-			var fk := 0.0 if ts.size() == 1 else 1.0 - float(j) / (ts.size() - 1)
-			var th := lerpf(float(sh.leg_thick), float(sh.leg_thick_f) if leg_count > 2 else float(sh.leg_thick), fk) * ls
-			for side in [-1.0, 1.0]:
-				var key := "leg%d" % hips.size()
-				var d := LandParts.dim(sh, key)
-				hips.append({"hip": Vector3(side * at.rx * 0.8, -at.ry * 0.25, at.z), "group": (group + (0 if side < 0 else 1)) % 2,
-					"len": lerpf(len_b, len_f, fk) * float(d[0]) * float(d[3]), "th": th * float(d[3]), "xs": float(d[1]), "zs": float(d[2]), "key": key})
-			group += 1
-		for h in hips:
-			_grp = h.key
-			var L: float = h.len
-			var leg := {"hip": h.hip, "group": h.group, "t": -1.0, "foot": Vector3.ZERO, "from": Vector3.ZERO, "to": Vector3.ZERO,
-				"a": L * 0.55, "b": L * 0.55, "len": L, "xs": h.xs, "zs": h.zs, "key": h.key}
-			leg.upper = _limb(0.1 * size * h.th * hooves, leg.a)
-			leg.lower = _limb(0.085 * size * h.th * hooves, leg.b)
-			leg.paw = _foot(parts.get("feet", ""), parts.get("claws", ""), LandParts.part_size(sh, "feet") * sqrt(h.th * sqrt(h.xs * h.zs)), LandParts.part_size(sh, "claws") * sqrt(ls))
-			_legs.append(leg)
+	var hooves := 1.25 if parts.get("feet", "") == "hooves" else 1.0
+	for h in hips:
+		_grp = h.key
+		var L: float = h.len
+		var leg := {"hip": h.hip, "group": h.group, "t": -1.0, "foot": Vector3.ZERO, "from": Vector3.ZERO, "to": Vector3.ZERO,
+			"a": L * 0.55, "b": L * 0.55, "len": L, "xs": h.xs, "zs": h.zs, "key": h.key}
+		leg.upper = _limb(0.1 * size * h.th * hooves, leg.a)
+		leg.lower = _limb(0.085 * size * h.th * hooves, leg.b)
+		leg.paw = _foot(parts.get("feet", ""), parts.get("claws", ""), LandParts.part_size(sh, "feet") * sqrt(h.th * sqrt(h.xs * h.zs)), LandParts.part_size(sh, "claws") * sqrt(ls))
+		_legs.append(leg)
 	_grp = ""
-	# Высота и наклон туловища: каждое бедро — на высоте своих ног; передние длиннее —
-	# туловище задирает нос. Без ног — лежит на брюхе. Брюхом не в землю.
-	if leg_count > 0:
-		var nb := 2
-		var lb := (float(hips[hips.size() - 1].len) + float(hips[hips.size() - 2].len)) / nb
-		var lf := (float(hips[0].len) + float(hips[1].len)) / nb
-		var hb: Vector3 = hips[hips.size() - 1].hip
-		var hf: Vector3 = hips[0].hip
-		if leg_count > 2 and absf(hf.z - hb.z) > 0.01:
-			_pitch = asin(clampf(-0.85 * (lf - lb) / (hf.z - hb.z), -0.65, 0.65))
-		_body_y = maxf(0.85 * lb - hb.y + hb.z * sin(_pitch), rmax * 0.8 + 0.08 * size)
-	else:
-		_body_y = rmax * 0.85
 	_leg_len = 0.6 * size
 	for leg in _legs:
 		_leg_len = maxf(_leg_len, float(leg.len))
@@ -244,7 +258,8 @@ func build_body(c: Color, c2: Color, s: float, parts: Dictionary, pattern := "sp
 	anchors.len_front = _b(Vector3(0, -front.ry * 0.4, front.z + front.r * 0.3))
 	anchors.width = _b(Vector3(LandParts.spine_at(sp, 0.5).rx * 0.95, 0, LandParts.spine_at(sp, 0.5).z))
 	anchors.head = _b(head)
-	anchors.head_size = _b(head + Vector3(0, hr * hsc.y + 0.12 * size, 0))
+	anchors.head_size = _b(head + U * Vector3(0, hr * hsc.y + 0.12 * size, 0))
+	anchors.tilt = _b(Vector3(0, front.ry * 0.7, front.z + front.r * 0.5))
 	anchors.mouth = _b(head + _head_node.basis * Vector3(0, -0.15, hr + 0.25 * size))
 	anchors.eyes = _b(head + _head_node.basis * Vector3(0.25, 0.25, 0.3) * size)
 	anchors.horns = _b(head + _head_node.basis * Vector3(0.3, 0.45, -0.1) * size)
@@ -282,7 +297,9 @@ func build_body(c: Color, c2: Color, s: float, parts: Dictionary, pattern := "sp
 	shadow.material_override = sm
 	shadow.name = "Shadow"
 	add_child(shadow)
-	_top = _body_y + maxf(rmax, head.y + hr * hsc.y)
+	_top = _body_y + (B * head).y + hr * hsc.y
+	for p in sp:
+		_top = maxf(_top, _body_y + (B * Vector3(0, p.ry, p.z)).y)
 	_place_feet()
 
 ## Точка туловища (в его осях) → в осях существа: с высотой и наклоном.
@@ -392,7 +409,8 @@ func _tail_part(id: String) -> void:
 	_tail.position = Vector3(0, 0.05 * size, rear.z - rear.r * 0.7)
 	_body.add_child(_tail)
 	var p := float(sh.tail_pitch)
-	_tail_dir = Vector3(0, sin(p), -cos(p))
+	# Наклон хвоста — от земли, а не от туловища: у прямоходящего хвост не в землю.
+	_tail_dir = Basis(Vector3.RIGHT, _pitch).inverse() * Vector3(0, sin(p), -cos(p))
 	var td := LandParts.dim(sh, "tail")
 	_tail_r = rear.r * 0.5 * float(sh.tail_thick) * float(sh.tail_size) * float(td[3])
 	var base := {"tail_long": 1.5, "tail_club": 0.9}.get(id, 0.8) as float
@@ -534,7 +552,8 @@ func _make_arms(id: String) -> void:
 		var d := LandParts.dim(sh, key)
 		var ln := float(sh.arm_len) * asz * float(d[0]) * float(d[3])
 		var th := float(sh.arm_thick) * asz * float(d[3])
-		var dir := Vector3(side * 0.1, -0.75, 0.6).normalized().rotated(Vector3.RIGHT, -float(sh.arm_pitch))
+		# Руки висят вниз по-земному, как бы ни стояло туловище.
+		var dir := Basis(Vector3.RIGHT, _pitch).inverse() * Vector3(side * 0.1, -0.75, 0.6).normalized().rotated(Vector3.RIGHT, -float(sh.arm_pitch))
 		var arm := {"side": side, "shoulder": Vector3(side * at.rx * 0.85, 0.0, at.z), "dir": dir, "reach": 0.74 * size * ln,
 			"claw": id == "arms_claw", "xs": float(d[1]), "zs": float(d[2]), "key": key}
 		var seg := 0.43 * size * ln
@@ -618,7 +637,7 @@ func _limb(r: float, h: float) -> MeshInstance3D:
 
 ## Где ступне стоять, если идти не надо: под бедром, чуть в сторону.
 func _rest(leg: Dictionary) -> Vector3:
-	var hip: Vector3 = leg.hip
+	var hip := _b(leg.hip as Vector3)
 	var local := Vector3(hip.x * 1.25, 0.0, hip.z)
 	var w := global_transform * local
 	return Vector3(w.x, _ground_at(w.x, w.z), w.z)
@@ -703,6 +722,13 @@ func update(dt: float, at: Vector3, heading: float, vel: Vector3) -> void:
 	var stride := _leg_len * 0.7
 	var busy := _stepping_group
 	for leg in _legs:
+		# Нога не достаёт до земли (туловище подняли) — висит, как рука, и не шагает.
+		var hip_w: Vector3 = _body.global_transform * (leg.hip as Vector3)
+		var reach: float = float(leg.a) + float(leg.b)
+		if hip_w.y - _ground_at(hip_w.x, hip_w.z) > reach * 0.97:
+			leg.t = -1.0
+			leg.foot = hip_w + Vector3(0, -reach * 0.92, 0) + global_transform.basis.z * 0.12 * size
+			continue
 		var rest := _rest(leg)
 		if leg.t >= 0.0:
 			leg.t += dt / float(leg.get("dur", 0.2))

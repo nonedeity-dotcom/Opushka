@@ -298,3 +298,16 @@ func test_размеры_каждой_части(c) -> void:
 	e.land_shape.dims = {"leg3": [1.4, 1.1, 0.9, 1.2]}
 	var back := Evolution.from_dict(JSON.parse_string(JSON.stringify(e.to_dict())))
 	c.eq("размеры ноги сохраняются", back.land_shape.dims.leg3, [1.4, 1.1, 0.9, 1.2])
+
+func test_прямоходящий(c) -> void:
+	var sh := LandParts.fix_shape({"torso_pitch": 9.0})
+	c.eq("поднять можно до стоймя, не больше", sh.torso_pitch, LandParts.SHAPE.torso_pitch[2])
+	var body := {"torso": "torso", "legs": "legs2", "eyes": "eyes"}
+	var up := LandParts.default_shape()
+	up.torso_pitch = 1.3
+	c.ok("голова выше — видно дальше", LandParts.stats(body, up).sight > LandParts.stats(body, LandParts.default_shape()).sight)
+	var e := Evolution.create()
+	e.land_body = body.duplicate()
+	e.land_shape = up
+	var back := Evolution.from_dict(JSON.parse_string(JSON.stringify(e.to_dict())))
+	c.eq("наклон сохраняется", back.land_shape.torso_pitch, 1.3)

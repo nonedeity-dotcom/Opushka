@@ -70,7 +70,7 @@ var _arming_clear := false
 ## туловища, len — длина туловища, size — размер, thick — толщина, updown — выше/ниже.
 const HANDLES := {
 	"torso": [["g0", "girth"], ["g1", "girth"], ["g2", "girth"], ["g3", "girth"], ["g4", "girth"],
-		["len_back", "len"], ["len_front", "len"], ["width", "thick"], ["head", "move"], ["head_size", "size"]],
+		["len_back", "len"], ["len_front", "len"], ["width", "thick"], ["tilt", "move"], ["head", "move"], ["head_size", "size"]],
 	"legs": [["legs", "updown"], ["legs_back", "updown"], ["leg_thick", "thick"]],
 	"feet": [["feet", "size"]],
 	"claws": [["claws", "size"]],
@@ -88,11 +88,12 @@ const VIEW_YAW := {"torso": PI / 2.0, "legs": PI / 2.0, "tail": PI / 2.0 + 0.5, 
 	"mouth": 0.8, "eyes": 0.6, "head": 0.8, "arms": 0.9, "feet": 0.9, "claws": 0.7, "skin": 0.9, "paint": 0.9}
 ## Заготовки тела: что меняют в форме.
 const PRESETS := [
-	["Ящерица", {"len": 1.8, "girth": [0.6, 0.75, 0.8, 0.75, 0.6], "leg_len": 0.6, "leg_len_f": 0.6, "tail_len": 2.2, "tail_pitch": 0.05, "head": 0.9, "neck_z": 0.1, "neck_y": 0.0}],
-	["Толстяк", {"len": 0.8, "girth": [1.3, 1.6, 1.7, 1.5, 1.1], "leg_len": 0.8, "leg_len_f": 0.8, "leg_thick": 1.6, "leg_thick_f": 1.6, "head": 1.1, "neck_z": 0.0, "neck_y": 0.0}],
-	["Жираф", {"len": 1.1, "girth": [0.8, 0.9, 0.95, 0.9, 0.7], "leg_len": 2.0, "leg_len_f": 2.2, "leg_thick": 0.8, "leg_thick_f": 0.8, "neck_y": 1.2, "neck_z": 0.5, "head": 0.8}],
-	["Змей", {"len": 2.4, "girth": [0.45, 0.55, 0.6, 0.55, 0.5], "leg_len": 0.5, "leg_len_f": 0.5, "leg_thick": 0.6, "leg_thick_f": 0.6, "tail_len": 3.0, "tail_pitch": 0.0, "head": 0.8, "neck_z": 0.0, "neck_y": 0.0}],
-	["Горилла", {"len": 1.0, "girth": [0.9, 1.1, 1.35, 1.6, 1.3], "leg_len": 0.9, "leg_len_f": 1.5, "leg_thick": 1.3, "leg_thick_f": 1.7, "arm_len": 1.8, "arm_thick": 1.8, "head": 1.1, "tail_len": 0.3, "neck_z": 0.0, "neck_y": 0.2}],
+	["Ящерица", {"torso_pitch": 0.0, "len": 1.8, "girth": [0.6, 0.75, 0.8, 0.75, 0.6], "leg_len": 0.6, "leg_len_f": 0.6, "tail_len": 2.2, "tail_pitch": 0.05, "head": 0.9, "neck_z": 0.1, "neck_y": 0.0}],
+	["Толстяк", {"torso_pitch": 0.0, "len": 0.8, "girth": [1.3, 1.6, 1.7, 1.5, 1.1], "leg_len": 0.8, "leg_len_f": 0.8, "leg_thick": 1.6, "leg_thick_f": 1.6, "head": 1.1, "neck_z": 0.0, "neck_y": 0.0}],
+	["Жираф", {"torso_pitch": 0.0, "len": 1.1, "girth": [0.8, 0.9, 0.95, 0.9, 0.7], "leg_len": 2.0, "leg_len_f": 2.2, "leg_thick": 0.8, "leg_thick_f": 0.8, "neck_y": 1.2, "neck_z": 0.5, "head": 0.8}],
+	["Змей", {"torso_pitch": 0.0, "len": 2.4, "girth": [0.45, 0.55, 0.6, 0.55, 0.5], "leg_len": 0.5, "leg_len_f": 0.5, "leg_thick": 0.6, "leg_thick_f": 0.6, "tail_len": 3.0, "tail_pitch": 0.0, "head": 0.8, "neck_z": 0.0, "neck_y": 0.0}],
+	["Горилла", {"torso_pitch": 0.35, "len": 1.0, "girth": [0.9, 1.1, 1.35, 1.6, 1.3], "leg_len": 0.9, "leg_len_f": 1.5, "leg_thick": 1.3, "leg_thick_f": 1.7, "arm_len": 1.8, "arm_thick": 1.8, "head": 1.1, "tail_len": 0.3, "neck_z": 0.0, "neck_y": 0.2}],
+	["Прямоходящий", {"torso_pitch": 1.35, "len": 1.1, "girth": [0.95, 1.0, 0.95, 0.9, 0.85], "leg_len": 1.5, "leg_len_f": 1.5, "tail_len": 0.7, "tail_pitch": -0.35, "arm_pitch": 0.0, "neck_z": 0.0, "neck_y": 0.05}],
 	["Крошка", {"len": 0.7, "girth": [0.7, 0.8, 0.8, 0.8, 0.7], "head": 1.6, "leg_len": 0.7, "leg_len_f": 0.7, "tail_len": 0.6, "neck_z": 0.0, "neck_y": 0.0}],
 ]
 
@@ -391,7 +392,7 @@ func _sel_block() -> void:
 	_list.add_child(head)
 	var rows: Array
 	if sel == "torso":
-		rows = [["Длина", "len"], ["Ширина", "width"], ["Высота", "height"], ["Размер", "torso"]]
+		rows = [["Поднять туловище", "torso_pitch"], ["Длина", "len"], ["Ширина", "width"], ["Высота", "height"], ["Размер", "torso"]]
 	else:
 		rows = [["Длина", "dim:%s:0" % sel], ["Ширина", "dim:%s:1" % sel], ["Высота", "dim:%s:2" % sel], ["Размер", "dim:%s:3" % sel]]
 		if sel == "head":
@@ -423,7 +424,7 @@ func _sel_block() -> void:
 		_list.add_child(row)
 	var norm := _button("Эта часть — как обычно", Art.CARD_BORDER, func():
 		if sel == "torso":
-			for k in ["len", "width", "height", "torso"]:
+			for k in ["len", "width", "height", "torso", "torso_pitch"]:
 				evo.land_shape[k] = LandParts.SHAPE[k][0]
 		else:
 			evo.land_shape.dims.erase(sel)
@@ -514,6 +515,10 @@ func _sculpt(id: String, rel: Vector2) -> void:
 			sh.leg_thick_f = float(sh.leg_thick_f) + grow
 		"width":
 			sh.width = float(sh.width) + grow
+		"tilt":
+			# Тянешь перёд туловища вверх — оно поднимается, до стоймя.
+			var half := maxf((_creature.extent()) * 0.35, 0.3)
+			sh.torso_pitch = float(sh.torso_pitch) + d.y / half
 		"arm_thick":
 			sh.arm_thick = float(sh.arm_thick) + grow
 		"tail_base":
@@ -1057,6 +1062,8 @@ func handle_label(id: String) -> String:
 			return "задние ноги " + n.call(sh.leg_len)
 		"width":
 			return "ширина " + n.call(sh.width)
+		"tilt":
+			return "поднять %d°" % int(round(rad_to_deg(float(sh.torso_pitch))))
 		"leg_thick":
 			return "толщина ног " + n.call((float(sh.leg_thick) + float(sh.leg_thick_f)) / 2.0)
 		"arms":
@@ -1308,7 +1315,11 @@ class ValueSlider:
 		var v: float = ed.shape_value(key)
 		var font := get_theme_default_font()
 		draw_string(font, Vector2(16, 24), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 19, Art.TEXT)
-		var num := ("%+.1f" % v).replace(".", ",") if angle else "×" + LandParts._num(snappedf(v, 0.05))
+		var num := "×" + LandParts._num(snappedf(v, 0.05))
+		if key.ends_with("pitch"):
+			num = "%d°" % int(round(rad_to_deg(v)))
+		elif angle:
+			num = ("%+.1f" % v).replace(".", ",")
 		var w := font.get_string_size(num, HORIZONTAL_ALIGNMENT_LEFT, -1, 19).x
 		draw_string(font, Vector2(size.x - 16 - w, 24), num, HORIZONTAL_ALIGNMENT_LEFT, -1, 19, Art.GOLD)
 		var t := _track()
