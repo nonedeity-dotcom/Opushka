@@ -9,7 +9,7 @@ const HORN := Color("#f0b040")
 
 ## Каким значком рисовать место тела, если на нём пусто.
 const SLOT_ICON := {"body": "body", "mouth": "jaws", "eyes": "eyes", "legs": "legs4", "feet": "paws", "claws": "claws",
-	"arms": "arms", "back": "back_spikes", "tail": "tail_long", "head": "horns", "skin": "scales"}
+	"arms": "arms", "back": "back_spikes", "tail": "tail_long", "head": "horns", "skin": "scales", "paint": "paint"}
 
 static func draw(ci: CanvasItem, id: String, rect: Rect2, c: Color, c2: Color) -> void:
 	Art.pen(ci, rect)
@@ -160,6 +160,14 @@ static func draw(ci: CanvasItem, id: String, rect: Rect2, c: Color, c2: Color) -
 			ci.draw_circle(Vector2(44, 56), 6, Color("#e8ffc0"))
 			for q in [Vector2(18, 24), Vector2(84, 30), Vector2(80, 84)]:
 				ci.draw_circle(q, 6, Color("#c8f040"))
+		"paint":
+			# Палитра: капли основного цвета и цвета узора, кисточка.
+			Art.ellipse(ci, Vector2(46, 54), 40, 32, Color("#e8dcc0"))
+			ci.draw_circle(Vector2(30, 40), 10, c)
+			ci.draw_circle(Vector2(54, 34), 10, c2)
+			ci.draw_circle(Vector2(70, 52), 9, Color("#e07a6a"))
+			ci.draw_circle(Vector2(34, 66), 9, Color("#5a8ee0"))
+			ci.draw_line(Vector2(60, 80), Vector2(94, 16), Color("#8a5a3a"), 7, true)
 		_:
 			ci.draw_circle(Vector2(50, 50), 20, c)
 	Art.unpen(ci)

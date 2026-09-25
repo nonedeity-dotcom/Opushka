@@ -18,6 +18,7 @@ signal done
 signal changed(ok: bool, removed: bool)
 
 const DragScroll := preload("res://scripts/ui/drag_scroll.gd")
+const RoundButton := preload("res://scripts/ui/round_button.gd")
 
 var evo: Evolution
 var first := false
@@ -44,6 +45,7 @@ var _msg_tw: Tween
 var _overlay: Control
 var _start_body := {}
 var _start_shape := {}
+var _start_paint := {}
 var _done_btn: Button
 ## Лепка: какой кружок держат, каким пальцем, пора ли пересобрать существо.
 var _grab := ""
@@ -52,13 +54,18 @@ var _dirty := false
 var _rebuild_in := 0.0
 var _yaw_to := PI / 2.0
 var _handles: HandleLayer
+## Панель свёрнута — видно только существо.
+var collapsed := false
+var _expand_btn: Control
+var _done_float: Button
+var _arming_clear := false
 
 ## Кружки лепки: место → [[ручка, вид]]. Вид: move — тянуть куда угодно, girth — толщина
 ## туловища, len — длина туловища, size — размер, thick — толщина, updown — выше/ниже.
 const HANDLES := {
 	"body": [["g0", "girth"], ["g1", "girth"], ["g2", "girth"], ["g3", "girth"], ["g4", "girth"],
-		["len_back", "len"], ["len_front", "len"], ["head", "move"], ["head_size", "size"]],
-	"legs": [["legs", "updown"], ["leg_thick", "thick"]],
+		["len_back", "len"], ["len_front", "len"], ["width", "thick"], ["head", "move"], ["head_size", "size"]],
+	"legs": [["legs", "updown"], ["legs_back", "updown"], ["leg_thick", "thick"]],
 	"feet": [["feet", "size"]],
 	"claws": [["claws", "size"]],
 	"arms": [["arms", "move"], ["arm_thick", "thick"]],
@@ -68,18 +75,19 @@ const HANDLES := {
 	"mouth": [["mouth", "size"]],
 	"eyes": [["eyes", "size"]],
 	"skin": [],
+	"paint": [],
 }
 ## С какой стороны смотреть на место: сбоку или вполоборота спереди.
 const VIEW_YAW := {"body": PI / 2.0, "legs": PI / 2.0, "tail": PI / 2.0 + 0.5, "back": PI / 2.0,
-	"mouth": 0.8, "eyes": 0.6, "head": 0.8, "arms": 0.9, "feet": 0.9, "claws": 0.7, "skin": 0.9}
+	"mouth": 0.8, "eyes": 0.6, "head": 0.8, "arms": 0.9, "feet": 0.9, "claws": 0.7, "skin": 0.9, "paint": 0.9}
 ## Заготовки тела: что меняют в форме.
 const PRESETS := [
-	["Ящерица", {"len": 1.8, "girth": [0.6, 0.75, 0.8, 0.75, 0.6], "leg_len": 0.6, "tail_len": 2.2, "tail_pitch": 0.05, "head": 0.9, "neck_z": 0.1, "neck_y": 0.0}],
-	["Толстяк", {"len": 0.8, "girth": [1.3, 1.6, 1.7, 1.5, 1.1], "leg_len": 0.8, "leg_thick": 1.6, "head": 1.1, "neck_z": 0.0, "neck_y": 0.0}],
-	["Жираф", {"len": 1.1, "girth": [0.8, 0.9, 0.95, 0.9, 0.7], "leg_len": 2.1, "leg_thick": 0.8, "neck_y": 1.2, "neck_z": 0.5, "head": 0.8}],
-	["Змей", {"len": 2.4, "girth": [0.45, 0.55, 0.6, 0.55, 0.5], "leg_len": 0.5, "leg_thick": 0.6, "tail_len": 3.0, "tail_pitch": 0.0, "head": 0.8, "neck_z": 0.0, "neck_y": 0.0}],
-	["Горилла", {"len": 1.0, "girth": [0.9, 1.1, 1.35, 1.6, 1.3], "leg_len": 1.1, "leg_thick": 1.6, "arm_len": 1.8, "arm_thick": 1.8, "head": 1.1, "tail_len": 0.3, "neck_z": 0.0, "neck_y": 0.2}],
-	["Крошка", {"len": 0.7, "girth": [0.7, 0.8, 0.8, 0.8, 0.7], "head": 1.6, "leg_len": 0.7, "tail_len": 0.6, "neck_z": 0.0, "neck_y": 0.0}],
+	["Ящерица", {"len": 1.8, "girth": [0.6, 0.75, 0.8, 0.75, 0.6], "leg_len": 0.6, "leg_len_f": 0.6, "tail_len": 2.2, "tail_pitch": 0.05, "head": 0.9, "neck_z": 0.1, "neck_y": 0.0}],
+	["Толстяк", {"len": 0.8, "girth": [1.3, 1.6, 1.7, 1.5, 1.1], "leg_len": 0.8, "leg_len_f": 0.8, "leg_thick": 1.6, "leg_thick_f": 1.6, "head": 1.1, "neck_z": 0.0, "neck_y": 0.0}],
+	["Жираф", {"len": 1.1, "girth": [0.8, 0.9, 0.95, 0.9, 0.7], "leg_len": 2.0, "leg_len_f": 2.2, "leg_thick": 0.8, "leg_thick_f": 0.8, "neck_y": 1.2, "neck_z": 0.5, "head": 0.8}],
+	["Змей", {"len": 2.4, "girth": [0.45, 0.55, 0.6, 0.55, 0.5], "leg_len": 0.5, "leg_len_f": 0.5, "leg_thick": 0.6, "leg_thick_f": 0.6, "tail_len": 3.0, "tail_pitch": 0.0, "head": 0.8, "neck_z": 0.0, "neck_y": 0.0}],
+	["Горилла", {"len": 1.0, "girth": [0.9, 1.1, 1.35, 1.6, 1.3], "leg_len": 0.9, "leg_len_f": 1.5, "leg_thick": 1.3, "leg_thick_f": 1.7, "arm_len": 1.8, "arm_thick": 1.8, "head": 1.1, "tail_len": 0.3, "neck_z": 0.0, "neck_y": 0.2}],
+	["Крошка", {"len": 0.7, "girth": [0.7, 0.8, 0.8, 0.8, 0.7], "head": 1.6, "leg_len": 0.7, "leg_len_f": 0.7, "tail_len": 0.6, "neck_z": 0.0, "neck_y": 0.0}],
 ]
 
 
@@ -97,6 +105,9 @@ func open(e: Evolution, is_first: bool, conv := {}) -> void:
 		evo.land_shape = LandParts.shape_from_sea(evo.shape)
 	evo.land_shape = LandParts.fix_shape(evo.land_shape)
 	_start_shape = evo.land_shape.duplicate(true)
+	if evo.land_paint.is_empty():
+		evo.land_paint = evo.paint().duplicate()
+	_start_paint = evo.land_paint.duplicate()
 	for ch in get_children():
 		remove_child(ch)
 		ch.queue_free()
@@ -183,12 +194,13 @@ func _build_preview() -> void:
 	add_child(_handles)
 
 func _colors() -> Array:
-	var c := Color(Content.COLORS[evo.color])
-	return [c, Color(Content.COLORS[evo.color2]) if evo.pattern != "none" else c.darkened(0.25)]
+	var pt := evo.paint()
+	var c := Color(LandParts.COLORS[pt.color])
+	return [c, Color(LandParts.COLORS[pt.color2]) if pt.pattern != "none" else c.darkened(0.25)]
 
 func _rebuild_creature(bounce := true) -> void:
 	var cc := _colors()
-	_creature.build_body(cc[0], cc[1], 1.0, evo.land_body, evo.pattern, evo.land_shape)
+	_creature.build_body(cc[0], cc[1], 1.0, evo.land_body, evo.paint().pattern, evo.land_shape)
 	if not bounce:
 		_creature.update(0.0, _pos, _heading, Vector3.ZERO)
 		return
@@ -325,17 +337,21 @@ func _sculpt(id: String, rel: Vector2) -> void:
 			sh.neck_y = float(sh.neck_y) + d.y
 		"head_size":
 			sh.head = float(sh.head) + d.y / 0.39
-		"legs":
-			sh.leg_len = float(sh.leg_len) + d.y / (0.85 * _creature.leg_base())
+		"legs", "legs_back":
+			var key := "leg_len_f" if id == "legs" and _creature.leg_count > 2 else "leg_len"
+			sh[key] = float(sh[key]) + d.y / (0.85 * _creature.leg_base() * float(sh.leg_size))
 		"leg_thick":
 			sh.leg_thick = float(sh.leg_thick) + grow
+			sh.leg_thick_f = float(sh.leg_thick_f) + grow
+		"width":
+			sh.width = float(sh.width) + grow
 		"arm_thick":
 			sh.arm_thick = float(sh.arm_thick) + grow
 		"tail_base":
 			sh.tail_thick = float(sh.tail_thick) + grow
 		"arms":
 			var v: Vector3 = (_creature.anchors.arms as Vector3) + d - _creature.arm_shoulder()
-			sh.arm_len = v.length() / 0.74
+			sh.arm_len = v.length() / (0.74 * float(sh.arm_size))
 			var rest := Vector3(0.1, -0.75, 0.6).normalized()
 			sh.arm_pitch = wrapf(atan2(v.y, v.z) - atan2(rest.y, rest.z), -PI, PI)
 		"tail":
@@ -357,6 +373,10 @@ func _build_panel() -> void:
 	_panel = Kit.vbox(10)
 	add_child(_panel)
 	var head := Kit.hbox(10)
+	var fold := RoundButton.new()
+	fold.setup("expand", "Свернуть — видно только существо", 48)
+	fold.pressed.connect(func(): set_collapsed.call_deferred(true))
+	head.add_child(fold)
 	var title := Kit.label("Тело для суши", 30, Art.TEXT, true)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(title)
@@ -381,6 +401,7 @@ func _build_panel() -> void:
 	var reset := _button("Как было", Art.CARD_BORDER, func():
 		evo.land_body = _start_body.duplicate()
 		evo.land_shape = _start_shape.duplicate(true)
+		evo.land_paint = _start_paint.duplicate()
 		changed.emit(true, true)
 		_after_change.call_deferred("Вернул, как было"))
 	reset.custom_minimum_size = Vector2(150, 60)
@@ -401,12 +422,35 @@ func _build_panel() -> void:
 	_msg.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.55))
 	_msg.modulate.a = 0.0
 	add_child(_msg)
+	# Свёрнуто: только кнопка «Части» и «Готово» поверх витрины.
+	_expand_btn = RoundButton.new()
+	_expand_btn.setup("shrink", "Показать части", 64)
+	_expand_btn.caption = "Части"
+	_expand_btn.floating = true
+	_expand_btn.visible = false
+	_expand_btn.pressed.connect(func(): set_collapsed.call_deferred(false))
+	add_child(_expand_btn)
+	_done_float = _button("Выйти на сушу" if first else "Готово", Art.GREEN, func(): done.emit())
+	_done_float.custom_minimum_size = Vector2(220, 56)
+	_done_float.visible = false
+	add_child(_done_float)
+
+## Свернуть панель — видно только существо (и кружки лепки), или развернуть обратно.
+func set_collapsed(on: bool) -> void:
+	collapsed = on
+	_panel.visible = not on
+	_expand_btn.visible = on
+	_done_float.visible = on
+	_layout()
 
 func _layout() -> void:
 	if _box == null:
 		return
 	var landscape := size.x >= size.y
-	if landscape:
+	if collapsed:
+		_box.position = Vector2.ZERO
+		_box.size = size
+	elif landscape:
 		var w := minf(size.x * 0.46, 700.0)
 		_box.position = Vector2.ZERO
 		_box.size = Vector2(size.x - w - 12, size.y)
@@ -422,6 +466,10 @@ func _layout() -> void:
 		_tabs.columns = 6
 	_stats.size = Vector2(_box.size.x - 32, 0)
 	_stats.position = Vector2(16, _box.size.y - 60)
+	_expand_btn.size = Vector2(64, 64)
+	_expand_btn.position = Vector2(size.x - 64 - 24, 18)
+	_done_float.size = _done_float.custom_minimum_size
+	_done_float.position = size - _done_float.size - Vector2(24, 24)
 	_handles.position = _box.position
 	_handles.size = _box.size
 	_msg.position = Vector2(0, 24)
@@ -437,11 +485,11 @@ func _refresh() -> void:
 		_tabs.remove_child(ch)
 		ch.queue_free()
 	var cc := _colors()
-	for s in [["body", "Тело", ""]] + LandParts.SLOTS:
+	for s in [["body", "Тело", ""]] + LandParts.SLOTS + [["paint", "Окрас", ""]]:
 		var id: String = s[0]
 		var t := SlotTab.new()
 		t.part = evo.land_body.get(id, LandIcons.SLOT_ICON.get(id, "body"))
-		t.empty = id != "body" and not evo.land_body.has(id)
+		t.empty = id != "body" and id != "paint" and not evo.land_body.has(id)
 		t.c = cc[0]
 		t.c2 = cc[1]
 		t.text = s[1]
@@ -452,6 +500,7 @@ func _refresh() -> void:
 		# Перестраивать список — после касания, не посреди него (иначе кнопка уже вне дерева).
 		t.pressed.connect(func():
 			slot = id
+			_arming_clear = false
 			_scroll.scroll_vertical = 0
 			_yaw_to = VIEW_YAW.get(id, 0.9)
 			_refresh.call_deferred())
@@ -468,7 +517,14 @@ func _refresh() -> void:
 		_body_list()
 		_refresh_stats()
 		return
+	if slot == "paint":
+		_paint_list()
+		_refresh_stats()
+		return
 	var sz_key := "head" if slot == "head" else slot
+	var rows := _slider_rows(slot, cur)
+	if not rows.is_empty():
+		_add_sliders(rows)
 	if HANDLES.get(slot, []).size() > 0 and (cur != "" or slot == "feet" or slot == "tail"):
 		var how := Kit.label(_sculpt_hint(slot), 17, Art.GOLD)
 		how.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -516,6 +572,7 @@ func _body_list() -> void:
 	var how := Kit.label("Тяни кружки на существе: по спине — толще или тоньше, с концов — длиннее или короче, зелёный на голове — шея (выше, дальше), жёлтый над головой — голова больше.", 17, Art.GOLD)
 	how.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_list.add_child(how)
+	_add_sliders(_slider_rows("body", ""))
 	var st := LandParts.stats(evo.land_body, evo.land_shape)
 	var base := LandParts.stats(evo.land_body, LandParts.default_shape())
 	var eff := Kit.label("Форма даёт: здоровье ×%s · скорость ×%s" % [LandParts._num(snappedf(st.hp / base.hp, 0.01)), LandParts._num(snappedf(st.speed / base.speed, 0.01))], 18, Art.GREEN)
@@ -560,6 +617,121 @@ func _body_list() -> void:
 		b.add_theme_font_size_override("font_size", 19)
 		row.add_child(b)
 	_list.add_child(row)
+	# С нуля: со второго нажатия — чтобы не стереть всё случайно.
+	var clear := _button("Точно? Снять всё и начать с нуля" if _arming_clear else "С нуля — пустое туловище",
+		Color(0.62, 0.2, 0.22) if _arming_clear else Color(0.4, 0.2, 0.22), func():
+			if not _arming_clear:
+				_arming_clear = true
+				_refresh.call_deferred()
+				return
+			_arming_clear = false
+			var r := evo.land_clear()
+			changed.emit(true, true)
+			_after_change.call_deferred(r.message))
+	clear.custom_minimum_size.y = 50
+	clear.add_theme_font_size_override("font_size", 19)
+	_list.add_child(clear)
+
+## Ползунки для места: [подпись, ключ формы]. «size:место» — размер части.
+func _slider_rows(s: String, cur: String) -> Array:
+	match s:
+		"body":
+			return [["Размер туловища", "torso"], ["Длина", "len"], ["Ширина", "width"], ["Высота", "height"],
+				["Голова", "head"], ["Шея вперёд", "neck_z"], ["Шея вверх", "neck_y"]]
+		"legs":
+			if _creature.leg_count > 2:
+				return [["Размер ног", "leg_size"], ["Передние — длина", "leg_len_f"], ["Передние — ширина", "leg_thick_f"],
+					["Задние — длина", "leg_len"], ["Задние — ширина", "leg_thick"], ["Ступни", "size:feet"]]
+			return [["Размер ног", "leg_size"], ["Длина", "leg_len"], ["Ширина", "leg_thick"], ["Ступни", "size:feet"]]
+		"arms":
+			if cur == "":
+				return []
+			return [["Размер рук", "arm_size"], ["Длина", "arm_len"], ["Ширина", "arm_thick"], ["Наклон", "arm_pitch"], ["Кисти", "size:arms"]]
+		"tail":
+			return [["Размер хвоста", "tail_size"], ["Длина", "tail_len"], ["Ширина", "tail_thick"], ["Наклон", "tail_pitch"]]
+		"feet":
+			return [["Размер ступней", "size:feet"]]
+		"skin", "paint":
+			return []
+	if cur == "":
+		return []
+	return [["Размер", "size:" + s]]
+
+func shape_value(key: String) -> float:
+	if key.begins_with("size:"):
+		return LandParts.part_size(evo.land_shape, key.substr(5))
+	return float(evo.land_shape.get(key, 1.0))
+
+func set_shape_value(key: String, v: float) -> void:
+	var sh: Dictionary = evo.land_shape
+	if key.begins_with("size:"):
+		sh.sizes[key.substr(5)] = v
+	else:
+		sh[key] = v
+	evo.land_shape = LandParts.fix_shape(sh)
+	_dirty = true
+
+func _add_sliders(rows: Array) -> void:
+	var box := Kit.vbox(4)
+	for r in rows:
+		var key: String = r[1]
+		var sl := ValueSlider.new()
+		sl.text = r[0]
+		sl.ed = self
+		sl.key = key
+		var lim: Array = LandParts.SIZE_LIMITS if key.begins_with("size:") else [LandParts.SHAPE[key][1], LandParts.SHAPE[key][2]]
+		sl.lo = lim[0]
+		sl.hi = lim[1]
+		sl.angle = key.ends_with("pitch") or key.begins_with("neck")
+		sl.custom_minimum_size = Vector2(0, 62)
+		box.add_child(sl)
+	_list.add_child(Kit.card(box, Color(1, 1, 1, 0.04), 14, 10))
+
+## Вкладка «Окрас»: основной цвет, цвет узора, узор. Бесплатно.
+func _paint_list() -> void:
+	var pt := evo.paint()
+	for pair in [["Основной цвет", "color"], ["Цвет узора", "color2"]]:
+		_list.add_child(Kit.label(pair[0], 20, Art.TEXT, true))
+		var grid := GridContainer.new()
+		grid.columns = 7
+		grid.add_theme_constant_override("h_separation", 6)
+		grid.add_theme_constant_override("v_separation", 6)
+		for i in LandParts.COLORS.size():
+			var sw := Swatch.new()
+			sw.col = Color(LandParts.COLORS[i])
+			sw.on = int(pt[pair[1]]) == i
+			sw.custom_minimum_size = Vector2(0, 46)
+			sw.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			var key: String = pair[1]
+			sw.pressed.connect(func(): _set_paint.call_deferred(key, i))
+			grid.add_child(sw)
+		_list.add_child(grid)
+	_list.add_child(Kit.label("Узор", 20, Art.TEXT, true))
+	var pg := GridContainer.new()
+	pg.columns = 3
+	pg.add_theme_constant_override("h_separation", 8)
+	pg.add_theme_constant_override("v_separation", 8)
+	var cc := _colors()
+	for q in LandParts.PATTERNS:
+		var tile := PatternTile.new()
+		tile.pattern = q[0]
+		tile.text = q[1]
+		tile.c = cc[0]
+		tile.c2 = Color(LandParts.COLORS[pt.color2])
+		tile.on = pt.pattern == q[0]
+		tile.custom_minimum_size = Vector2(0, 92)
+		tile.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var id: String = q[0]
+		tile.pressed.connect(func(): _set_paint.call_deferred("pattern", id))
+		pg.add_child(tile)
+	_list.add_child(pg)
+
+func _set_paint(key: String, v: Variant) -> void:
+	var pt := evo.paint().duplicate()
+	pt[key] = v
+	evo.land_paint = LandParts.fix_paint(pt)
+	changed.emit(true, false)
+	_after_change("")
 
 func _sculpt_hint(s: String) -> String:
 	match s:
@@ -575,17 +747,18 @@ func _shape_is_default(s: String, key: String) -> bool:
 	var sh: Dictionary = evo.land_shape
 	var d := LandParts.default_shape()
 	match s:
-		"legs":
-			return is_equal_approx(sh.leg_len, d.leg_len) and is_equal_approx(sh.leg_thick, d.leg_thick)
-		"arms":
-			return is_equal_approx(sh.arm_len, d.arm_len) and is_equal_approx(sh.arm_thick, d.arm_thick) and is_equal_approx(sh.arm_pitch, d.arm_pitch)
-		"tail":
-			return is_equal_approx(sh.tail_len, d.tail_len) and is_equal_approx(sh.tail_thick, d.tail_thick) and is_equal_approx(sh.tail_pitch, d.tail_pitch)
+		"legs", "arms", "tail":
+			var pre: String = {"legs": "leg_", "arms": "arm_", "tail": "tail_"}[s]
+			for k in sh:
+				if String(k).begins_with(pre) and sh[k] is float and not is_equal_approx(sh[k], d[k]):
+					return false
+			return true
 	return not sh.sizes.has(key)
 
 func _reset_shape(s: String, key: String) -> void:
 	var d := LandParts.default_shape()
-	var keys: Array = {"legs": ["leg_len", "leg_thick"], "arms": ["arm_len", "arm_thick", "arm_pitch"], "tail": ["tail_len", "tail_thick", "tail_pitch"]}.get(s, [])
+	var keys: Array = {"legs": ["leg_size", "leg_len", "leg_thick", "leg_len_f", "leg_thick_f"], "arms": ["arm_size", "arm_len", "arm_thick", "arm_pitch"],
+		"tail": ["tail_size", "tail_len", "tail_thick", "tail_pitch"]}.get(s, [])
 	for k in keys:
 		evo.land_shape[k] = d[k]
 	evo.land_shape.sizes.erase(key)
@@ -594,6 +767,8 @@ func _slot_hint(s: String) -> String:
 	match s:
 		"body":
 			return "Тело целиком: длина, толщина, шея и голова. От формы зависят здоровье и скорость: толще — крепче, но медленнее."
+		"paint":
+			return "Цвета и узор — бесплатно. Узор рисуется вторым цветом."
 		"mouth":
 			return "Рот решает, что тебе вкуснее: плоды или мясо с яйцами, и как больно кусаешь."
 		"eyes":
@@ -678,9 +853,13 @@ func handle_label(id: String) -> String:
 		"head_size":
 			return "голова " + n.call(sh.head)
 		"legs":
-			return "ноги " + n.call(sh.leg_len)
+			return "передние ноги " + n.call(sh.leg_len_f) if _creature.leg_count > 2 else "ноги " + n.call(sh.leg_len)
+		"legs_back":
+			return "задние ноги " + n.call(sh.leg_len)
+		"width":
+			return "ширина " + n.call(sh.width)
 		"leg_thick":
-			return "толщина ног " + n.call(sh.leg_thick)
+			return "толщина ног " + n.call((float(sh.leg_thick) + float(sh.leg_thick_f)) / 2.0)
 		"arms":
 			return "руки " + n.call(sh.arm_len)
 		"arm_thick":
@@ -888,3 +1067,135 @@ class HandleLayer:
 				var at := p + Vector2(-w / 2.0, -28)
 				draw_style_box(Kit.box(Color(0.05, 0.08, 0.1, 0.85), 10, Color(0, 0, 0, 0), 0), Rect2(at + Vector2(-8, -22), Vector2(w + 16, 30)))
 				draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 20, Art.TEXT)
+
+## Ползунок: подпись и число сверху, дорожка и шарик снизу. Тянешь пальцем вбок.
+class ValueSlider:
+	extends Control
+	var ed: Control
+	var key := ""
+	var text := ""
+	var lo := 0.5
+	var hi := 2.0
+	## Наклон и шея — в метрах и градусах, а не «во сколько раз».
+	var angle := false
+	var _held := false
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_STOP
+
+	func _track() -> Rect2:
+		return Rect2(16, size.y - 22, size.x - 32, 8)
+
+	func _gui_input(e: InputEvent) -> void:
+		var set_x := false
+		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
+			_held = e.pressed
+			set_x = e.pressed
+			if e.pressed:
+				# Список под ползунком не листать, пока его тянут.
+				ed._scroll.cancel()
+			else:
+				ed._refresh_stats()
+		elif e is InputEventMouseMotion and _held:
+			set_x = true
+		if set_x:
+			var t := _track()
+			var k := clampf((e.position.x - t.position.x) / t.size.x, 0.0, 1.0)
+			ed.set_shape_value(key, lerpf(lo, hi, k))
+			queue_redraw()
+			accept_event()
+
+	func _draw() -> void:
+		var v: float = ed.shape_value(key)
+		var font := get_theme_default_font()
+		draw_string(font, Vector2(16, 24), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 19, Art.TEXT)
+		var num := ("%+.1f" % v).replace(".", ",") if angle else "×" + LandParts._num(snappedf(v, 0.05))
+		var w := font.get_string_size(num, HORIZONTAL_ALIGNMENT_LEFT, -1, 19).x
+		draw_string(font, Vector2(size.x - 16 - w, 24), num, HORIZONTAL_ALIGNMENT_LEFT, -1, 19, Art.GOLD)
+		var t := _track()
+		draw_style_box(Kit.box(Color(1, 1, 1, 0.12), 4, Color(0, 0, 0, 0), 0), t)
+		var k := clampf((v - lo) / (hi - lo), 0.0, 1.0)
+		draw_style_box(Kit.box(Art.GREEN_DARK, 4, Color(0, 0, 0, 0), 0), Rect2(t.position, Vector2(t.size.x * k, t.size.y)))
+		# Отметка «обычное».
+		var d: float = LandParts.SHAPE[key][0] if LandParts.SHAPE.has(key) else 1.0
+		var dk := clampf((d - lo) / (hi - lo), 0.0, 1.0)
+		draw_line(Vector2(t.position.x + t.size.x * dk, t.position.y - 5), Vector2(t.position.x + t.size.x * dk, t.end.y + 5), Color(1, 1, 1, 0.35), 2)
+		var c := Vector2(t.position.x + t.size.x * k, t.get_center().y)
+		draw_circle(c, 15 if _held else 13, Color.WHITE)
+		draw_circle(c, 9 if _held else 8, Art.GREEN)
+
+## Цвет-кружок для «Окраса».
+class Swatch:
+	extends Control
+	signal pressed
+	var col := Color.WHITE
+	var on := false
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_STOP
+
+	func _gui_input(e: InputEvent) -> void:
+		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT and not e.pressed:
+			accept_event()
+			pressed.emit()
+
+	func _draw() -> void:
+		var r := minf(size.x, size.y) / 2.0 - 3.0
+		if on:
+			draw_circle(size / 2.0, r + 3.0, Color.WHITE)
+		draw_circle(size / 2.0, r, col)
+
+## Плитка узора: существо-капля сбоку с этим узором и подпись.
+class PatternTile:
+	extends Control
+	signal pressed
+	var pattern := ""
+	var text := ""
+	var c := Color.WHITE
+	var c2 := Color.WHITE
+	var on := false
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_STOP
+
+	func _gui_input(e: InputEvent) -> void:
+		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT and not e.pressed:
+			accept_event()
+			pressed.emit()
+
+	func _draw() -> void:
+		draw_style_box(Kit.box(Color(0.16, 0.3, 0.26, 1.0) if on else Art.CARD, 14, Art.GREEN if on else Art.CARD_BORDER, 0), Rect2(Vector2.ZERO, size))
+		var ctr := Vector2(size.x / 2.0, 34)
+		var rx := minf(size.x * 0.3, 52.0)
+		var ry := 20.0
+		Art.ellipse(self, ctr, rx, ry, c)
+		match pattern:
+			"spots":
+				for q in [Vector2(-0.4, -0.4), Vector2(0.1, -0.6), Vector2(0.5, -0.2), Vector2(-0.1, 0.1)]:
+					draw_circle(ctr + Vector2(q.x * rx, q.y * ry), 5, c2)
+			"stripes", "tiger":
+				var n := 7 if pattern == "tiger" else 4
+				for i in n:
+					var x := lerpf(-0.7, 0.7, float(i) / (n - 1)) * rx
+					draw_line(ctr + Vector2(x, -ry * 0.9), ctr + Vector2(x - 3, ry * 0.2), c2, 5 if n == 4 else 3)
+			"rings":
+				for x in [-0.45, 0.0, 0.45]:
+					draw_line(ctr + Vector2(x * rx, -ry * 0.95), ctr + Vector2(x * rx, ry * 0.95), c2, 5)
+			"gradient":
+				Art.ellipse(self, ctr + Vector2(-rx * 0.45, 0), rx * 0.55, ry * 0.95, c2)
+			"belly":
+				Art.ellipse(self, ctr + Vector2(0, ry * 0.45), rx * 0.85, ry * 0.5, c2)
+			"back":
+				draw_line(ctr + Vector2(-rx * 0.8, -ry * 0.75), ctr + Vector2(rx * 0.8, -ry * 0.75), c2, 5)
+			"dots":
+				for i in 12:
+					draw_circle(ctr + Vector2(fmod(i * 0.37, 1.0) * 1.4 - 0.7, fmod(i * 0.61, 1.0) * 1.2 - 0.6) * Vector2(rx, ry), 2.5, c2)
+			"leopard":
+				for i in 6:
+					var q := ctr + Vector2(fmod(i * 0.41, 1.0) * 1.3 - 0.65, fmod(i * 0.67, 1.0) * 1.0 - 0.5) * Vector2(rx, ry)
+					draw_circle(q, 5, c2)
+					draw_circle(q, 2.5, c.lightened(0.1))
+		draw_circle(ctr + Vector2(rx * 0.95, -ry * 0.2), 8, c)
+		var font := get_theme_default_font()
+		var w := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x
+		draw_string(font, Vector2((size.x - w) / 2.0, size.y - 12), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Art.TEXT if on else Art.MUTED)

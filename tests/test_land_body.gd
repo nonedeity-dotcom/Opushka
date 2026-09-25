@@ -190,7 +190,12 @@ func test_форма_и_свойства(c) -> void:
 	c.ok("но медленнее", st.speed < base.speed)
 	var legs := LandParts.default_shape()
 	legs.leg_len = 2.0
+	legs.leg_len_f = 2.0
 	c.ok("длинные ноги — быстрее", LandParts.stats(body, legs).speed > base.speed * 1.2)
+	var one := LandParts.default_shape()
+	one.leg_len_f = 2.0
+	var half: float = LandParts.stats(body, one).speed
+	c.ok("только передние длинные — быстрее, но меньше (%.2f)" % half, half > base.speed and half < LandParts.stats(body, legs).speed)
 	var big := LandParts.default_shape()
 	big.sizes = {"mouth": 2.0}
 	c.ok("большая пасть кусает сильнее", LandParts.stats(body, big).bite > base.bite + 1.0)
@@ -216,3 +221,51 @@ func test_форма_сохраняется(c) -> void:
 	fat_land.land_shape = e.land_shape
 	fat_land.land_shape.girth = [1.8, 1.9, 2.0, 1.9, 1.8]
 	c.ok("на суше толстое тело крепче", Land.new(fat_land, 5).max_hp > thin * 1.3)
+
+func test_размеры_целиком(c) -> void:
+	var body := {"legs": "legs4", "mouth": "jaws", "arms": "arms"}
+	var base := LandParts.stats(body, LandParts.default_shape())
+	var big := LandParts.default_shape()
+	big.torso = 1.5
+	c.ok("туловище крупнее — крепче", LandParts.stats(body, big).hp > base.hp * 1.5)
+	var wide := LandParts.default_shape()
+	wide.width = 1.6
+	c.ok("шире — крепче", LandParts.stats(body, wide).hp > base.hp * 1.1)
+	var arms := LandParts.default_shape()
+	arms.arm_size = 1.8
+	c.ok("руки крупнее — достают дальше", LandParts.stats(body, arms).reach > base.reach + 0.4)
+	var sp := LandParts.spine(wide, 1.0)
+	c.ok("ширина — вбок, высота — прежняя", sp[2].rx > sp[2].ry * 1.5)
+
+func test_старые_ноги(c) -> void:
+	var d := LandParts.fix_shape({"leg_len": 1.8, "leg_thick": 1.4})
+	c.ok("старое сохранение: передние — как задние", d.leg_len_f == 1.8 and d.leg_thick_f == 1.4)
+
+func test_с_нуля(c) -> void:
+	var e := _evo()
+	e.land_start()
+	e.land_put("legs6")
+	e.land_put("arms")
+	var free := e.land_free()
+	var r := e.land_clear()
+	c.ok("всё снято: " + r.message, e.land_body == {"legs": "stubs"})
+	c.ok("ДНК вернулась", e.land_free() > free + 40)
+	c.eq("туловище простое", e.land_shape.len, LandParts.blank_shape().len)
+
+func test_окрас(c) -> void:
+	var e := _evo()
+	e.color = 3
+	e.color2 = 7
+	e.pattern = "stripes"
+	e.land_start()
+	c.eq("окрас с клетки", e.paint(), {"color": 3, "color2": 7, "pattern": "stripes"})
+	e.land_paint = {"color": 20, "color2": 25, "pattern": "leopard"}
+	var back := Evolution.from_dict(JSON.parse_string(JSON.stringify(e.to_dict())))
+	c.eq("окрас сохраняется", back.paint(), {"color": 20, "color2": 25, "pattern": "leopard"})
+	c.eq("мусор — обычный окрас", LandParts.fix_paint({"color": 99, "pattern": "zebra"}), {"color": 0, "color2": 5, "pattern": "spots"})
+	c.eq("старое сохранение без окраса — как клетка", Evolution.from_dict(_old(e)).paint().pattern, "stripes")
+
+func _old(e: Evolution) -> Dictionary:
+	var d := JSON.parse_string(JSON.stringify(e.to_dict())) as Dictionary
+	d.erase("land_paint")
+	return d

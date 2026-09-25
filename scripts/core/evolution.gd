@@ -51,6 +51,8 @@ var land_body := {}
 var land_ready := false
 ## Вылепленная форма тела суши (LandParts.fix_shape).
 var land_shape := {}
+## Окрас на суше: цвета и узор (LandParts.fix_paint). Пусто — как у клетки.
+var land_paint := {}
 
 
 static func create(diff := "normal") -> Evolution:
@@ -113,11 +115,23 @@ func land_start() -> Dictionary:
 	var conv := LandParts.from_sea(body)
 	land_body = conv.body
 	land_shape = LandParts.shape_from_sea(shape)
+	land_paint = LandParts.default_paint(color, color2, pattern)
 	var back := 0
 	for g in conv.gone:
 		back += int(Content.PARTS[g[0]].cost)
 	conv.back = back
 	return conv
+
+## Окрас на суше (если ещё не выбирали — как у клетки).
+func paint() -> Dictionary:
+	return land_paint if not land_paint.is_empty() else LandParts.default_paint(color, color2, pattern)
+
+## Начать с чистого листа: все части сняты (ДНК вернулась), простое туловище на лапках.
+func land_clear() -> Dictionary:
+	var back := land_cost()
+	land_body = {"legs": "stubs"}
+	land_shape = LandParts.blank_shape()
+	return {"ok": true, "message": "Чистый лист: +%d ДНК" % back}
 
 ## Поставить часть на её место (старая с этого места снимается, ДНК за неё возвращается).
 func land_put(id: String) -> Dictionary:
@@ -502,6 +516,7 @@ func to_dict() -> Dictionary:
 		"land_body": land_body.duplicate(),
 		"land_ready": land_ready,
 		"land_shape": land_shape.duplicate(true),
+		"land_paint": land_paint.duplicate(),
 	}
 
 ## Прочитанное с диска. Непонятное выбрасывается по кусочку. null — сохранения нет.
@@ -607,6 +622,7 @@ static func from_dict(d: Variant) -> Evolution:
 	e.land_ready = d.get("land_ready", false) == true and not e.land_body.is_empty()
 	if not e.land_body.is_empty():
 		e.land_shape = LandParts.fix_shape(d.get("land_shape")) if d.get("land_shape") is Dictionary else LandParts.shape_from_sea(e.shape)
+		e.land_paint = LandParts.fix_paint(d.get("land_paint")) if d.get("land_paint") is Dictionary else LandParts.default_paint(e.color, e.color2, e.pattern)
 	var pl = d.get("played")
 	if pl is int or pl is float:
 		e.played = maxf(0.0, float(pl))

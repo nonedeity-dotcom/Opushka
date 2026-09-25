@@ -202,15 +202,18 @@ static func stats(body: Dictionary, shape := {}) -> Dictionary:
 	# Форма тела.
 	var bulk := bulk_of(sh)
 	s.hp *= clampf(sqrt(bulk), 0.6, 1.8)
-	s.hp += (float(sh.leg_thick) - 1.0) * 6.0
+	var ls := float(sh.leg_size)
+	var leg_len := (float(sh.leg_len) + float(sh.leg_len_f)) / 2.0 * ls
+	var leg_thick := (float(sh.leg_thick) + float(sh.leg_thick_f)) / 2.0 * ls
+	s.hp += (leg_thick - 1.0) * 6.0
 	s.speed /= clampf(pow(bulk, 0.15), 0.85, 1.25)
-	s.speed *= clampf(0.75 + 0.25 * float(sh.leg_len), 0.7, 1.35) * (1.0 - 0.05 * (float(sh.leg_thick) - 1.0))
+	s.speed *= clampf(0.75 + 0.25 * leg_len, 0.7, 1.35) * (1.0 - 0.05 * (leg_thick - 1.0))
 	s.speed /= 1.0 + 0.03 * heavy
 	s.bite += (float(sh.head) - 1.0) * 3.0
 	if body.has("arms"):
-		s.reach += (float(sh.arm_len) - 1.0) * 0.8
-		s.bite += (float(sh.arm_thick) - 1.0) * 1.5
-	s.turn *= clampf(0.85 + 0.15 * float(sh.tail_len), 0.8, 1.4)
+		s.reach += (float(sh.arm_len) * float(sh.arm_size) - 1.0) * 0.8
+		s.bite += (float(sh.arm_thick) * float(sh.arm_size) - 1.0) * 1.5
+	s.turn *= clampf(0.85 + 0.15 * float(sh.tail_len) * float(sh.tail_size), 0.8, 1.4)
 	# Быстрее двух обычных не бегает никто — иначе ни стая, ни отшельник не страшны.
 	s.speed = minf(s.speed, 1.9)
 	s.hp = maxf(s.hp, 10.0)
@@ -225,11 +228,16 @@ static func stats(body: Dictionary, shape := {}) -> Dictionary:
 
 const SPINE := 5
 ## ключ → [обычное, меньше некуда, больше некуда]
+##   torso — размер туловища целиком, width / height — ширина и высота туловища;
+##   leg_* — задние ноги (у двуногих — обе), leg_*_f — передние; *_size — размер
+##   целиком (длина, толщина и ступня вместе).
 const SHAPE := {
 	"len": [1.0, 0.6, 2.4], "head": [1.0, 0.5, 2.0], "neck_z": [0.0, -0.2, 1.4], "neck_y": [0.0, -0.4, 1.4],
-	"leg_len": [1.0, 0.45, 2.4], "leg_thick": [1.0, 0.5, 2.5],
-	"arm_len": [1.0, 0.5, 2.5], "arm_thick": [1.0, 0.5, 2.5], "arm_pitch": [0.0, -1.2, 1.4],
-	"tail_len": [1.0, 0.2, 3.5], "tail_pitch": [0.25, -0.8, 1.3], "tail_thick": [1.0, 0.5, 2.2],
+	"torso": [1.0, 0.5, 2.0], "width": [1.0, 0.5, 2.0], "height": [1.0, 0.5, 2.0],
+	"leg_size": [1.0, 0.5, 2.0], "leg_len": [1.0, 0.45, 2.4], "leg_thick": [1.0, 0.5, 2.5],
+	"leg_len_f": [1.0, 0.45, 2.4], "leg_thick_f": [1.0, 0.5, 2.5],
+	"arm_size": [1.0, 0.5, 2.0], "arm_len": [1.0, 0.5, 2.5], "arm_thick": [1.0, 0.5, 2.5], "arm_pitch": [0.0, -1.2, 1.4],
+	"tail_size": [1.0, 0.5, 2.0], "tail_len": [1.0, 0.2, 3.5], "tail_pitch": [0.25, -0.8, 1.3], "tail_thick": [1.0, 0.5, 2.2],
 }
 const GIRTH := [0.9, 1.0, 1.05, 1.0, 0.9]
 const GIRTH_LIMITS := [0.35, 2.0]
@@ -252,6 +260,11 @@ static func fix_shape(v: Variant) -> Dictionary:
 		var x = v.get(k)
 		if x is float or x is int:
 			d[k] = clampf(float(x), SHAPE[k][1], SHAPE[k][2])
+	# Раньше ноги были одни на всех: передние — как задние.
+	if not v.has("leg_len_f"):
+		d.leg_len_f = d.leg_len
+	if not v.has("leg_thick_f"):
+		d.leg_thick_f = d.leg_thick
 	var g = v.get("girth")
 	if g is Array and g.size() == SPINE and g.all(func(x): return x is float or x is int):
 		d.girth = g.map(func(x): return clampf(float(x), GIRTH_LIMITS[0], GIRTH_LIMITS[1]))
@@ -271,7 +284,16 @@ static func bulk_of(shape: Dictionary) -> float:
 	var sum := 0.0
 	for x in g:
 		sum += float(x) * float(x)
-	return float(shape.get("len", 1.0)) * sum / g.size() / BULK_BASE
+	var t := float(shape.get("torso", 1.0))
+	return float(shape.get("len", 1.0)) * t * t * t * float(shape.get("width", 1.0)) * float(shape.get("height", 1.0)) * sum / g.size() / BULK_BASE
+
+## Чистый лист: простое круглое туловище, всё остальное — обычное.
+static func blank_shape() -> Dictionary:
+	var d := default_shape()
+	d.len = 0.8
+	d.girth = [0.85, 0.95, 1.0, 0.95, 0.85]
+	d.tail_len = 0.5
+	return d
 
 ## Форма с первого этапа: длина — от вытянутости клетки, толщина по длине — от её
 ## очертания (где клетка была шире, там и туловище толще).
@@ -303,11 +325,14 @@ static func shape_from_sea(sea: Array) -> Dictionary:
 	return d
 
 ## Точки позвоночника в метрах (s — размер существа): [{z, r}] от хвоста к голове.
+## rx, ry — полуширина и полувысота в этом месте.
 static func spine(shape: Dictionary, s: float) -> Array:
-	var L := 1.2 * s * float(shape.len)
+	var t := float(shape.get("torso", 1.0))
+	var L := 1.2 * s * float(shape.len) * t
 	var out: Array = []
 	for i in SPINE:
-		out.append({"z": -L / 2.0 + L * i / (SPINE - 1.0), "r": 0.475 * s * float(shape.girth[i])})
+		var r := 0.475 * s * float(shape.girth[i]) * t
+		out.append({"z": -L / 2.0 + L * i / (SPINE - 1.0), "r": r, "rx": r * float(shape.get("width", 1.0)), "ry": r * float(shape.get("height", 1.0))})
 	return out
 
 ## Толщина и место на позвоночнике в доле t (0 — хвост, 1 — голова).
@@ -315,7 +340,38 @@ static func spine_at(sp: Array, t: float) -> Dictionary:
 	var f := clampf(t, 0.0, 1.0) * (sp.size() - 1)
 	var i := mini(int(f), sp.size() - 2)
 	var k := f - i
-	return {"z": lerpf(sp[i].z, sp[i + 1].z, k), "r": lerpf(sp[i].r, sp[i + 1].r, k)}
+	return {"z": lerpf(sp[i].z, sp[i + 1].z, k), "r": lerpf(sp[i].r, sp[i + 1].r, k),
+		"rx": lerpf(sp[i].rx, sp[i + 1].rx, k), "ry": lerpf(sp[i].ry, sp[i + 1].ry, k)}
+
+# --- окрас ----------------------------------------------------------------------------
+#
+# Цвета на суше: первые 16 — те же, что у клетки (номер переносится как есть), дальше —
+# земляные, тёмные и светлые. Окрас бесплатный — ДНК не тратит.
+
+const COLORS := ["#8fd07a", "#6fc0e0", "#e0b060", "#e07a6a", "#b08ae0", "#e890b8", "#7ad0b0", "#d8d8c8",
+	"#5a8ee0", "#f0dc6a", "#c8683e", "#7a62c8", "#b4e05a", "#f4b0a0", "#3e9a96", "#9a8878",
+	"#8a5a3a", "#5e4a3a", "#c89a6a", "#f2ead8", "#3a3a44", "#6a6e78", "#a8323a", "#2e6a3a",
+	"#1e4a7a", "#e8742a", "#f4d03a", "#5ac8e8"]
+## Узоры: [ключ, подпись]. Первые пять — как у клетки.
+const PATTERNS := [["none", "Без узора"], ["spots", "Пятна"], ["stripes", "Полосы"], ["rings", "Кольца"],
+	["gradient", "Переход"], ["belly", "Брюшко"], ["leopard", "Леопард"], ["tiger", "Тигр"],
+	["dots", "Крапинки"], ["back", "Полоса по спине"]]
+
+static func default_paint(evo_color := 0, evo_color2 := 5, evo_pattern := "none") -> Dictionary:
+	return fix_paint({"color": evo_color, "color2": evo_color2, "pattern": evo_pattern})
+
+static func fix_paint(v: Variant) -> Dictionary:
+	var d := {"color": 0, "color2": 5, "pattern": "spots"}
+	if not v is Dictionary:
+		return d
+	for k in ["color", "color2"]:
+		var x = v.get(k)
+		if (x is int or x is float) and int(x) >= 0 and int(x) < COLORS.size():
+			d[k] = int(x)
+	var p = v.get("pattern")
+	if p is String and PATTERNS.any(func(q): return q[0] == p):
+		d.pattern = p
+	return d
 
 ## Коротко, что даёт часть: «+6 укус · ×1,3 мясо».
 static func summary(id: String) -> String:

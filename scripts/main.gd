@@ -1212,6 +1212,19 @@ func _run_script() -> void:
 			# Потянуть кружок лепки: lsculpt:ручка,dx,dy (точки экрана).
 			var q := p[1].split(",")
 			land_editor.sculpt(q[0], Vector2(float(q[1]), float(q[2])))
+		"lslider":
+			# lslider:ключ,значение — как будто подвинули ползунок.
+			var q := p[1].split(",")
+			land_editor.set_shape_value(q[0], float(q[1]))
+			land_editor._refresh()
+		"lpaint":
+			var q := p[1].split(",")
+			land_editor._set_paint(q[0], q[1] if q[0] == "pattern" else int(q[1]))
+		"lfold":
+			land_editor.set_collapsed(p[1] == "1")
+		"lclear":
+			land_editor.evo.land_clear()
+			land_editor._after_change("")
 		"lpreset":
 			var pr: Array = land_editor.PRESETS[int(p[1])]
 			for k in pr[1]:
