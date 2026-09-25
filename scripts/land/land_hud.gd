@@ -5,6 +5,8 @@ extends Control
 
 signal back
 signal edit
+## Открыли атлас видов (мир на паузе).
+signal atlas
 
 const TouchPad := preload("res://scripts/ui/touch_pad.gd")
 const RoundButton := preload("res://scripts/ui/round_button.gd")
@@ -26,6 +28,12 @@ var _nest_btn: Control
 var _body_btn: Control
 ## «Гнездо сюда» нажали один раз — ждём второго касания (секунды).
 var _nest_confirm := 0.0
+var _nest_info: Label
+var pick_btn: Control
+var eat_btn: Control
+## Кнопки умений: умение → кнопка.
+var _ab_btns := {}
+const AB_LOOK := {"jump": ["dash", "Прыжок"], "roar": ["pulse", "Рёв"], "spit": ["ink", "Плевок"], "dig": ["leaf", "Копать"]}
 var _hp: HpLine
 var bite_btn: Control
 var _red: ColorRect
@@ -65,6 +73,8 @@ func _ready() -> void:
 	col.add_child(_info)
 	_time = Kit.label("", 17, Art.TEXT)
 	col.add_child(_time)
+	_nest_info = Kit.label("", 16, Art.GOLD)
+	col.add_child(_nest_info)
 	_fps = Kit.label("", 14, Art.MUTED)
 	col.add_child(_fps)
 	card.position = Vector2(18, 18)
@@ -130,6 +140,29 @@ func _ready() -> void:
 	bite_btn.tint = Color(0.62, 0.3, 0.28, 0.95)
 	bite_btn.pressed.connect(func(): world.bite_pressed = true)
 	add_child(bite_btn)
+	pick_btn = _small_btn("suck", "Взять", Color(0.3, 0.5, 0.35, 0.95), func():
+		if world.land.pick():
+			world.happened.emit({"t": "pick", "pos": world.land.pos}))
+	eat_btn = _small_btn("leaf", "Съесть ношу", Color(0.5, 0.4, 0.25, 0.95), func():
+		world.land.eat_carry()
+		for e in world.land.events:
+			world.happened.emit(e)
+		world.land.events.clear())
+	for id in AB_LOOK:
+		var abtn := _small_btn(AB_LOOK[id][0], AB_LOOK[id][1], Color(0.35, 0.32, 0.55, 0.95), func():
+			if world.land.use_ability(id):
+				for e in world.land.events:
+					world.happened.emit(e)
+					world.fx_event(e)
+				world.land.events.clear())
+		_ab_btns[id] = abtn
+	var ab := RoundButton.new()
+	ab.setup("book", "Атлас", 64)
+	ab.caption = "Атлас"
+	ab.floating = true
+	ab.pressed.connect(func(): atlas.emit())
+	ab.name = "Atlas"
+	add_child(ab)
 	# Подсказка сама тает через полминуты — дальше и так понятно.
 	var tw := hint.create_tween()
 	tw.tween_interval(25.0)
@@ -157,6 +190,17 @@ func say(text: String) -> void:
 	_say_tw.tween_interval(1.6)
 	_say_tw.tween_property(_say, "modulate:a", 0.0, 0.6)
 
+func _small_btn(icon: String, caption: String, tint: Color, action: Callable) -> Control:
+	var b := DashButton.new()
+	b.icon = icon
+	b.caption = caption
+	b.floating = true
+	b.tint = tint
+	b.pressed.connect(action)
+	b.visible = false
+	add_child(b)
+	return b
+
 func _layout() -> void:
 	var d := 250.0
 	pad.size = Vector2(d, d)
@@ -176,6 +220,14 @@ func _layout() -> void:
 	var bd := 132.0
 	bite_btn.size = Vector2(bd, bd)
 	bite_btn.position = Vector2(size.x - bd - 60, size.y - bd - 70)
+	var sd := 92.0
+	pick_btn.size = Vector2(sd, sd)
+	pick_btn.position = bite_btn.position + Vector2(-sd - 36, bd - sd + 20)
+	eat_btn.size = Vector2(sd, sd)
+	eat_btn.position = pick_btn.position + Vector2(-sd - 24, 0)
+	for id in _ab_btns:
+		(_ab_btns[id] as Control).size = Vector2(sd, sd)
+	(get_node("Atlas") as Control).position = Vector2(size.x - 4 * (64 + 22) - 30, 18)
 	_skip.size = Vector2(size.x, 30)
 	_skip.position = Vector2(0, size.y - 50)
 	_say.size = Vector2(size.x, 40)
@@ -204,7 +256,23 @@ func _process(delta: float) -> void:
 	_info.text = "ДНК: %d" % l.evo.land_free() + (" · до силы %d: %d" % [lv + 1, int(ceil(pr[0]))] if lv < LandParts.LEVELS.size() else "")
 	_hp.k = l.hp / l.max_hp
 	_hp.queue_redraw()
-	_time.text = "Ночь — хищники видят дальше" if l.is_night() else ("Закат" if Land.daylight(l.day) < 1.0 and l.day < 0.7 else ("Рассвет" if Land.daylight(l.day) < 1.0 else "День"))
+	_time.text = ("Ночь" if l.is_night() else ("Закат" if Land.daylight(l.day) < 1.0 and l.day < 0.7 else ("Рассвет" if Land.daylight(l.day) < 1.0 else "День"))) \
+		+ {"clear": "", "rain": " · дождь", "fog": " · туман", "storm": " · гроза"}[l.weather]
+	var own := l.allies().size()
+	_nest_info.text = ("Гнездо: запасы %d · своих %d" % [l.stash, own] + (" · яиц %d" % l.eggs.size() if not l.eggs.is_empty() else "")) if l.has_nest else ""
+	# Взять, съесть ношу, умения: только то, что можно сейчас.
+	pick_btn.visible = not intro and l.can_pick()
+	eat_btn.visible = not intro and not l.carry.is_empty()
+	eat_btn.caption = "Съесть ношу (%d)" % l.carry.size() if l.carry.size() > 1 else "Съесть ношу"
+	var have := l.abilities()
+	var k := 0
+	for id in _ab_btns:
+		var b: Control = _ab_btns[id]
+		b.visible = not intro and have.has(id)
+		if b.visible:
+			b.position = bite_btn.position + Vector2(bite_btn.size.x - b.size.x + 10 - (b.size.x + 18) * (k / 2), -b.size.y - 30 - (b.size.y + 30) * (k % 2))
+			b.set_cooldown(float(l.cd.get(id, 0.0)) / float(Land.ABILITY_CD[id]))
+			k += 1
 	# Стрелка к гнезду: куда идти относительно камеры и сколько метров.
 	_arrow.visible = l.has_nest and not intro
 	if l.has_nest:

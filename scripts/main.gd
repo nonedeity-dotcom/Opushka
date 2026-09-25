@@ -286,6 +286,7 @@ func _start_land(intro: bool) -> void:
 	if not intro and not land.has_nest:
 		land.set_nest(land.pos)
 	land_world = LandWorld.new()
+	land_world.quality = settings.land_quality
 	add_child(land_world)
 	land_world.setup(land)
 	# Сохраняться понемногу, пока ходишь по острову.
@@ -300,6 +301,7 @@ func _start_land(intro: bool) -> void:
 	land_hud.edit.connect(func():
 		sound.play("ui")
 		_open_land_editor(false))
+	land_hud.atlas.connect(_open_land_atlas)
 	_ui.add_child(land_hud)
 	land_world.happened.connect(_land_event)
 	if intro:
@@ -334,6 +336,67 @@ func _open_land_editor(first: bool, conv := {}) -> void:
 			land_hud.visible = true
 		else:
 			_start_land(first))
+
+## Атлас суши: мир на паузе, пока смотришь.
+var land_atlas: Control
+
+func _open_land_atlas() -> void:
+	sound.play("ui")
+	land_atlas = preload("res://scripts/land/land_atlas.gd").new()
+	_ui.add_child(land_atlas)
+	land_atlas.open(evo)
+	land_world.process_mode = Node.PROCESS_MODE_DISABLED
+	land_hud.visible = false
+	land_atlas.closed.connect(func():
+		sound.play("ui")
+		land_atlas.queue_free()
+		land_atlas = null
+		land_world.process_mode = Node.PROCESS_MODE_INHERIT
+		land_hud.visible = true)
+
+## Звуки острова: ветер днём, сверчки ночью, прибой у берега, дождь; птицы, далёкий рёв
+## гигантов, гром. Музыка — дневная или ночная.
+var _land_amb_t := 0.0
+var _shore := 0.0
+var _bird_t := 3.0
+var _roar_t := 12.0
+var _thunder: Array = []  # [через сколько секунд, насколько далеко]
+
+func _land_sounds(delta: float) -> void:
+	var l: Land = land_world.land
+	_land_amb_t -= delta
+	if _land_amb_t <= 0.0:
+		_land_amb_t = 0.5
+		# Насколько рядом море: сколько точек вокруг — вода.
+		var wet := 0
+		for i in 8:
+			var a := TAU * i / 8.0
+			if l.terrain.is_water(l.pos.x + cos(a) * 22.0, l.pos.z + sin(a) * 22.0):
+				wet += 1
+		_shore = wet / 8.0
+	var night := 1.0 - Land.daylight(l.day)
+	var rain := 1.0 if l.weather in ["rain", "storm"] else 0.0
+	sound.set_land({"amb_land": 0.9 - 0.5 * night, "amb_sea": _shore, "amb_night": night * (1.0 - 0.6 * rain), "amb_rain": rain})
+	sound.set_music("night" if night > 0.6 else "calm")
+	_bird_t -= delta
+	if _bird_t <= 0.0:
+		_bird_t = randf_range(3.0, 8.0)
+		if night < 0.3 and rain == 0.0:
+			sound.play("bird", randf_range(0.85, 1.25), randf_range(0.1, 0.6))
+	_roar_t -= delta
+	if _roar_t <= 0.0:
+		_roar_t = randf_range(14.0, 28.0)
+		for m in l.mobs:
+			var d: float = (m.pos as Vector3).distance_to(l.pos)
+			if m.kind == "giant" and d < 110.0 and d > 20.0:
+				sound.play("roar", randf_range(0.85, 1.05), clampf(d / 110.0, 0.3, 1.0))
+				break
+	for t in _thunder:
+		t[0] -= delta
+		if t[0] <= 0.0:
+			sound.play("thunder", randf_range(0.85, 1.1), t[1])
+			_buzz(40)
+	_thunder = _thunder.filter(func(t): return t[0] > 0.0)
 
 ## Что случилось на суше — звук, дрожь, надпись.
 func _land_event(e: Dictionary) -> void:
@@ -427,13 +490,85 @@ func _land_event(e: Dictionary) -> void:
 		"poisoned":
 			sound.play("poison")
 		"night":
-			land_hud.say("Ночь: хищники видят дальше — лучше в гнездо")
+			land_hud.say("Ночь: стаи спят, выходят ночники — лучше в гнездо")
 		"day":
 			land_hud.say("Рассвело")
+		"pick":
+			sound.play("pickup", randf_range(0.95, 1.1))
+			_buzz(10)
+		"stored_own":
+			sound.play("place")
+			land_hud.say("В гнездо: +%d в запасы" % int(e.n))
+			_save()
+		"ally_store":
+			sound.play("place", 1.2)
+		"gift":
+			sound.play("chirp", 1.1)
+			land_hud.say("Подарок стае (%d из %d) — ещё немного, и подружитесь" % [int(e.n), Land.FRIEND_AT])
+		"friend":
+			sound.play("goal")
+			_buzz(60)
+			land_hud.say("Эта стая теперь тебе друг: не тронет и поможет против хищников!")
+			_save()
+		"mate_coming":
+			sound.play("mate")
+			land_hud.say("Запасов хватает — к гнезду идёт пара!")
+		"mate":
+			sound.play("mate", 1.1)
+			_buzz(40)
+			land_hud.say("Пара в гнезде. Будьте в гнезде вместе — будут яйца")
+		"eggs":
+			sound.play("levelup", 1.1)
+			_buzz(60)
+			land_hud.say("Яйца! Поколение %d — детёныши скоро вылупятся" % int(e.gen))
+			_save()
+		"hatch":
+			sound.play("newpart", 1.2)
+			_buzz(40)
+			land_hud.say("Вылупились детёныши! Растут, пока в гнезде есть еда")
+			_save()
+		"ally_hurt":
+			sound.play("hurt", 1.3)
+		"ally_dead":
+			sound.play("death", 1.2)
+			land_hud.say("Пара погибла…" if e.mate else "Один из твоих погиб…")
+			_save()
+		"jump":
+			sound.play("dash")
+			_buzz(15)
+		"roar":
+			sound.play("growl", 0.8)
+			_buzz(50)
+		"spit":
+			sound.play("spit")
+		"dig_start":
+			sound.play("rock", 0.6)
+		"dig":
+			sound.play("pickup", 0.8)
+			match e.what:
+				"relic":
+					land_hud.say("Докопался до окаменелости!")
+				"fruit":
+					land_hud.say("Выкопал корень-плод")
+				_:
+					land_hud.say("+%d ДНК из земли" % int(e.dna))
+		"weather":
+			land_hud.say({"clear": "Прояснилось", "rain": "Дождь: плоды растут вдвое быстрее", "fog": "Туман: тебя замечают ближе",
+				"storm": "Гроза! Стаи прячутся, молнии бьют в деревья"}[e.w])
+		"lightning":
+			var d: float = (e.pos as Vector3).distance_to(land_world.land.pos)
+			_thunder.append([d / 60.0, clampf(d / 90.0, 0.0, 1.0)])
+		"seen":
+			sound.play("goal", 1.2)
+			land_hud.say("Новый вид в атласе: %s" % LandSpecies.SPECIES[e.sp].name)
 
 func _leave_land() -> void:
 	if land_world or land_editor:
 		_save()
+	sound.set_land({})
+	if land_atlas:
+		land_atlas.queue_free()
+		land_atlas = null
 	if land_editor:
 		land_editor.queue_free()
 		land_editor = null
@@ -498,6 +633,8 @@ func _process(delta: float) -> void:
 	_run_script()
 	if land_hud:
 		land_hud.override = _script_pad
+	if land_world and is_instance_valid(land_world) and land_world.land and land_world.process_mode != Node.PROCESS_MODE_DISABLED:
+		_land_sounds(delta)
 	if pond == null:
 		return
 	if _prof_on:
@@ -1297,6 +1434,23 @@ func _run_script() -> void:
 					var m := l._add_mob(row[0], sid, at, sz, sp.colors[0][0], sp.colors[0][1], 0 if row[0] == "pack" else -1)
 					m.heading = PI
 					x += sz * 1.2
+		"lfamily":
+			# Своя стая для снимков: пара, два детёныша, два подростка, запасы и яйца.
+			var l: Land = land_world.land
+			l.stash = int(p[1]) if p.size() > 1 else 6
+			var m := l._add_ally(1.0, true, l.home)
+			for a in [0.1, 0.3, 0.8, 1.0]:
+				l._add_ally(a, false, l.home)
+			l.eggs = [30.0]
+		"lweather":
+			land_world.land.weather = p[1]
+			land_world.land.weather_t = 999.0
+			if p[1] == "storm":
+				land_world.land._bolt_t = 0.5
+		"latlas":
+			for sid in (LandSpecies.SPECIES.keys() if p.size() < 2 else Array(p[1].split(","))):
+				evo.land_seen[sid] = true
+			_open_land_atlas()
 		"lday":
 			# Время суток: 0 — утро, 0,75 — ночь.
 			land_world.land.day = float(p[1])

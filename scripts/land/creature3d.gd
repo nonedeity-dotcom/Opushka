@@ -22,6 +22,9 @@ var _stepping_group := -1
 ## Бросок вперёд при укусе: 1 — только что кусил, тает к 0.
 var _lunge := 0.0
 var _flash := 0.0
+## Лежит (спит): 0 — стоит, 1 — лёг. rest_to — куда клонится.
+var rest := 0.0
+var rest_to := 0.0
 var _bar: Node3D
 var _bar_fill: MeshInstance3D
 var _arms: Array = []  # {side, shoulder, upper, lower, hand, claw}
@@ -955,7 +958,9 @@ func update(dt: float, at: Vector3, heading: float, vel: Vector3) -> void:
 	var speed := Vector3(vel.x, 0, vel.z).length()
 	_phase += dt * (2.0 + speed * 2.2)
 	# Тело держится на высоте ног и чуть покачивается на ходу.
-	var body_y := _body_y
+	# Спит — лежит: туловище опускается, ноги подгибаются сами.
+	rest = move_toward(rest, rest_to, dt * 1.5)
+	var body_y := _body_y * (1.0 - 0.45 * rest)
 	if _hl != "" and _hl_mat:
 		_hl_mat.albedo_color.a = 0.28 + 0.14 * sin(Time.get_ticks_msec() / 160.0)
 	_body.position = Vector3(0, body_y + 0.05 * size * sin(_phase * 2.0) * minf(speed / 3.0, 1.0), 0)

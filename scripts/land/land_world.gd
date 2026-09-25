@@ -62,6 +62,25 @@ var _fruit_seen := {}  # сколько плодов было нарисован
 var _drops := {}  # uid упавшего плода → узел
 var _nest_food: Array = []  # у каждого гнезда — его запасы (узлы)
 var _carry := {}  # uid существа → то, что оно несёт
+## Качество картинки (настройки): fast — без травы рядом, меньше всего и ближе видно;
+## best — тени от солнца и видно дальше.
+var quality := "normal"
+var _draw := 70.0
+## Своё гнездо: яйца и запасы.
+var _own_eggs: Array = []
+var _own_food: Array = []
+## Какого размера собран каждый свой (растут — пересобираются) и когда кто жевал.
+var _ally_size := {}
+var _chomped := {}
+## Пыль из-под ног, следы на песке, птицы, дождь, молнии, плевки, рёв.
+var _dust: CPUParticles3D
+var _rain: CPUParticles3D
+var _prints: Array = []  # [{node, t}]
+var _print_at := Vector3.INF
+var _print_side := 1.0
+var _birds: Array = []  # [{node, c, r, h, a, speed, wings}]
+var _fx: Array = []  # [{node, t, life, kind, from, to}]
+var _flash_t := 0.0
 ## Густая трава вокруг тебя: пятно переезжает за тобой (на весь остров столько не нужно).
 var _near_grass: MultiMesh
 var _grass_at := Vector3(INF, 0, INF)
@@ -121,8 +140,12 @@ func setup(l: Land) -> void:
 	water.material_override = wm
 	water.position.y = Terrain.WATER
 	add_child(water)
+	_draw = {"fast": 45.0, "normal": 70.0, "best": 95.0}.get(quality, 70.0)
+	sun.shadow_enabled = quality == "best"
 	_trees()
 	_decor()
+	_make_birds()
+	_make_particles()
 	_make_bushes()
 	_make_nests()
 	_make_own_nest()
@@ -142,6 +165,22 @@ func setup(l: Land) -> void:
 	_camera(1.0)
 
 ## Собрать тебя заново — из тела суши (после редактора). Зрение — сколько тумана.
+## Свой — как ты: то же тело и окрас, только своего размера (детёныш — маленький). Пара
+## — цвета наоборот.
+func _build_ally(cr: Creature3D, m: Dictionary) -> void:
+	var evo := land.evo
+	var pt := evo.paint()
+	var c := Color(LandParts.COLORS[pt.color])
+	var c2 := Color(LandParts.COLORS[pt.color2]) if pt.pattern != "none" else c.darkened(0.25)
+	if m.mate:
+		var t := c
+		c = c2.lerp(c, 0.3)
+		c2 = t
+	var body: Dictionary = evo.land_body if evo.land_can_walk() else LandParts.from_sea(evo.body).body
+	var shape: Dictionary = evo.land_shape if not evo.land_shape.is_empty() else LandParts.shape_from_sea(evo.shape)
+	cr.build_body(c, c2, m.size, body, pt.pattern, shape)
+	_ally_size[m.uid] = m.size
+
 func rebuild_player() -> void:
 	var evo := land.evo
 	var pt := evo.paint()
@@ -150,6 +189,9 @@ func rebuild_player() -> void:
 	var body: Dictionary = evo.land_body if evo.land_can_walk() else LandParts.from_sea(evo.body).body
 	var shape: Dictionary = evo.land_shape if not evo.land_shape.is_empty() else LandParts.shape_from_sea(evo.shape)
 	_player.build_body(c, c2, 1.0, body, pt.pattern, shape)
+	# Свои тоже меняются вместе с тобой.
+	for uid in _ally_size.keys():
+		_ally_size[uid] = -1.0
 	var sight: float = land.st.sight
 	_fog_base = 0.0018 / pow(maxf(sight, 0.3), 2.0)
 	_env.fog_density = _fog_base
@@ -508,7 +550,8 @@ func _decor() -> void:
 	bloom.radial_segments = 6
 	bloom.rings = 3
 	var flower_cols := [Color("#f4d03a"), Color("#f2ead8"), Color("#e890b8"), Color("#b08ae0"), Color("#e8742a")]
-	for spec in [[rock, 220, 0.4, 2.2], [tuft, 3200, 0.7, 1.4], [bloom, 700, 0.8, 1.3]]:
+	var few := 0.4 if quality == "fast" else 1.0
+	for spec in [[rock, int(220 * few), 0.4, 2.2], [tuft, int(3200 * few), 0.7, 1.4], [bloom, int(700 * few), 0.8, 1.3]]:
 		var mm := MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D
 		mm.use_colors = true
@@ -550,6 +593,8 @@ func _decor() -> void:
 ## Густая трава рядом: каждая травинка стоит на своём месте сетки, так что при переезде
 ## пятна трава не «плывёт».
 func _sync_grass() -> void:
+	if quality == "fast":
+		return
 	if _near_grass == null:
 		var tuft := CylinderMesh.new()
 		tuft.top_radius = 0.0
@@ -785,6 +830,38 @@ func _make_own_nest() -> void:
 	_beacon.material_override = bmat
 	_beacon.position.y = 20.0
 	add_child(_beacon)
+	# Яйца и запасы своего гнезда.
+	var egg := Creature3D.mat(c.lightened(0.55), 0.5)
+	for i in Land.MAX_ALLY:
+		var e := MeshInstance3D.new()
+		var em := SphereMesh.new()
+		em.radius = 0.3
+		em.height = 0.8
+		em.radial_segments = 10
+		em.rings = 6
+		e.mesh = em
+		e.material_override = egg
+		var a := TAU * i / Land.MAX_ALLY
+		e.position = Vector3(cos(a) * 0.5, 0.45, sin(a) * 0.5) / 1.6
+		e.scale = Vector3.ONE / 1.6
+		_own.add_child(e)
+		_own_eggs.append(e)
+	var fr := Creature3D.mat(Color("#e8505a"), 0.4)
+	for i in Land.STASH_MAX:
+		var f := MeshInstance3D.new()
+		var fm := SphereMesh.new()
+		fm.radius = 0.2
+		fm.height = 0.4
+		fm.radial_segments = 8
+		fm.rings = 4
+		f.mesh = fm
+		f.material_override = fr
+		var a := TAU * i / 7.0 + 0.3
+		var rr := 2.6 + 0.45 * float(i / 7)
+		f.position = Vector3(cos(a) * rr, 0.2, sin(a) * rr) / 1.6
+		f.scale = Vector3.ONE / 1.6
+		_own.add_child(f)
+		_own_food.append(f)
 
 ## Окаменелость: камень с золотой ракушкой-спиралью, светится.
 func _make_relic(r: Dictionary) -> Node3D:
@@ -949,7 +1026,17 @@ func _daylight() -> void:
 	_sky.ground_horizon_color = _sky.sky_horizon_color
 	_env.ambient_light_energy = lerpf(0.22, 0.4, l)
 	_env.fog_light_color = Color("#1c2844").lerp(Color("#9fcbe6"), l)
-	_env.fog_density = _fog_base * lerpf(2.2, 1.0, l)
+	var w := land.weather
+	var gloom := {"rain": 0.25, "storm": 0.45, "fog": 0.1}.get(w, 0.0) as float
+	_sun.light_energy *= 1.0 - gloom
+	_sky.sky_top_color = _sky.sky_top_color.lerp(Color("#5a6470"), gloom)
+	_sky.sky_horizon_color = _sky.sky_horizon_color.lerp(Color("#8a929a"), gloom)
+	_env.fog_density = _fog_base * lerpf(2.2, 1.0, l) * {"fog": 4.0, "rain": 1.6, "storm": 2.0}.get(w, 1.0)
+	_env.fog_light_color = _env.fog_light_color.lerp(Color("#9aa4ae"), gloom * 1.5 if w == "fog" else gloom)
+	# Молния — всё вспыхивает.
+	if _flash_t > 0.0:
+		_env.ambient_light_energy += _flash_t * 1.5
+		_sun.light_energy += _flash_t * 1.2
 	if _beacon:
 		(_beacon.material_override as StandardMaterial3D).albedo_color.a = lerpf(0.35, 0.16, l)
 
@@ -1058,17 +1145,32 @@ func _sync_mobs(delta: float) -> void:
 	for m in land.mobs:
 		seen[m.uid] = true
 		var cr: Creature3D = _mobs.get(m.uid)
+		if m.kind == "ally" and cr != null and absf(float(_ally_size.get(m.uid, 0.0)) - float(m.size)) > 0.07:
+			cr.queue_free()
+			_mobs.erase(m.uid)
+			_carry.erase(m.uid)
+			cr = null
 		if cr == null:
 			cr = Creature3D.new()
 			cr.ground = _ground_fn
 			add_child(cr)
-			var look := LandSpecies.look(m.sp, m.get("leader", false))
-			cr.build_body(Color(m.color), Color(m.color2), m.size, look.parts, look.pattern, look.shape)
+			if m.kind == "ally":
+				_build_ally(cr, m)
+			else:
+				var look := LandSpecies.look(m.sp, m.get("leader", false))
+				cr.build_body(Color(m.color), Color(m.color2), m.size, look.parts, look.pattern, look.shape)
 			_mobs[m.uid] = cr
-		var far: bool = (m.pos as Vector3).distance_to(land.pos) > DRAW_DIST * (1.6 if m.kind == "giant" else 1.0)
+		var far: bool = (m.pos as Vector3).distance_to(land.pos) > _draw * (1.6 if m.kind == "giant" else 1.0)
 		cr.visible = not far
 		if far:
 			continue
+		cr.rest_to = 1.0 if m.get("sleep", false) else 0.0
+		# Жуёт — бросок головой вперёд.
+		if float(m.get("chomp", 0.0)) > 0.4 and not _chomped.get(m.uid, false):
+			cr.lunge()
+			_chomped[m.uid] = true
+		elif float(m.get("chomp", 0.0)) <= 0.4:
+			_chomped.erase(m.uid)
 		cr.update(delta, m.pos, m.heading, m.vel)
 		cr.flash(m.hit)
 		cr.health(m.hp / m.max_hp)
@@ -1117,8 +1219,9 @@ func _process(delta: float) -> void:
 	land.step(minf(delta, 0.05), dir, bite_pressed)
 	bite_pressed = false
 	for e in land.events:
+		fx_event(e)
 		match e.t:
-			"bite":
+			"bite", "pick":
 				_player.lunge()
 			"hurt":
 				# Тебя кусили: ты белеешь, а кусачий бросается вперёд.
@@ -1127,13 +1230,25 @@ func _process(delta: float) -> void:
 					(_mobs[e.uid] as Creature3D).lunge()
 		happened.emit(e)
 	_player.flash(_player._flash - delta * 3.0)
-	_player.update(delta, land.pos, land.heading, land.vel)
+	# Прыжок — дугой вверх; копаешь — клюёшь носом землю; плывёшь — на воде.
+	var hop := sin(PI * (1.0 - land.jump_t / 0.45)) * 1.4 if land.jump_t > 0.0 else 0.0
+	if land.dig_t > 0.0 and fmod(land.dig_t, 0.4) < 0.05:
+		_player.lunge()
+	_player.update(delta, land.pos + Vector3(0, hop, 0), land.heading, land.vel)
 	_sync_mobs(delta)
 	_sync_bones()
 	_sync_things()
 	_daylight()
 	_own.visible = land.has_nest
 	_beacon.visible = land.has_nest
+	for i in _own_eggs.size():
+		_own_eggs[i].visible = i < land.eggs.size()
+		if i < land.eggs.size():
+			# Скоро вылупится — покачивается.
+			_own_eggs[i].rotation.z = sin(land.time * 12.0 + i) * 0.25 * clampf(1.0 - float(land.eggs[i]) / 10.0, 0.0, 1.0)
+	for i in _own_food.size():
+		_own_food[i].visible = i < land.stash
+	_effects(delta)
 	if land.has_nest:
 		_own.position = land.home
 		_beacon.position = land.home + Vector3(0, 20.0, 0)
@@ -1153,6 +1268,229 @@ func _process(delta: float) -> void:
 		for j in fr.size():
 			fr[j].visible = j < int(land.bushes[i].fruits)
 	_camera(delta)
+
+# --- птицы, пыль, следы, погода, вспышки ----------------------------------------------
+
+## Что показать на событие: молния, плевок, рёв, копание.
+func fx_event(e: Dictionary) -> void:
+	match e.t:
+		"lightning":
+			_bolt(e.pos)
+		"spit":
+			_shot(e.pos + Vector3(0, 0.8, 0), (e.to as Vector3) + Vector3(0, 0.6, 0))
+		"roar":
+			_ring(e.pos, Color(1.0, 0.85, 0.4, 0.5), 14.0)
+			_player.lunge()
+		"dig", "dig_start":
+			_puff(e.pos, Color("#8a6a44"))
+
+## Стайки птиц кружат над островом (ночью спят).
+func _make_birds() -> void:
+	var r := RandomNumberGenerator.new()
+	r.seed = 77
+	var wing := BoxMesh.new()
+	wing.size = Vector3(0.7, 0.04, 0.22)
+	var m := Creature3D.mat(Color("#3a3a44"), 0.9)
+	for f in (2 if quality == "fast" else 4):
+		var c := Vector3(r.randf_range(-150, 150), 0, r.randf_range(-150, 150))
+		for k in 6:
+			var b := Node3D.new()
+			add_child(b)
+			var wings: Array = []
+			for side in [-1.0, 1.0]:
+				var w := MeshInstance3D.new()
+				w.mesh = wing
+				w.material_override = m
+				w.position.x = side * 0.32
+				b.add_child(w)
+				wings.append(w)
+			_birds.append({"node": b, "c": c, "r": r.randf_range(18, 34), "h": r.randf_range(20, 30), "a": r.randf() * TAU,
+				"speed": r.randf_range(0.25, 0.4) * (1 if f % 2 == 0 else -1), "wings": wings, "k": k})
+
+## Пыль из-под ног и дождь (дождь — облако капель вокруг камеры).
+func _make_particles() -> void:
+	if quality == "fast":
+		return
+	_dust = CPUParticles3D.new()
+	_dust.amount = 24
+	_dust.lifetime = 0.8
+	_dust.emitting = false
+	_dust.direction = Vector3(0, 1, 0)
+	_dust.spread = 60.0
+	_dust.initial_velocity_min = 0.4
+	_dust.initial_velocity_max = 1.2
+	_dust.gravity = Vector3(0, -0.6, 0)
+	_dust.scale_amount_min = 0.25
+	_dust.scale_amount_max = 0.5
+	var dm := SphereMesh.new()
+	dm.radius = 0.2
+	dm.height = 0.4
+	dm.radial_segments = 6
+	dm.rings = 3
+	var dmat := StandardMaterial3D.new()
+	dmat.albedo_color = Color(0.72, 0.62, 0.45, 0.45)
+	dmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	dmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	dm.material = dmat
+	_dust.mesh = dm
+	add_child(_dust)
+	_rain = CPUParticles3D.new()
+	_rain.amount = 500
+	_rain.lifetime = 0.9
+	_rain.emitting = false
+	_rain.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+	_rain.emission_box_extents = Vector3(18, 1, 18)
+	_rain.direction = Vector3(0.1, -1, 0)
+	_rain.spread = 3.0
+	_rain.initial_velocity_min = 22.0
+	_rain.initial_velocity_max = 26.0
+	_rain.gravity = Vector3.ZERO
+	var rm := BoxMesh.new()
+	rm.size = Vector3(0.025, 0.7, 0.025)
+	var rmat := StandardMaterial3D.new()
+	rmat.albedo_color = Color(0.75, 0.85, 1.0, 0.35)
+	rmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	rmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	rm.material = rmat
+	_rain.mesh = rm
+	add_child(_rain)
+
+func _effects(delta: float) -> void:
+	# Птицы.
+	var night := land.is_night()
+	for b in _birds:
+		b.a += delta * float(b.speed)
+		var a: float = float(b.a) + float(b.k) * 0.35
+		var c: Vector3 = b.c
+		var n: Node3D = b.node
+		n.visible = not night
+		n.position = c + Vector3(cos(a) * float(b.r), float(b.h) + sin(a * 3.0) * 1.5, sin(a) * float(b.r))
+		n.rotation.y = -a + (PI if float(b.speed) > 0.0 else 0.0)
+		var flap := sin(land.time * 10.0 + float(b.k)) * 0.5
+		(b.wings[0] as Node3D).rotation.z = flap
+		(b.wings[1] as Node3D).rotation.z = -flap
+	# Пыль и следы, когда бежишь.
+	var fast := land.vel.length() > 4.0 and not land.swimming()
+	if _dust:
+		_dust.emitting = fast
+		_dust.position = land.pos + Vector3(0, 0.15, 0)
+	var h := land.terrain.height(land.pos.x, land.pos.z)
+	if h < 1.3 and not land.swimming() and land.pos.distance_to(_print_at) > 0.9:
+		_print_at = land.pos
+		_print_side = -_print_side
+		_footprint(land.pos + Vector3(land.forward().z, 0, -land.forward().x) * 0.3 * _print_side, land.heading)
+	for p in _prints:
+		p.t -= delta
+		(p.node.material_override as StandardMaterial3D).albedo_color.a = clampf(p.t / 20.0, 0.0, 1.0) * 0.35
+	# Дождь — вокруг камеры.
+	var wet := land.weather in ["rain", "storm"]
+	if _rain:
+		_rain.emitting = wet
+		_rain.position = camera.global_position + Vector3(0, 8, 0) - Vector3(sin(cam_yaw), 0, cos(cam_yaw)) * 6.0
+	# Вспышки, плевки, кольца.
+	for f in _fx:
+		f.t += delta
+		var k: float = f.t / f.life
+		var n: Node3D = f.node
+		match f.kind:
+			"shot":
+				n.position = (f.from as Vector3).lerp(f.to, k) + Vector3(0, sin(PI * k) * 1.2, 0)
+			"ring":
+				n.scale = Vector3(1, 1, 1) * lerpf(0.5, float(f.r), k)
+				(n.material_override as StandardMaterial3D).albedo_color.a = 0.5 * (1.0 - k)
+			"bolt", "puff":
+				(n.material_override as StandardMaterial3D).albedo_color.a = (1.0 - k) * (0.9 if f.kind == "bolt" else 0.6)
+				if f.kind == "puff":
+					n.scale = Vector3.ONE * (0.5 + k * 1.5)
+		if f.t >= f.life:
+			n.queue_free()
+	_fx = _fx.filter(func(f): return f.t < f.life)
+	_flash_t = maxf(0.0, _flash_t - delta * 3.0)
+
+func _footprint(at: Vector3, yaw: float) -> void:
+	var p: Dictionary
+	if _prints.size() < 40:
+		var q := MeshInstance3D.new()
+		var qm := QuadMesh.new()
+		qm.size = Vector2(0.28, 0.4)
+		qm.orientation = PlaneMesh.FACE_Y
+		q.mesh = qm
+		var m := StandardMaterial3D.new()
+		m.albedo_color = Color(0.35, 0.28, 0.18, 0.35)
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		q.material_override = m
+		add_child(q)
+		p = {"node": q, "t": 20.0}
+		_prints.append(p)
+	else:
+		p = _prints.pop_front()
+		_prints.append(p)
+		p.t = 20.0
+	(p.node as Node3D).position = Vector3(at.x, land.terrain.height(at.x, at.z) + 0.03, at.z)
+	(p.node as Node3D).rotation.y = yaw
+
+func _fx_mat(c: Color) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = c
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return m
+
+## Молния: столб света с неба в точку и вспышка всего вокруг.
+func _bolt(at: Vector3) -> void:
+	var n := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = 0.15
+	cm.bottom_radius = 0.35
+	cm.height = 60.0
+	cm.radial_segments = 6
+	n.mesh = cm
+	n.material_override = _fx_mat(Color(0.95, 0.95, 1.0, 0.9))
+	n.position = at + Vector3(0, 30, 0)
+	add_child(n)
+	_fx.append({"node": n, "t": 0.0, "life": 0.25, "kind": "bolt"})
+	_flash_t = 1.0
+
+## Плевок: зелёный комок летит дугой.
+func _shot(from: Vector3, to: Vector3) -> void:
+	var n := MeshInstance3D.new()
+	var sm := SphereMesh.new()
+	sm.radius = 0.18
+	sm.height = 0.36
+	n.mesh = sm
+	n.material_override = _fx_mat(Color(0.7, 0.95, 0.25, 0.95))
+	add_child(n)
+	_fx.append({"node": n, "t": 0.0, "life": 0.35, "kind": "shot", "from": from, "to": to})
+
+## Рёв: кольцо расходится по земле.
+func _ring(at: Vector3, c: Color, r: float) -> void:
+	var n := MeshInstance3D.new()
+	var tm := TorusMesh.new()
+	tm.inner_radius = 0.9
+	tm.outer_radius = 1.0
+	tm.rings = 32
+	tm.ring_segments = 4
+	n.mesh = tm
+	n.material_override = _fx_mat(c)
+	n.position = at + Vector3(0, 0.3, 0)
+	add_child(n)
+	_fx.append({"node": n, "t": 0.0, "life": 0.6, "kind": "ring", "r": r})
+
+## Облачко земли (копаешь).
+func _puff(at: Vector3, c: Color) -> void:
+	var n := MeshInstance3D.new()
+	var sm := SphereMesh.new()
+	sm.radius = 0.5
+	sm.height = 0.6
+	sm.radial_segments = 8
+	sm.rings = 4
+	n.mesh = sm
+	n.material_override = _fx_mat(Color(c, 0.6))
+	n.position = at + Vector3(0, 0.3, 0) + Vector3(sin(land.heading), 0, cos(land.heading)) * 0.8
+	add_child(n)
+	_fx.append({"node": n, "t": 0.0, "life": 0.6, "kind": "puff"})
 
 func _camera(delta: float) -> void:
 	cam_touch_t += delta

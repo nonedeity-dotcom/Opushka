@@ -154,7 +154,7 @@ func test_перепонки(c) -> void:
 			l.step(1.0 / 30.0, Vector2(0.7, 0.7))
 		deepest[l] = l.terrain.height(l.pos.x, l.pos.z)
 	c.ok("с перепонками заходишь глубже (%.2f < %.2f)" % [deepest[wet], deepest[dry]], deepest[wet] < deepest[dry] - 0.5)
-	c.ok("но не тонешь", deepest[wet] > Terrain.WATER - 1.35)
+	c.ok("плывёшь и в глубину, но держишься на воде", deepest[wet] > Terrain.WATER - 6.05 and wet.pos.y >= Terrain.WATER - 0.51)
 
 func test_смерть_на_суше(c) -> void:
 	var l := _land({"legs": "stubs"})

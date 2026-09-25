@@ -492,6 +492,121 @@ function presence(x, amount) {
 }
 for (const [name, amount] of [["boom", 5.0], ["boss", 2.2], ["deep", 3.0], ["heart", 6.0], ["swell", 1.6], ["growl", 1.4]]) S[name] = presence(S[name], amount);
 
+// --- добавлены позже: суша -----------------------------------------------------------
+
+// Ветер над островом: мягкий шум, медленно набегает и стихает, шелест листвы.
+S.amb_land = (() => {
+  const sec = 16;
+  const x = buf(sec);
+  let y = 0;
+  for (let i = 0; i < x.length; i++) {
+    const t = i / RATE;
+    y = 0.985 * y + noise() * 0.05;
+    x[i] = y * (0.55 + 0.45 * Math.sin((TAU * t) / 8) * Math.sin((TAU * t) / 5.3));
+  }
+  bandpass(x, 150, 900);
+  const leaves = buf(sec);
+  for (let k = 0; k < 40; k++) mix(leaves, burst(0.25 + rnd() * 0.3, { attack: 0.05, decay: 0.12, lo: 2500, hi: 6000 }), rnd() * (sec - 1), 0.05);
+  return loop(finish(mix(x, leaves), 0.3), 0.8);
+})();
+
+// Прибой: волны набегают раз в четыре секунды.
+S.amb_sea = (() => {
+  const sec = 12;
+  const x = buf(sec);
+  for (let i = 0; i < x.length; i++) {
+    const t = i / RATE;
+    const w = Math.pow(0.5 + 0.5 * Math.sin((TAU * t) / 4 - 1.2), 3);
+    x[i] = noise() * (0.15 + 0.85 * w);
+  }
+  lowpass(x, 1200);
+  lowpass(x, 1800);
+  return loop(finish(x, 0.35), 0.8);
+})();
+
+// Ночь: сверчки стрекочут и тихий ветер.
+S.amb_night = (() => {
+  const sec = 8;
+  const x = buf(sec);
+  for (let c = 0; c < 3; c++) {
+    const f = 3900 + c * 450;
+    const rate = 0.55 + c * 0.17;
+    for (let tt = rnd() * 0.5; tt < sec - 0.4; tt += rate + rnd() * 0.2)
+      for (let p = 0; p < 3; p++) mix(x, tone(f, 0.03, { attack: 0.002, decay: 0.01, harmonics: [1] }), tt + p * 0.045, 0.08);
+  }
+  const wind = buf(sec);
+  let y = 0;
+  for (let i = 0; i < wind.length; i++) {
+    y = 0.99 * y + noise() * 0.03;
+    wind[i] = y;
+  }
+  lowpass(wind, 500);
+  return loop(finish(mix(x, wind, 0, 0.6), 0.3), 0.5);
+})();
+
+// Дождь: ровный шорох и капли.
+S.amb_rain = (() => {
+  const sec = 8;
+  const x = buf(sec);
+  for (let i = 0; i < x.length; i++) x[i] = noise() * 0.5;
+  bandpass(x, 800, 5000);
+  for (let k = 0; k < 120; k++) mix(x, burst(0.02, { decay: 0.004, lo: 1500, hi: 6000 }), rnd() * (sec - 0.1), 0.3);
+  return loop(finish(x, 0.3), 0.5);
+})();
+
+// Птица: короткая трель.
+S.bird = (() => {
+  const x = buf(1.2);
+  let at = 0;
+  for (let k = 0; k < 5; k++) {
+    const f = 2200 + rnd() * 1400;
+    mix(x, tone(f, 0.12, { attack: 0.004, decay: 0.04, harmonics: [1, 0.1], glide: rnd() < 0.5 ? 0.6 : -0.4 }), at, 0.5);
+    at += 0.1 + rnd() * 0.12;
+  }
+  return finish(x, 0.35);
+})();
+
+// Гром: раскат, затихающий вдали.
+S.thunder = (() => {
+  const x = buf(3.2);
+  let y = 0;
+  for (let i = 0; i < x.length; i++) {
+    const t = i / RATE;
+    y = 0.97 * y + noise() * 0.2;
+    x[i] = y * env(t, 0.03, 0.9) * (0.7 + 0.3 * Math.sin(TAU * 3 * t));
+  }
+  mix(x, burst(0.2, { decay: 0.05, lo: 200, hi: 3000 }), 0, 0.6);
+  return presence(finish(lowpass(x, 700), 0.7), 2.0);
+})();
+
+// Далёкий рёв гиганта.
+S.roar = (() => {
+  const x = buf(1.8);
+  for (let i = 0; i < x.length; i++) {
+    const t = i / RATE;
+    const f = 70 + 30 * Math.sin((Math.PI * t) / 1.8) + 6 * Math.sin(TAU * 9 * t);
+    x[i] = (Math.sin(TAU * f * t) * 0.6 + Math.sin(TAU * f * 1.5 * t) * 0.3 + noise() * 0.3) * Math.sin((Math.PI * t) / 1.8);
+  }
+  return presence(finish(lowpass(x, 800), 0.6), 2.0);
+})();
+
+// Ночная музыка: медленные тихие аккорды в миноре и редкие высокие ноты.
+S.music_night = (() => {
+  const bar = 5;
+  const chords = [[57, 60, 64], [53, 57, 60], [55, 58, 62], [52, 55, 59]];
+  const x = buf(bar * chords.length);
+  chords.forEach((ch, k) => {
+    ch.forEach((n) => mixWrap(x, tone(midi(n), bar + 2, { attack: 1.8, decay: 2.0, harmonics: [1, 0.2, 0.05] }), k * bar, 0.2));
+    mixWrap(x, tone(midi(ch[0] - 12), bar + 1.5, { attack: 1.0, decay: 1.8, harmonics: [1, 0.2] }), k * bar, 0.22);
+  });
+  const scale = [69, 72, 76, 79, 81];
+  for (let b = 0; b < chords.length * 3; b++) {
+    if (rnd() < 0.5) mixWrap(x, tone(midi(scale[Math.floor(rnd() * scale.length)]), 2.2, { attack: 0.01, decay: 0.7, harmonics: [1, 0.1] }), b * (bar / 3) + rnd() * 0.3, 0.1);
+  }
+  lowpass(x, 2500);
+  return normalize(x, 0.4);
+})();
+
 fs.mkdirSync(OUT, { recursive: true });
 let total = 0;
 for (const [name, x] of Object.entries(S)) total += writeWav(name, x);

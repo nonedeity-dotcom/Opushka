@@ -61,6 +61,8 @@ var land_xp := 0.0
 var land_found := {}
 ## Остров как его оставили: где ты, гнездо, время суток, что уже найдено (Land.snapshot).
 var land_save := {}
+## Какие виды суши уже встречал (для атласа).
+var land_seen := {}
 
 
 static func create(diff := "normal") -> Evolution:
@@ -593,6 +595,7 @@ func to_dict() -> Dictionary:
 		"land_xp": land_xp,
 		"land_found": land_found.duplicate(),
 		"land_save": land_save.duplicate(true),
+		"land_seen": land_seen.duplicate(),
 	}
 
 ## Прочитанное с диска. Непонятное выбрасывается по кусочку. null — сохранения нет.
@@ -716,6 +719,9 @@ static func from_dict(d: Variant) -> Evolution:
 		for slot in e.land_body:
 			e.land_found[e.land_body[slot]] = true
 	e.land_save = Land.fix_save(d.get("land_save"))
+	for sid in _dict(d.get("land_seen")):
+		if LandSpecies.SPECIES.has(sid):
+			e.land_seen[sid] = true
 	var pl = d.get("played")
 	if pl is int or pl is float:
 		e.played = maxf(0.0, float(pl))

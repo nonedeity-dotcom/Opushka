@@ -7,12 +7,12 @@ extends Node
 const EFFECTS := ["eat", "eat_meat", "bite", "hit", "hurt", "kill", "pickup", "newpart", "levelup",
 	"dash", "zap", "poison", "death", "ui", "place", "remove", "nope", "goal", "drop", "rock", "mate",
 	"parasite", "ability", "boss", "wave", "chirp", "growl", "boom", "hiss", "spit", "split", "whale",
-	"heart", "bubbles", "creak", "deep", "swell"]
+	"heart", "bubbles", "creak", "deep", "swell", "bird", "thunder", "roar"]
 ## Звуки меню и подсказок — чистые, мимо «воды».
 const DRY := ["ui", "nope", "goal", "place", "remove"]
 ## Насколько тише остальных: частые звуки не должны заглушать редкие.
 const LEVEL := {"eat": -6.0, "ui": -4.0, "place": -3.0, "nope": -3.0, "hit": -2.0, "dash": -3.0, "chirp": -8.0, "hiss": -6.0, "spit": -5.0,
-	"heart": -1.0, "bubbles": -10.0, "creak": -9.0, "deep": -7.0, "swell": -5.0}
+	"heart": -1.0, "bubbles": -10.0, "creak": -9.0, "deep": -7.0, "swell": -5.0, "bird": -12.0}
 
 var effects_on := true
 var effects_db := -6.0
@@ -28,6 +28,9 @@ var _players := {}
 var _music := {}
 var _turn := {}
 var _water: AudioStreamPlayer
+## Суша: ветер, прибой, ночь, дождь — каждый своей громкостью (0–1).
+var _land := {}
+var _land_on := false
 ## Не чаще раза в столько секунд — чтобы десять водорослей подряд не слились в треск.
 var _last := {}
 const GAP := 0.06
@@ -94,7 +97,17 @@ func _ready() -> void:
 	_water.stream = loop
 	_water.volume_db = -80.0
 	add_child(_water)
-	for id in ["calm", "fight"]:
+	for id in ["amb_land", "amb_sea", "amb_night", "amb_rain"]:
+		var st: AudioStreamWAV = load("res://sounds/%s.wav" % id)
+		st.loop_mode = AudioStreamWAV.LOOP_FORWARD
+		st.loop_begin = 0
+		st.loop_end = int(st.get_length() * st.mix_rate)
+		var lp := AudioStreamPlayer.new()
+		lp.stream = st
+		lp.volume_db = -80.0
+		add_child(lp)
+		_land[id] = lp
+	for id in ["calm", "fight", "night"]:
 		var m: AudioStreamWAV = load("res://sounds/music_%s.wav" % id)
 		m.loop_mode = AudioStreamWAV.LOOP_FORWARD
 		m.loop_begin = 0
@@ -144,6 +157,24 @@ func set_ambience(on: bool) -> void:
 	t.tween_property(_water, "volume_db", goal, 1.5)
 	if not want:
 		t.tween_callback(_water.stop)
+
+## Суша: вместо гула глубины — ветер, прибой, ночь и дождь. mix — громкость каждого
+## (0–1), меняется плавно; пустой — всё выключить.
+func set_land(mix: Dictionary) -> void:
+	var on := not mix.is_empty() and ambience_on
+	if on != _land_on:
+		_land_on = on
+		set_ambience(not on)
+	for id in _land:
+		var p: AudioStreamPlayer = _land[id]
+		var k: float = float(mix.get(id, 0.0)) if on else 0.0
+		var goal := ambience_db + 4.0 + linear_to_db(maxf(k, 0.001)) if k > 0.01 else -80.0
+		if k > 0.01 and not p.playing:
+			p.volume_db = -60.0
+			p.play()
+		p.volume_db = lerpf(p.volume_db, goal, 0.05)
+		if k <= 0.01 and p.playing and p.volume_db < -55.0:
+			p.stop()
 
 ## Музыка: спокойная или боевая, переход — плавный. Выключена в настройках — тишина.
 func set_music(state: String) -> void:

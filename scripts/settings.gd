@@ -19,6 +19,8 @@ var show_goal := true
 var arrows := true
 ## Мини-карта в углу.
 var minimap := true
+## Качество острова (суша): fast — быстрее (меньше травы, ближе видно), best — тени и дальше.
+var land_quality := "normal"
 
 const BUTTON_SCALE := {"small": 0.85, "normal": 1.0, "large": 1.18}
 ## Громкость в децибелах: эффекты и фон. Фон заметно тише — он не должен спорить с делом.
@@ -29,6 +31,7 @@ const CHOICES := {
 	"pad_side": ["left", "right"],
 	"buttons": ["small", "normal", "large"],
 	"volume": ["quiet", "normal", "loud"],
+	"land_quality": ["fast", "normal", "best"],
 }
 const FLAGS := ["sound", "ambience", "music", "vibration", "show_goal", "arrows", "minimap"]
 

@@ -19,6 +19,18 @@
 ## У тебя своё гнездо: там лечишься, туда возвращаешься, если одолели, и только там
 ## можно поменять тело. В гнездо никто не заходит.
 ## Существо не растёт, а крепнет: чем больше ДНК добыто на суше, тем выше сила.
+##
+## Своя стая: в гнезде копятся запасы (носишь еду сам — «Взять», в пасти одна, с руками
+## три), с запасами лечишься втрое быстрее. Пара приходит, когда запасов хватает; вместе в
+## гнезде — два яйца, из них детёныши твоего вида. Детёныши растут, пока в гнезде есть
+## еда, подросшие ходят за тобой, дерутся за тебя и носят еду домой. Каждая пара яиц —
+## новое поколение.
+## Дружба: носи травоядной стае плоды в её гнездо — после трёх подарков она не трогает
+## тебя и помогает против хищников.
+## Умения тела: прыжок (длинные ноги), рёв (гребень), плевок ядом (ядовитая кожа),
+## копать (когти), плавать (перепонки — можно в глубокую воду, там никто не достанет).
+## Погода: ясно, дождь (всё растёт вдвое быстрее), туман (тебя замечают ближе), гроза
+## (стаи прячутся, молния бьёт в деревья — плоды падают).
 class_name Land
 extends RefCounted
 
@@ -69,6 +81,18 @@ const NEST_HEAL := 4.0
 const DAY_LEN := 300.0
 ## Клетка сетки для деревьев (чтобы быстро находить ближайшие).
 const CELL := 10.0
+## Своя стая: сколько всего (с парой), запасы в гнезде, сколько запасов на пару яиц, яйцо
+## до вылупления и детёныш до взрослого (секунды).
+const MAX_ALLY := 5
+const STASH_MAX := 12
+const MATE_FOOD := 4
+const EGG_HATCH := 45.0
+const GROW_TIME := 180.0
+## Сколько подарков — и стая друг.
+const FRIEND_AT := 3
+## Умения: перезарядка (секунды).
+const ABILITY_CD := {"jump": 4.0, "roar": 14.0, "spit": 5.0, "dig": 18.0}
+const WEATHER := ["clear", "rain", "fog", "storm"]
 
 var evo: Evolution
 var terrain: Terrain
@@ -109,6 +133,25 @@ var st := {}
 var scripted := false
 ## Только для снимков: существа стоят на месте.
 var frozen := false
+## Что несёшь в пасти (или в руках): ["fruit", "meat", …].
+var carry: Array = []
+## Запасы в своём гнезде; яйца в нём (сколько секунд до вылупления у каждого).
+var stash := 0
+var eggs: Array = []
+## Пара уже есть (в стае) и когда можно снова откладывать яйца.
+var _lay_cd := 0.0
+## Дружба со стаями: номер гнезда → сколько подарков.
+var friends := {}
+## Перезарядка умений и что сейчас идёт: прыжок, копание.
+var cd := {}
+var jump_t := 0.0
+var dig_t := 0.0
+## Погода и сколько ещё она продлится; молния — через сколько.
+var weather := "clear"
+var weather_t := 150.0
+var _bolt_t := 10.0
+## Какие виды уже встречал (для атласа) — проверяется раз в секунду.
+var _seen_t := 0.0
 var _eat_cd := 0.0
 var _uid := 0
 
@@ -223,11 +266,25 @@ func _restore(sv: Dictionary) -> void:
 		pos = home
 	hp = max_hp * clampf(float(sv.get("hp", 1.0)), 0.2, 1.0)
 	_night = is_night()
+	stash = int(sv.get("stash", 0))
+	eggs = (sv.get("eggs", []) as Array).duplicate()
+	for k in (sv.get("friends", {}) as Dictionary):
+		friends[int(k)] = int(sv.friends[k])
+	for a in (sv.get("allies", []) as Array):
+		_add_ally(float(a[0]), bool(a[1]), home if has_nest else pos)
 
 ## Остров сейчас — для сохранения.
 func snapshot() -> Dictionary:
+	var al: Array = []
+	for m in mobs:
+		if m.kind == "ally" and m.alive:
+			al.append([m.age, m.mate])
+	var fr := {}
+	for k in friends:
+		fr[str(k)] = friends[k]
 	return {"pos": [pos.x, pos.z], "hp": hp / maxf(max_hp, 1.0), "day": day,
-		"nest": [home.x, home.z] if has_nest else [], "relics": relics_taken.duplicate(), "giants": giants_beaten.duplicate()}
+		"nest": [home.x, home.z] if has_nest else [], "relics": relics_taken.duplicate(), "giants": giants_beaten.duplicate(),
+		"stash": stash, "eggs": eggs.duplicate(), "allies": al, "friends": fr}
 
 ## Сохранённый остров с проверкой: непонятное выбрасывается.
 static func fix_save(v: Variant) -> Dictionary:
@@ -251,6 +308,22 @@ static func fix_save(v: Variant) -> Dictionary:
 			if num.call(x) and not list.has(int(x)):
 				list.append(int(x))
 		out[k] = list
+	if num.call(v.get("stash")):
+		out.stash = clampi(int(v.stash), 0, STASH_MAX)
+	if v.get("eggs") is Array:
+		out.eggs = (v.eggs as Array).filter(num).map(func(x): return clampf(float(x), 0.0, EGG_HATCH)).slice(0, MAX_ALLY)
+	if v.get("allies") is Array:
+		var al: Array = []
+		for a in v.allies:
+			if a is Array and a.size() == 2 and num.call(a[0]) and a[1] is bool and al.size() < MAX_ALLY:
+				al.append([clampf(float(a[0]), 0.0, 1.0), a[1]])
+		out.allies = al
+	if v.get("friends") is Dictionary:
+		var fr := {}
+		for k in v.friends:
+			if str(k).is_valid_int() and num.call(v.friends[k]):
+				fr[str(k)] = clampi(int(v.friends[k]), 0, 99)
+		out.friends = fr
 	return out
 
 ## Своё гнездо — здесь.
@@ -347,6 +420,30 @@ func _add_hermit(at: Vector3, i: int) -> Dictionary:
 	var cols: Array = sp.colors[posmod(i, sp.colors.size())]
 	return _add_mob("hermit", sid, at, rng.randf_range(sp.size[0], sp.size[1]), cols[0], cols[1])
 
+## Свой: детёныш (age 0) растёт до взрослого (1); mate — пара.
+func _add_ally(age: float, mate: bool, at: Vector3) -> Dictionary:
+	_uid += 1
+	var m := {"uid": _uid, "kind": "ally", "sp": "", "pos": _near_land(at, 2.0), "heading": rng.randf() * TAU, "vel": Vector3.ZERO, "goal": at,
+		"size": 1.0, "age": age, "mate": mate, "t": 0.0, "hp": 1.0, "max_hp": 1.0, "bite": 1.0, "bite_cd": 0.0, "speed": SPEED,
+		"nest": -1, "angry": 0.0, "stamina": 1.0, "rest": 0.0, "hit": 0.0, "alive": true, "leader": false, "prey": -1, "killer": "",
+		"task": "home", "target": {}, "carry": "", "foe": -1, "slot": mobs.filter(func(o): return o.kind == "ally").size()}
+	_ally_stats(m)
+	m.hp = m.max_hp
+	mobs.append(m)
+	return m
+
+## Свой растёт: размер, здоровье и укус — от возраста и от твоих.
+func _ally_stats(m: Dictionary) -> void:
+	var k: float = 0.55 + 0.45 * float(m.age)
+	var frac: float = m.hp / maxf(m.max_hp, 0.01)
+	m.size = k * (0.95 if m.mate else 1.0)
+	m.max_hp = max_hp * 0.6 * k * k
+	m.hp = m.max_hp * frac
+	m.bite = bite * 0.45 * k
+
+func allies() -> Array:
+	return mobs.filter(func(m): return m.kind == "ally" and m.alive)
+
 func _add_bone(big: bool) -> void:
 	# Большие скелеты — у берега, маленькие кучки — где угодно.
 	var at := _land_point(Terrain.RADIUS * 0.6, Terrain.RADIUS * 0.85) if big else _land_point(10.0, Terrain.RADIUS * 0.85)
@@ -398,6 +495,14 @@ func step(dt: float, input: Vector2, do_bite := false) -> void:
 	if is_night() != _night:
 		_night = is_night()
 		events.append({"t": "night" if _night else "day", "pos": pos})
+	_weather(dt)
+	for k in cd.keys():
+		cd[k] = maxf(0.0, float(cd[k]) - dt)
+	jump_t = maxf(0.0, jump_t - dt)
+	if dig_t > 0.0:
+		dig_t -= dt
+		if dig_t <= 0.0:
+			_dug()
 	if not scripted:
 		_move_player(dt, input)
 		if do_bite:
@@ -407,10 +512,19 @@ func step(dt: float, input: Vector2, do_bite := false) -> void:
 			_think(m, dt)
 	if not scripted:
 		_eat(dt)
+		_home(dt)
 	_nests(dt)
+	_seen_t -= dt
+	if _seen_t <= 0.0:
+		_seen_t = 1.0
+		for m in mobs:
+			if m.alive and m.sp != "" and not evo.land_seen.has(m.sp) and (m.pos as Vector3).distance_to(pos) < 18.0 + float(m.size) * 3.0:
+				evo.land_seen[m.sp] = true
+				events.append({"t": "seen", "sp": m.sp, "pos": m.pos})
+	var grow := dt * (2.0 if weather in ["rain", "storm"] else 1.0)
 	for b in bushes:
 		if b.fruits < FRUITS:
-			b.regrow -= dt
+			b.regrow -= grow
 			if b.regrow <= 0.0:
 				b.fruits += 1
 				b.regrow = REGROW
@@ -418,7 +532,7 @@ func step(dt: float, input: Vector2, do_bite := false) -> void:
 		if t.hit > 0.0:
 			t.hit = maxf(0.0, t.hit - dt * 2.5)
 		if t.kind == "fruit" and t.fruits < TREE_FRUITS:
-			t.regrow -= dt
+			t.regrow -= grow
 			if t.regrow <= 0.0:
 				t.fruits += 1
 				t.regrow = TREE_REGROW
@@ -443,21 +557,26 @@ func step(dt: float, input: Vector2, do_bite := false) -> void:
 		poison_t -= dt
 		hp -= poison_dps * dt
 	_deaths()
-	# Лечишься понемногу, а в своём гнезде — быстро.
-	hp = minf(max_hp, hp + dt * (float(st.regen) + (NEST_HEAL if safe() else 0.0)))
+	# Лечишься понемногу, а в своём гнезде — быстро (с запасами — втрое быстрее).
+	hp = minf(max_hp, hp + dt * (float(st.regen) + (NEST_HEAL * (3.0 if stash > 0 else 1.0) if safe() else 0.0)))
 
 func _move_player(dt: float, input: Vector2) -> void:
 	var in_water := terrain.height(pos.x, pos.z) < Terrain.WATER - 0.2
+	if dig_t > 0.0:
+		input = Vector2.ZERO  # копаешь — стоишь
 	var want := Vector3(input.x, 0.0, input.y).limit_length(1.0) * SPEED * float(st.speed) * _spd_k * (0.6 if in_water else 1.0)
-	vel = vel.lerp(want, 1.0 - exp(-8.0 * dt))
+	if jump_t > 0.0:
+		want = forward() * SPEED * 2.4  # в прыжке — вперёд, быстро
+	vel = vel.lerp(want, 1.0 - exp(-(20.0 if jump_t > 0.0 else 8.0) * dt))
 	var next := pos + vel * dt
 	# В воду не заходим: у берега останавливаемся (по щиколотку — можно). С перепонками —
-	# по брюхо.
-	if terrain.height(next.x, next.z) < Terrain.WATER - (1.3 if st.wade else 0.2):
+	# плывёшь и в глубину (там никто не достанет).
+	if terrain.height(next.x, next.z) < Terrain.WATER - (6.0 if st.wade else 0.2):
 		vel = Vector3.ZERO
 		next = pos
-	next = _push_out(next, 0.8)
-	pos = Vector3(next.x, terrain.height(next.x, next.z), next.z)
+	if jump_t <= 0.0:
+		next = _push_out(next, 0.8)
+	pos = Vector3(next.x, maxf(terrain.height(next.x, next.z), Terrain.WATER - 0.5 if swimming_at(next) else -INF), next.z)
 	if want.length() > 0.3:
 		heading = lerp_angle(heading, atan2(want.x, want.z), 1.0 - exp(-TURN * float(st.turn) * dt))
 
@@ -479,6 +598,13 @@ func _push_out(p: Vector3, r: float) -> Vector3:
 			p = Vector3(t.pos.x + out.x, p.y, t.pos.z + out.y)
 	return p
 
+## Плывёшь (глубже, чем по брюхо)?
+func swimming_at(p: Vector3) -> bool:
+	return st.get("wade", false) and terrain.height(p.x, p.z) < Terrain.WATER - 1.0
+
+func swimming() -> bool:
+	return swimming_at(pos)
+
 func forward() -> Vector3:
 	return Vector3(sin(heading), 0.0, cos(heading))
 
@@ -494,7 +620,7 @@ func _player_bite() -> void:
 	var what := ""
 	var reach := REACH + float(st.reach)
 	for m in mobs:
-		if not m.alive:
+		if not m.alive or m.kind == "ally":
 			continue
 		var d: float = (m.pos as Vector3).distance_to(pos) - float(m.size) * 0.6
 		if d < reach and _in_front(m.pos, fwd) and d < best_d:
@@ -600,7 +726,8 @@ func _hurt_mob(m: Dictionary, dmg: float) -> void:
 	_drop_carry(m)
 	match m.kind:
 		"pack":
-			# Ранил одного — вся стая в ярости (если вожак цел).
+			# Ранил одного — вся стая в ярости (если вожак цел). Друзей обидел — дружбы нет.
+			friends.erase(int(m.nest))
 			_anger_pack(m.nest)
 		_:
 			m.angry = 8.0
@@ -617,7 +744,7 @@ func _drop_carry(m: Dictionary) -> void:
 		m.task = "home"
 
 func _anger_pack(nest: int) -> void:
-	if nests[nest].get("panic", 0.0) > 0.0:
+	if nests[nest].get("panic", 0.0) > 0.0 or is_friend(nest):
 		return
 	var fresh := false
 	for o in mobs:
@@ -628,11 +755,18 @@ func _anger_pack(nest: int) -> void:
 	if fresh:
 		events.append({"t": "alarm", "pos": nests[nest].pos})
 
+## Стая дружит с тобой?
+func is_friend(n: int) -> bool:
+	return int(friends.get(n, 0)) >= FRIEND_AT
+
 # --- как они думают --------------------------------------------------------------------
 
 func _think(m: Dictionary, dt: float) -> void:
 	m.t -= dt
 	m.bite_cd -= dt
+	if m.get("chomp", 0.0) > 0.0:
+		m.chomp = maxf(0.0, m.chomp - dt)
+	m.sleep = false
 	m.hit = maxf(0.0, m.hit - dt * 3.0)
 	if m.get("poison_t", 0.0) > 0.0:
 		m.poison_t -= dt
@@ -645,12 +779,17 @@ func _think(m: Dictionary, dt: float) -> void:
 	# Тихие лапы — замечают ближе. Пока идёт сцена выхода или ты в своём гнезде — не
 	# замечают вовсе.
 	var hidden := scripted or safe()
-	var seen := dist / float(st.stealth) if not hidden else INF
-	var sp: Dictionary = LandSpecies.SPECIES[m.sp]
+	# В тумане тебя замечают ближе.
+	var seen := dist / float(st.stealth) * (1.4 if weather == "fog" else 1.0) if not hidden else INF
+	var sp: Dictionary = LandSpecies.SPECIES.get(m.sp, {})
 	var dir := Vector3.ZERO
 	var spd: float = m.speed
 	var attacking := false
 	match m.kind:
+		"ally":
+			var r := _think_ally(m, dt, dist)
+			dir = r[0]
+			spd *= float(r[1])
 		"pack":
 			var r := _think_pack(m, dt, dist, seen, hidden)
 			dir = r[0]
@@ -699,8 +838,8 @@ func _think(m: Dictionary, dt: float) -> void:
 		next = here
 	if m.kind != "giant":
 		next = _push_out(next, float(m.size) * 0.6)
-	# В твоё гнездо никто не заходит.
-	if has_nest:
+	# В твоё гнездо никто чужой не заходит.
+	if has_nest and m.kind != "ally":
 		var g := Vector2(next.x - home.x, next.z - home.z)
 		var keep_out: float = NEST_R + float(m.size) * 0.6
 		if g.length() < keep_out and g.length() > 0.01:
@@ -715,12 +854,22 @@ func _think(m: Dictionary, dt: float) -> void:
 	m.pos = Vector3(next.x, terrain.height(next.x, next.z), next.z)
 	if (m.vel as Vector3).length() > 0.2:
 		m.heading = lerp_angle(m.heading, atan2(m.vel.x, m.vel.z), 1.0 - exp(-5.0 * dt))
-	# Кусает, если злой и достаёт.
-	if attacking and not hidden and dist < float(m.size) * 0.7 + REACH and m.bite_cd <= 0.0:
+	# Твои рядом — достаётся и им.
+	if attacking and m.bite_cd <= 0.0:
+		var a = _ally_near(m.pos, float(m.size) * 0.7 + REACH)
+		if a != null and (hidden or dist > float(m.size) * 0.7 + REACH or (a.pos as Vector3).distance_to(m.pos) < dist):
+			m.bite_cd = float({"pack": 1.3, "hermit": 1.1, "giant": 1.6}.get(m.kind, 1.2))
+			a.hp -= float(m.bite)
+			a.hit = 1.0
+			a.foe = m.uid
+			events.append({"t": "ally_hurt", "pos": a.pos, "uid": a.uid, "by": m.uid})
+	# Кусает, если злой и достаёт. В прыжке не достать.
+	if attacking and not hidden and jump_t <= 0.0 and dist < float(m.size) * 0.7 + REACH and m.bite_cd <= 0.0:
 		m.bite_cd = float({"pack": 1.3, "hermit": 1.1, "giant": 1.6}.get(m.kind, 1.2))
 		var dmg: float = float(m.bite) * (1.0 - float(st.armor))
 		hp -= dmg
 		events.append({"t": "hurt", "pos": pos, "dmg": dmg, "kind": m.kind, "uid": m.uid})
+		_call_help(m)
 		if sp.has("poison"):
 			poison_t = 4.0
 			poison_dps = float(sp.poison)
@@ -742,7 +891,32 @@ func _think_pack(m: Dictionary, dt: float, dist: float, seen: float, hidden: boo
 	var to_me := pos - here
 	to_me.y = 0.0
 	var me_from_nest: float = (pos - (nest.pos as Vector3)).length()
-	var awake: bool = is_night() == bool(sp.get("night", false))
+	# В грозу все прячутся по гнёздам.
+	var awake: bool = is_night() == bool(sp.get("night", false)) and weather != "storm"
+	var friend := is_friend(m.nest)
+	if friend:
+		dist = INF  # друзья тебя не боятся и не трогают
+	# Напугал рёвом — удирают от тебя.
+	if m.get("scared", 0.0) > 0.0:
+		m.scared -= dt
+		m.angry = 0.0
+		return [(here - pos).normalized() * Vector3(1, 0, 1), 1.3, false]
+	if m.task == "fight":
+		m.fight_t = float(m.get("fight_t", 0.0)) - dt
+		var foe = _mob(int(m.get("foe", -1)))
+		if foe == null or m.fight_t <= 0.0:
+			m.task = "home"
+		else:
+			var to_foe: Vector3 = foe.pos - here
+			to_foe.y = 0.0
+			if to_foe.length() < float(m.size + foe.size) * 0.6 + 0.7 and m.bite_cd <= 0.0:
+				m.bite_cd = 1.0
+				foe.hp -= float(m.bite)
+				foe.hit = 1.0
+				if foe.kind != "ally":
+					foe.killer = "pack" if foe.killer != "player" else "player"
+				m.chomp = 0.5
+			return [to_foe.normalized(), 1.2, false]
 	# Без вожака — разбегаются от тебя, гнездо не стерегут.
 	if nest.panic > 0.0:
 		m.angry = 0.0
@@ -753,7 +927,7 @@ func _think_pack(m: Dictionary, dt: float, dist: float, seen: float, hidden: boo
 		if dist < 9.0:
 			return [(d - to_me.normalized() * 2.0).normalized(), 1.3, false]
 		return [d, 1.0, false]
-	if me_from_nest < NEST_GUARD * float(st.stealth) and not hidden:
+	if me_from_nest < NEST_GUARD * float(st.stealth) and not hidden and not friend:
 		_anger_pack(m.nest)
 	# Злые: гонятся за тобой, пока ты у их земли (охотники вдали — пока хватает сил).
 	if m.angry > 0.0 and not hidden and (me_from_nest < NEST_LEASH or (m.task == "hunt" and m.stamina > 0.0)):
@@ -764,7 +938,7 @@ func _think_pack(m: Dictionary, dt: float, dist: float, seen: float, hidden: boo
 		return [to_me.normalized(), minf(1.15, 0.9 * SPEED / sqrt(float(m.size)) / float(m.speed)), true]
 	m.angry = minf(m.angry, 0.0)
 	# Хищник на охоте замечает тебя вблизи (ночник ночью — издалека) и бросается.
-	if sp.diet == "meat" and m.task == "hunt" and awake and seen < (10.0 if sp.get("night", false) else 5.0):
+	if sp.diet == "meat" and m.task == "hunt" and awake and not friend and seen < (10.0 if sp.get("night", false) else 5.0):
 		m.angry = 5.0
 		m.stamina = 1.0
 	match m.task:
@@ -784,6 +958,7 @@ func _think_pack(m: Dictionary, dt: float, dist: float, seen: float, hidden: boo
 				if _take(m.target):
 					m.carry = "fruit"
 					m.task = "carry"
+					m.chomp = 0.5
 				else:
 					m.task = "home"
 			return [_toward(here, tp), 1.0, false]
@@ -813,10 +988,17 @@ func _think_pack(m: Dictionary, dt: float, dist: float, seen: float, hidden: boo
 				prey.hp -= float(m.bite)
 				prey.hit = 1.0
 				prey.killer = "pack"
-				# Сборщика укусили — бросает всё и бежит домой.
+				m.chomp = 0.5
+				# Сборщика укусили — бросает всё и бежит домой, а свои рядом бросаются
+				# на охотника.
 				_drop_carry(prey)
 				if prey.task == "forage":
 					prey.task = "carry"
+				for o in mobs:
+					if o.alive and o.kind == "pack" and o.nest == prey.nest and o != prey and (o.pos as Vector3).distance_to(prey.pos) < 14.0:
+						o.task = "fight"
+						o.foe = m.uid
+						o.fight_t = 8.0
 				if dist < 30.0:
 					events.append({"t": "hunt", "pos": prey.pos, "uid": m.uid})
 			return [to_prey.normalized(), 1.25, false]
@@ -837,6 +1019,7 @@ func _think_pack(m: Dictionary, dt: float, dist: float, seen: float, hidden: boo
 	if not awake:
 		if here.distance_to(nest.pos) > 3.5:
 			return [_toward(here, nest.pos), 0.8, false]
+		m.sleep = weather != "storm" or is_night()
 		return [Vector3.ZERO, 1.0, false]
 	if m.t <= 0.0 or here.distance_to(m.goal) < 1.2:
 		m.t = rng.randf_range(3.0, 7.0)
@@ -859,6 +1042,333 @@ func _think_pack(m: Dictionary, dt: float, dist: float, seen: float, hidden: boo
 	if st.scare and dist < 9.0:
 		d = (d - to_me.normalized() * 1.5).normalized()
 	return [d, 1.0, false]
+
+## Свой: растёт (если в гнезде есть еда), дерётся с тем, кто нападает на тебя или на
+## своих, носит еду в гнездо, а в остальное время ходит за тобой. Малыши и пара, пока идёт
+## к гнезду, — у гнезда. [куда, во сколько быстрее]
+func _think_ally(m: Dictionary, dt: float, dist: float) -> Array:
+	var here: Vector3 = m.pos
+	var nest_at := home
+	if m.age < 1.0 and stash > 0:
+		m.age = minf(1.0, float(m.age) + dt / GROW_TIME)
+		m.fed = float(m.get("fed", 0.0)) + dt
+		if m.fed >= 60.0:
+			m.fed = 0.0
+			stash -= 1
+		_ally_stats(m)
+	# Пара только пришла — идёт к гнезду.
+	if m.get("coming", false):
+		if Vector2(here.x - nest_at.x, here.z - nest_at.z).length() < NEST_R:
+			m.coming = false
+			events.append({"t": "mate", "pos": here})
+		return [_toward(here, nest_at), 0.8]
+	# Драка: тот, кто кусал тебя или своих, или злой рядом.
+	var foe = _mob(int(m.foe))
+	if foe == null or foe.kind == "ally" or (foe.pos as Vector3).distance_to(pos) > 30.0:
+		m.foe = -1
+		foe = null
+		if m.age >= 0.5:
+			var best_d := 12.0
+			for o in mobs:
+				if not o.alive or o.kind == "ally" or (o.kind == "pack" and is_friend(o.nest)):
+					continue
+				var d: float = (o.pos as Vector3).distance_to(pos)
+				if o.angry > 0.0 and d < best_d:
+					best_d = d
+					foe = o
+			if foe != null:
+				m.foe = foe.uid
+	if foe != null:
+		var to_foe: Vector3 = foe.pos - here
+		to_foe.y = 0.0
+		if to_foe.length() < float(m.size + foe.size) * 0.6 + 0.7 and m.bite_cd <= 0.0:
+			m.bite_cd = 0.8
+			foe.hp -= float(m.bite)
+			foe.hit = 1.0
+			foe.killer = "player"
+			m.chomp = 0.5
+			if foe.kind == "pack":
+				_anger_pack(foe.nest)
+			elif foe.kind != "giant":
+				foe.angry = maxf(foe.angry, 4.0)
+		return [to_foe.normalized(), 1.25]
+	# Несёт еду домой.
+	if m.carry != "":
+		if Vector2(here.x - nest_at.x, here.z - nest_at.z).length() < NEST_R:
+			stash = mini(stash + 1, STASH_MAX)
+			m.carry = ""
+			m.task = "home"
+			events.append({"t": "ally_store", "pos": here})
+		return [_toward(here, nest_at), 1.1]
+	if m.task == "forage":
+		var tp = _target_pos(m.target)
+		if tp == null:
+			m.task = "home"
+		else:
+			if Vector2(tp.x - here.x, tp.z - here.z).length() < 1.6:
+				if _take(m.target):
+					m.carry = "fruit"
+					m.chomp = 0.5
+				m.task = "home"
+			return [_toward(here, tp), 1.0]
+	# Малыши — в гнезде; взрослые — за тобой (ты в гнезде — и они там).
+	var stay: bool = m.age < 0.5 or safe()
+	if stay and has_nest:
+		if is_night() and here.distance_to(nest_at) < NEST_R:
+			m.sleep = true
+			return [Vector3.ZERO, 1.0]
+		if m.t <= 0.0 or here.distance_to(m.goal) < 1.0:
+			m.t = rng.randf_range(2.0, 5.0)
+			m.goal = _near_land(nest_at, NEST_R * 0.7)
+		return [_toward(here, m.goal) * 0.5, 1.0]
+	# Сходить за едой, пока ты стоишь.
+	if m.t <= 0.0:
+		m.t = rng.randf_range(3.0, 6.0)
+		if has_nest and stash < STASH_MAX and vel.length() < 1.0 and here.distance_to(nest_at) < 60.0 and rng.randf() < 0.5:
+			var f := _food_near(here, 18.0, false)
+			if not f.is_empty():
+				m.task = "forage"
+				m.target = f
+	# Строем позади тебя.
+	var slot: int = int(m.slot)
+	var side := -1.0 if slot % 2 == 0 else 1.0
+	var spot := pos - forward() * (2.2 + 1.4 * (slot / 2)) + Vector3(forward().z, 0, -forward().x) * side * 1.4
+	var gap := Vector2(spot.x - here.x, spot.z - here.z).length()
+	if gap < 0.8:
+		return [Vector3.ZERO, 1.0]
+	return [_toward(here, spot), clampf(gap / 3.0, 0.6, 1.4) * maxf(float(st.speed) * _spd_k, 1.0)]
+
+## Свой рядом с точкой (ближе r) или null.
+func _ally_near(at: Vector3, r: float):
+	for o in mobs:
+		if o.alive and o.kind == "ally" and (o.pos as Vector3).distance_to(at) < r:
+			return o
+	return null
+
+## Тебя кусают — свои и друзья рядом бросаются на обидчика.
+func _call_help(by: Dictionary) -> void:
+	for o in mobs:
+		if not o.alive or (o.pos as Vector3).distance_to(pos) > 20.0:
+			continue
+		if o.kind == "ally":
+			o.foe = by.uid
+		elif o.kind == "pack" and is_friend(o.nest) and o != by and not o.leader:
+			o.task = "fight"
+			o.foe = by.uid
+			o.fight_t = 10.0
+
+## Сколько можно нести: в пасти одно, с руками — три.
+func carry_max() -> int:
+	return 3 if evo.land_body.has("arms") else 1
+
+## Есть что взять рядом (упавший плод, туша, куст)?
+func can_pick() -> bool:
+	return carry.size() < carry_max() and not _pick_target().is_empty()
+
+func _pick_target() -> Dictionary:
+	var r := 2.2 + float(st.reach)
+	for d in drops:
+		if (d.pos as Vector3).distance_to(pos) < r:
+			return {"t": "drop", "uid": d.uid, "what": "fruit"}
+	for cc in carcasses:
+		if cc.meat > 0 and (cc.pos as Vector3).distance_to(pos) < r:
+			return {"t": "carcass", "uid": cc.uid, "what": "meat"}
+	for i in bushes.size():
+		if bushes[i].fruits > 0 and (bushes[i].pos as Vector3).distance_to(pos) < r + 0.6:
+			return {"t": "bush", "i": i, "what": "fruit"}
+	return {}
+
+## «Взять»: плод или кусок мяса — в пасть (или в руки), нести в гнездо или стае в подарок.
+func pick() -> bool:
+	if carry.size() >= carry_max():
+		return false
+	var tg := _pick_target()
+	if tg.is_empty():
+		return false
+	if tg.t == "carcass":
+		var cc = _carcass(int(tg.uid))
+		cc.meat -= 1
+	elif not _take(tg):
+		return false
+	carry.append(tg.what)
+	_eat_cd = 1.0
+	events.append({"t": "pick", "pos": pos, "what": tg.what})
+	return true
+
+## Съесть то, что несёшь.
+func eat_carry() -> void:
+	if carry.is_empty():
+		return
+	var w: String = carry.pop_back()
+	if w == "fruit":
+		_fruit(pos, 1.0)
+	else:
+		var g: float = 3.0 * float(st.meat)
+		_gain(g)
+		events.append({"t": "meat", "pos": pos, "dna": g})
+
+## Своё гнездо: принёс еду — в запасы; у травоядной стаи — подарок; яйца, пара, детёныши.
+func _home(dt: float) -> void:
+	_lay_cd -= dt
+	var hatched := 0
+	for i in eggs.size():
+		eggs[i] = float(eggs[i]) - dt
+		if float(eggs[i]) <= 0.0:
+			hatched += 1
+	if hatched > 0:
+		eggs = eggs.filter(func(e): return float(e) > 0.0)
+		for k in hatched:
+			_add_ally(0.0, false, home)
+		events.append({"t": "hatch", "pos": home, "n": hatched})
+	if not carry.is_empty() and has_nest and at_nest():
+		var n := carry.size()
+		stash = mini(stash + n, STASH_MAX)
+		carry.clear()
+		events.append({"t": "stored_own", "pos": home, "n": n})
+	if carry.has("fruit"):
+		for i in nests.size():
+			var nn: Dictionary = nests[i]
+			if LandSpecies.SPECIES[nn.sp].diet == "plant" and (nn.pos as Vector3).distance_to(pos) < 2.8 + float(st.reach):
+				carry.erase("fruit")
+				nn.food = mini(int(nn.food) + 1, FOOD_MAX)
+				var was := is_friend(i)
+				friends[i] = int(friends.get(i, 0)) + 1
+				for o in mobs:
+					if o.alive and o.kind == "pack" and o.nest == i:
+						o.angry = 0.0
+				events.append({"t": "friend" if is_friend(i) and not was else "gift", "pos": nn.pos, "nest": i, "n": friends[i]})
+				break
+	if not has_nest:
+		return
+	var al := allies()
+	var mate = null
+	for a in al:
+		if a.mate:
+			mate = a
+	var room := MAX_ALLY - al.size() - eggs.size()
+	if mate == null and stash >= MATE_FOOD and at_nest() and room > 0:
+		# Запасов хватает — приходит пара.
+		var m := _add_ally(1.0, true, _near_land(home, 28.0))
+		m.coming = true
+		events.append({"t": "mate_coming", "pos": m.pos})
+	elif mate != null and not mate.get("coming", false) and at_nest() and stash >= MATE_FOOD and _lay_cd <= 0.0 and room > 0 \
+			and Vector2(mate.pos.x - home.x, mate.pos.z - home.z).length() < NEST_R + 1.5:
+		stash -= MATE_FOOD
+		for k in mini(2, room):
+			eggs.append(EGG_HATCH)
+		_lay_cd = 120.0
+		evo.generation += 1
+		events.append({"t": "eggs", "pos": home, "gen": evo.generation})
+
+# --- умения тела ----------------------------------------------------------------------
+
+## Какие умения даёт тело: прыжок (длинные ноги), рёв (гребень), плевок (ядовитая кожа),
+## копать (когти). Плавание (перепонки) — само.
+func abilities() -> Array:
+	var b: Dictionary = evo.land_body
+	var out: Array = []
+	if b.get("legs", "") == "legs_long":
+		out.append("jump")
+	if b.get("head", "") == "crest":
+		out.append("roar")
+	if b.get("skin", "") == "poison_skin":
+		out.append("spit")
+	if b.get("claws", "") != "":
+		out.append("dig")
+	return out
+
+## Применить умение. Перезаряжается — нет.
+func use_ability(id: String) -> bool:
+	if scripted or float(cd.get(id, 0.0)) > 0.0 or not abilities().has(id) or dig_t > 0.0:
+		return false
+	cd[id] = ABILITY_CD[id]
+	match id:
+		"jump":
+			jump_t = 0.45
+			events.append({"t": "jump", "pos": pos})
+		"roar":
+			for m in mobs:
+				if not m.alive or m.kind == "ally" or (m.pos as Vector3).distance_to(pos) > 14.0:
+					continue
+				if m.kind == "pack" and not is_friend(m.nest):
+					m.scared = 6.0
+					m.angry = 0.0
+				elif m.kind == "hermit":
+					m.rest = 3.0
+					m.angry = 0.0
+			events.append({"t": "roar", "pos": pos})
+		"spit":
+			var best = null
+			var best_d := 10.0
+			for m in mobs:
+				if not m.alive or m.kind == "ally":
+					continue
+				var to: Vector3 = m.pos - pos
+				to.y = 0.0
+				if to.length() < best_d and forward().dot(to.normalized()) > 0.5:
+					best_d = to.length()
+					best = m
+			var at: Vector3 = best.pos if best != null else pos + forward() * 6.0
+			if best != null:
+				best.poison_t = 4.0
+				_hurt_mob(best, 3.0)
+			events.append({"t": "spit", "pos": pos, "to": at})
+		"dig":
+			dig_t = 1.5
+			events.append({"t": "dig_start", "pos": pos})
+	return true
+
+## Докопался: чаще ДНК из земли, иногда корень-плод или старые кости; рядом окаменелость —
+## докопался и до неё.
+func _dug() -> void:
+	for r in relics:
+		if (r.pos as Vector3).distance_to(pos) < 6.0:
+			r.hp -= 15.0
+			r.hit = 1.0
+			if r.hp <= 0.0:
+				r.alive = false
+				relics.erase(r)
+				relics_taken.append(r.i)
+				_find("relic", r.pos)
+			events.append({"t": "dig", "pos": pos, "what": "relic"})
+			return
+	var roll := rng.randf()
+	if roll < 0.3:
+		_drop_fruit(pos, 1.0)
+		events.append({"t": "dig", "pos": pos, "what": "fruit"})
+	else:
+		var g := 10.0 if roll > 0.85 else float(rng.randi_range(3, 6))
+		_gain(g)
+		events.append({"t": "dig", "pos": pos, "what": "dna", "dna": g})
+
+# --- погода ---------------------------------------------------------------------------
+
+func _weather(dt: float) -> void:
+	weather_t -= dt
+	if weather_t <= 0.0:
+		var r := rng.randf()
+		var was := weather
+		weather = "clear" if r < 0.5 else ("rain" if r < 0.75 else ("fog" if r < 0.9 else "storm"))
+		weather_t = rng.randf_range(90.0, 200.0)
+		if weather != was:
+			events.append({"t": "weather", "w": weather, "pos": pos})
+	if weather == "storm":
+		_bolt_t -= dt
+		if _bolt_t <= 0.0:
+			_bolt_t = rng.randf_range(6.0, 14.0)
+			# Молния бьёт в дерево неподалёку — с плодового падают все плоды.
+			var near := trees_near(pos, 45.0)
+			var at := pos + Vector3(rng.randf_range(-40, 40), 0, rng.randf_range(-40, 40))
+			if not near.is_empty():
+				var t: Dictionary = near[rng.randi() % near.size()]
+				at = t.pos
+				t.hit = 1.0
+				if t.kind == "fruit":
+					for k in int(t.fruits):
+						_drop_fruit(t.pos, trunk(t) + rng.randf_range(0.8, 3.0))
+					t.fruits = 0
+					t.regrow = TREE_REGROW
+			events.append({"t": "lightning", "pos": at})
 
 ## Сколько из стаи сейчас в походе.
 func _trips(n: int) -> int:
@@ -989,7 +1499,8 @@ func _near_land(at: Vector3, r: float) -> Vector3:
 ## Плоды, туши, яйца и запасы стай: подошёл — съел. Из гнезда — стая этого не простит.
 func _eat(dt: float) -> void:
 	_eat_cd -= dt
-	if _eat_cd > 0.0 or not st.mouth:
+	# Несёшь в пасти — есть нечем (с руками — можно).
+	if _eat_cd > 0.0 or not st.mouth or (not carry.is_empty() and carry_max() == 1):
 		return
 	var reach := float(st.reach)
 	for d in drops:
@@ -1068,6 +1579,9 @@ func _deaths() -> void:
 	for m in mobs:
 		if m.alive and m.hp <= 0.0:
 			m.alive = false
+			if m.kind == "ally":
+				events.append({"t": "ally_dead", "pos": m.pos, "mate": m.mate})
+				continue
 			if m.killer != "player":
 				# Загрызли хищники — остаётся туша, они её едят и несут домой.
 				_uid += 1
