@@ -22,7 +22,13 @@ const RoundButton := preload("res://scripts/ui/round_button.gd")
 
 var evo: Evolution
 var first := false
-var slot := "body"
+var slot := "torso"
+## Выбранная касанием часть: torso, head, mouth, eyes, horns, back, tail, leg0…, arm0/1.
+var sel := "torso"
+## Менять пару вместе: левую и правую ногу (руку) одинаково.
+var mirror := true
+var _press_at := Vector2.ZERO
+var _tap := false
 var _view: SubViewport
 var _box: SubViewportContainer
 var _cam: Camera3D
@@ -63,7 +69,7 @@ var _arming_clear := false
 ## Кружки лепки: место → [[ручка, вид]]. Вид: move — тянуть куда угодно, girth — толщина
 ## туловища, len — длина туловища, size — размер, thick — толщина, updown — выше/ниже.
 const HANDLES := {
-	"body": [["g0", "girth"], ["g1", "girth"], ["g2", "girth"], ["g3", "girth"], ["g4", "girth"],
+	"torso": [["g0", "girth"], ["g1", "girth"], ["g2", "girth"], ["g3", "girth"], ["g4", "girth"],
 		["len_back", "len"], ["len_front", "len"], ["width", "thick"], ["head", "move"], ["head_size", "size"]],
 	"legs": [["legs", "updown"], ["legs_back", "updown"], ["leg_thick", "thick"]],
 	"feet": [["feet", "size"]],
@@ -78,7 +84,7 @@ const HANDLES := {
 	"paint": [],
 }
 ## С какой стороны смотреть на место: сбоку или вполоборота спереди.
-const VIEW_YAW := {"body": PI / 2.0, "legs": PI / 2.0, "tail": PI / 2.0 + 0.5, "back": PI / 2.0,
+const VIEW_YAW := {"torso": PI / 2.0, "legs": PI / 2.0, "tail": PI / 2.0 + 0.5, "back": PI / 2.0,
 	"mouth": 0.8, "eyes": 0.6, "head": 0.8, "arms": 0.9, "feet": 0.9, "claws": 0.7, "skin": 0.9, "paint": 0.9}
 ## Заготовки тела: что меняют в форме.
 const PRESETS := [
@@ -201,6 +207,9 @@ func _colors() -> Array:
 func _rebuild_creature(bounce := true) -> void:
 	var cc := _colors()
 	_creature.build_body(cc[0], cc[1], 1.0, evo.land_body, evo.paint().pattern, evo.land_shape)
+	if not _creature.groups.has(sel):
+		sel = _default_sel(slot)
+	_creature.highlight(sel)
 	if not bounce:
 		_creature.update(0.0, _pos, _heading, Vector3.ZERO)
 		return
@@ -264,22 +273,182 @@ func _input(e: InputEvent) -> void:
 			_idle = 0.0
 			# Попал в кружок — лепим, мимо — крутим существо.
 			_grab = _handle_at(e.position - _box.global_position)
+			_press_at = e.position
+			_tap = true
 			if _grab != "":
 				_walk_t = 0.0
 				changed.emit(true, false)
 		elif not e.pressed and e.index == _drag:
 			_drag = -1
-			if _grab != "":
+			if _grab != "" and not _tap:
 				_grab = ""
 				_dirty = true
 				_refresh.call_deferred()
+			elif _tap:
+				_grab = ""
+				# Коснулся и отпустил, не ведя, — выбрать часть под пальцем.
+				var key := pick(e.position - _box.global_position)
+				if key != "":
+					select(key)
+					changed.emit(true, false)
+					_refresh.call_deferred()
 	elif e is InputEventScreenDrag and e.index == _drag:
 		_idle = 0.0
+		if _tap and e.position.distance_to(_press_at) > 14.0:
+			_tap = false
 		if _grab != "":
-			_sculpt(_grab, e.relative)
+			# Кружок: лепим, как только палец сдвинулся (короткое касание — выбор части).
+			if not _tap:
+				_sculpt(_grab, e.relative)
 		else:
 			_yaw -= e.relative.x * 0.01
 			_yaw_to = 1000.0
+
+# --- выбор части ----------------------------------------------------------------------
+
+## Выбрать часть: подсветить на существе, открыть её место.
+func select(key: String) -> void:
+	sel = key
+	var s := _slot_of(key)
+	if s != "":
+		slot = s
+	if _creature:
+		_creature.highlight(sel)
+
+## Какая часть под точкой витрины: из всех, чьи меши накрывают точку, — самая мелкая
+## (глаз на голове важнее головы).
+func pick(p: Vector2) -> String:
+	var best := ""
+	var best_r := INF
+	for key in _creature.groups:
+		for mi in _creature.groups[key]:
+			if not is_instance_valid(mi) or not (mi as Node3D).is_visible_in_tree():
+				continue
+			var gi := mi as MeshInstance3D
+			if gi == null:
+				continue
+			var c: Vector3 = gi.global_transform * gi.get_aabb().get_center()
+			if _cam.is_position_behind(c):
+				continue
+			var sc: Vector3 = gi.global_basis.get_scale()
+			var r := gi.get_aabb().size.length() / 2.0 * maxf(sc.x, maxf(sc.y, sc.z)) * 0.75
+			var dist := _cam.global_position.distance_to(c)
+			var per_px := 2.0 * dist * tan(deg_to_rad(_cam.fov) / 2.0) / maxf(_box.size.y, 1.0)
+			var r_px := maxf(r / per_px, 16.0)
+			if _cam.unproject_position(c).distance_to(p) < r_px and r_px < best_r:
+				best_r = r_px
+				best = key
+	return best
+
+func _slot_of(key: String) -> String:
+	if key.begins_with("leg"):
+		return "legs"
+	if key.begins_with("arm"):
+		return "arms"
+	return {"torso": "torso", "head": "torso", "mouth": "mouth", "eyes": "eyes", "horns": "head", "back": "back", "tail": "tail"}.get(key, "")
+
+## Какую часть выбрать, когда открыли место: у ног — переднюю левую, у рук — правую…
+func _default_sel(s: String) -> String:
+	match s:
+		"legs", "feet", "claws":
+			return "leg0" if evo.land_body.has("legs") else ""
+		"arms":
+			return "arm1" if evo.land_body.has("arms") else ""
+		"head":
+			return "horns" if evo.land_body.has("head") else ""
+		"skin", "paint":
+			return ""
+		"torso":
+			return "torso" if evo.land_body.has("torso") else ""
+	return s if evo.land_body.has(s) or s == "tail" else ""
+
+## Как назвать выбранную часть.
+func sel_name(key: String) -> String:
+	if key.begins_with("leg"):
+		var i := int(key.substr(3))
+		var n := _creature.leg_count
+		var side := "левая" if i % 2 == 0 else "правая"
+		if n <= 2:
+			return "Нога — " + side
+		var row: String = ["передняя", "средняя" if n == 6 else "задняя", "задняя"][i / 2]
+		return "Нога — %s %s" % [row, side]
+	if key.begins_with("arm"):
+		return "Рука — левая" if key == "arm0" else "Рука — правая"
+	return {"torso": "Туловище", "head": "Голова", "mouth": "Рот", "eyes": "Глаза", "horns": "Рога и гребень", "back": "Спина", "tail": "Хвост"}.get(key, key)
+
+## Блок выбранной части: название, ползунки, для пары — «обе стороны», для ног — «всем».
+func _sel_block() -> void:
+	if sel == "" or not _creature.groups.has(sel):
+		if evo.land_body.has("torso"):
+			var tip := Kit.label("Нажми на часть существа, чтобы менять её длину, ширину, высоту", 17, Art.GOLD)
+			tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			_list.add_child(tip)
+		return
+	var head := Kit.hbox(8)
+	var t := Kit.label("Выбрано: " + sel_name(sel), 21, Art.TEXT, true)
+	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(t)
+	_list.add_child(head)
+	var rows: Array
+	if sel == "torso":
+		rows = [["Длина", "len"], ["Ширина", "width"], ["Высота", "height"], ["Размер", "torso"]]
+	else:
+		rows = [["Длина", "dim:%s:0" % sel], ["Ширина", "dim:%s:1" % sel], ["Высота", "dim:%s:2" % sel], ["Размер", "dim:%s:3" % sel]]
+		if sel == "head":
+			rows += [["Шея вперёд", "neck_z"], ["Шея вверх", "neck_y"]]
+		if sel.begins_with("arm"):
+			rows.append(["Наклон рук", "arm_pitch"])
+		if sel == "tail":
+			rows.append(["Наклон", "tail_pitch"])
+	_add_sliders(rows)
+	if sel.begins_with("leg") or sel.begins_with("arm"):
+		var row := Kit.hbox(8)
+		var m := _button("Обе стороны одинаково: " + ("да" if mirror else "нет"), Art.CARD_BORDER if mirror else Art.CARD, func():
+			mirror = not mirror
+			_refresh.call_deferred())
+		m.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		m.custom_minimum_size.y = 46
+		m.add_theme_font_size_override("font_size", 17)
+		row.add_child(m)
+		if sel.begins_with("leg") and _creature.leg_count > 2:
+			var all := _button("Всем ногам так же", Art.CARD_BORDER, func():
+				var d: Array = LandParts.dim(evo.land_shape, sel).duplicate()
+				for i in _creature.leg_count:
+					evo.land_shape.dims["leg%d" % i] = d.duplicate()
+				_after_change.call_deferred("Все ноги одинаковые"))
+			all.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			all.custom_minimum_size.y = 46
+			all.add_theme_font_size_override("font_size", 17)
+			row.add_child(all)
+		_list.add_child(row)
+	var norm := _button("Эта часть — как обычно", Art.CARD_BORDER, func():
+		if sel == "torso":
+			for k in ["len", "width", "height", "torso"]:
+				evo.land_shape[k] = LandParts.SHAPE[k][0]
+		else:
+			evo.land_shape.dims.erase(sel)
+			if mirror:
+				evo.land_shape.dims.erase(_pair(sel))
+		_after_change.call_deferred("Как обычно"))
+	norm.custom_minimum_size.y = 44
+	norm.add_theme_font_size_override("font_size", 17)
+	_list.add_child(norm)
+
+## Пара части: левая ↔ правая нога того же ряда, левая ↔ правая рука.
+func _pair(key: String) -> String:
+	if key.begins_with("leg"):
+		return "leg%d" % (int(key.substr(3)) ^ 1)
+	if key.begins_with("arm"):
+		return "arm1" if key == "arm0" else "arm0"
+	return ""
+
+## «Готово» — только если есть на чём ходить.
+func try_done() -> void:
+	if not evo.land_can_walk():
+		changed.emit(false, false)
+		_after_change("Нужны туловище и ноги — иначе на суше не походишь")
+		return
+	done.emit()
 
 # --- лепка ----------------------------------------------------------------------------
 
@@ -292,7 +461,7 @@ func handles() -> Array:
 		var id: String = h[0]
 		if not _creature.anchors.has(id):
 			continue
-		if h[1] == "size" and slot != "body" and slot != "feet" and not evo.land_body.has(slot):
+		if h[1] == "size" and slot != "torso" and slot != "feet" and not evo.land_body.has(slot):
 			continue
 		var world: Vector3 = _creature.global_transform * (_creature.anchors[id] as Vector3)
 		if _cam.is_position_behind(world):
@@ -394,7 +563,7 @@ func _build_panel() -> void:
 	_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_scroll.add_child(_list)
 	_panel.add_child(_scroll)
-	_done_btn = _button("Выйти на сушу" if first else "Готово", Art.GREEN, func(): done.emit())
+	_done_btn = _button("Выйти на сушу" if first else "Готово", Art.GREEN, try_done)
 	_done_btn.custom_minimum_size.y = 60
 	_done_btn.add_theme_font_size_override("font_size", 25)
 	var bottom := Kit.hbox(10)
@@ -430,7 +599,7 @@ func _build_panel() -> void:
 	_expand_btn.visible = false
 	_expand_btn.pressed.connect(func(): set_collapsed.call_deferred(false))
 	add_child(_expand_btn)
-	_done_float = _button("Выйти на сушу" if first else "Готово", Art.GREEN, func(): done.emit())
+	_done_float = _button("Выйти на сушу" if first else "Готово", Art.GREEN, try_done)
 	_done_float.custom_minimum_size = Vector2(220, 56)
 	_done_float.visible = false
 	add_child(_done_float)
@@ -485,11 +654,11 @@ func _refresh() -> void:
 		_tabs.remove_child(ch)
 		ch.queue_free()
 	var cc := _colors()
-	for s in [["body", "Тело", ""]] + LandParts.SLOTS + [["paint", "Окрас", ""]]:
+	for s in LandParts.SLOTS + [["paint", "Окрас", ""]]:
 		var id: String = s[0]
 		var t := SlotTab.new()
 		t.part = evo.land_body.get(id, LandIcons.SLOT_ICON.get(id, "body"))
-		t.empty = id != "body" and id != "paint" and not evo.land_body.has(id)
+		t.empty = id != "paint" and not evo.land_body.has(id)
 		t.c = cc[0]
 		t.c2 = cc[1]
 		t.text = s[1]
@@ -500,6 +669,7 @@ func _refresh() -> void:
 		# Перестраивать список — после касания, не посреди него (иначе кнопка уже вне дерева).
 		t.pressed.connect(func():
 			slot = id
+			select(_default_sel(id))
 			_arming_clear = false
 			_scroll.scroll_vertical = 0
 			_yaw_to = VIEW_YAW.get(id, 0.9)
@@ -513,7 +683,9 @@ func _refresh() -> void:
 	var hint := Kit.muted(_slot_hint(slot), 17)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_list.add_child(hint)
-	if slot == "body":
+	# Выбранная часть — сверху: её длина, ширина, высота, размер.
+	_sel_block()
+	if slot == "torso":
 		_body_list()
 		_refresh_stats()
 		return
@@ -522,9 +694,7 @@ func _refresh() -> void:
 		_refresh_stats()
 		return
 	var sz_key := "head" if slot == "head" else slot
-	var rows := _slider_rows(slot, cur)
-	if not rows.is_empty():
-		_add_sliders(rows)
+
 	if HANDLES.get(slot, []).size() > 0 and (cur != "" or slot == "feet" or slot == "tail"):
 		var how := Kit.label(_sculpt_hint(slot), 17, Art.GOLD)
 		how.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -557,6 +727,8 @@ func _refresh_stats() -> void:
 	for ch in _stats.get_children():
 		_stats.remove_child(ch)
 		ch.queue_free()
+	if not evo.land_body.has("torso"):
+		return
 	var st := LandParts.stats(evo.land_body, evo.land_shape)
 	var chips := [["dash", "Скорость %d%%" % int(round(st.speed * 100.0))], ["bite", "Укус %d" % int(st.bite)],
 		["heart", "Здоровье %d" % int(st.hp)], ["eye", "Зрение %d%%" % int(round(st.sight * 100.0))]]
@@ -569,10 +741,15 @@ func _refresh_stats() -> void:
 
 ## Вкладка «Тело»: как лепить, заготовки, сгладить, как было в воде.
 func _body_list() -> void:
+	if not evo.land_body.has("torso"):
+		var empty := Kit.label("Пусто. Начни с туловища — к нему крепится всё остальное.", 19, Art.GOLD)
+		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_list.add_child(empty)
+		_list.add_child(_part_card("torso", false))
+		return
 	var how := Kit.label("Тяни кружки на существе: по спине — толще или тоньше, с концов — длиннее или короче, зелёный на голове — шея (выше, дальше), жёлтый над головой — голова больше.", 17, Art.GOLD)
 	how.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_list.add_child(how)
-	_add_sliders(_slider_rows("body", ""))
 	var st := LandParts.stats(evo.land_body, evo.land_shape)
 	var base := LandParts.stats(evo.land_body, LandParts.default_shape())
 	var eff := Kit.label("Форма даёт: здоровье ×%s · скорость ×%s" % [LandParts._num(snappedf(st.hp / base.hp, 0.01)), LandParts._num(snappedf(st.speed / base.speed, 0.01))], 18, Art.GREEN)
@@ -617,8 +794,11 @@ func _body_list() -> void:
 		b.add_theme_font_size_override("font_size", 19)
 		row.add_child(b)
 	_list.add_child(row)
-	# С нуля: со второго нажатия — чтобы не стереть всё случайно.
-	var clear := _button("Точно? Снять всё и начать с нуля" if _arming_clear else "С нуля — пустое туловище",
+	_list.add_child(_clear_button())
+
+## С нуля — совсем пусто: со второго нажатия, чтобы не стереть всё случайно.
+func _clear_button() -> Button:
+	var clear := _button("Точно? Убрать всё существо" if _arming_clear else "С нуля — убрать всё, совсем пусто",
 		Color(0.62, 0.2, 0.22) if _arming_clear else Color(0.4, 0.2, 0.22), func():
 			if not _arming_clear:
 				_arming_clear = true
@@ -630,7 +810,7 @@ func _body_list() -> void:
 			_after_change.call_deferred(r.message))
 	clear.custom_minimum_size.y = 50
 	clear.add_theme_font_size_override("font_size", 19)
-	_list.add_child(clear)
+	return clear
 
 ## Ползунки для места: [подпись, ключ формы]. «size:место» — размер части.
 func _slider_rows(s: String, cur: String) -> Array:
@@ -658,13 +838,24 @@ func _slider_rows(s: String, cur: String) -> Array:
 	return [["Размер", "size:" + s]]
 
 func shape_value(key: String) -> float:
+	if key.begins_with("dim:"):
+		var q := key.split(":")
+		return float(LandParts.dim(evo.land_shape, q[1])[int(q[2])])
 	if key.begins_with("size:"):
 		return LandParts.part_size(evo.land_shape, key.substr(5))
 	return float(evo.land_shape.get(key, 1.0))
 
 func set_shape_value(key: String, v: float) -> void:
 	var sh: Dictionary = evo.land_shape
-	if key.begins_with("size:"):
+	if key.begins_with("dim:"):
+		var q := key.split(":")
+		for part in [q[1], _pair(q[1]) if mirror else ""]:
+			if part == "":
+				continue
+			var d: Array = LandParts.dim(sh, part).duplicate()
+			d[int(q[2])] = v
+			sh.dims[part] = d
+	elif key.begins_with("size:"):
 		sh.sizes[key.substr(5)] = v
 	else:
 		sh[key] = v
@@ -679,7 +870,13 @@ func _add_sliders(rows: Array) -> void:
 		sl.text = r[0]
 		sl.ed = self
 		sl.key = key
-		var lim: Array = LandParts.SIZE_LIMITS if key.begins_with("size:") else [LandParts.SHAPE[key][1], LandParts.SHAPE[key][2]]
+		var lim: Array
+		if key.begins_with("dim:"):
+			lim = LandParts.DIM_SIZE_LIMITS if key.ends_with(":3") else LandParts.DIM_LIMITS
+		elif key.begins_with("size:"):
+			lim = LandParts.SIZE_LIMITS
+		else:
+			lim = [LandParts.SHAPE[key][1], LandParts.SHAPE[key][2]]
 		sl.lo = lim[0]
 		sl.hi = lim[1]
 		sl.angle = key.ends_with("pitch") or key.begins_with("neck")
@@ -765,8 +962,8 @@ func _reset_shape(s: String, key: String) -> void:
 
 func _slot_hint(s: String) -> String:
 	match s:
-		"body":
-			return "Тело целиком: длина, толщина, шея и голова. От формы зависят здоровье и скорость: толще — крепче, но медленнее."
+		"torso":
+			return "Нажми на любую часть существа — выберешь её, и здесь появятся её длина, ширина, высота и размер. От формы зависят здоровье и скорость: толще — крепче, но медленнее."
 		"paint":
 			return "Цвета и узор — бесплатно. Узор рисуется вторым цветом."
 		"mouth":
@@ -774,7 +971,7 @@ func _slot_hint(s: String) -> String:
 		"eyes":
 			return "Без глаз вокруг туман. Чем лучше глаза, тем дальше видно."
 		"legs":
-			return "Ноги — это скорость. Без ног никак: снимешь — останутся короткие лапки."
+			return "Ноги — это скорость. Без ног на суше не походишь. Нажми на ногу на существе — у каждой свои длина, ширина, высота."
 		"feet":
 			return "Ступни: тише, быстрее или по воде."
 		"claws":
@@ -798,7 +995,7 @@ func _part_card(id: String, on: bool) -> Control:
 	var cur: String = evo.land_body.get(slot, "")
 	if cur != "":
 		free += int(LandParts.PARTS[cur].cost)
-	var can := on or cost <= free
+	var can := (on or cost <= free) and (id == "torso" or evo.land_body.has("torso"))
 	var col := Kit.vbox(4)
 	var row := Kit.hbox(8)
 	var name := Kit.label(p.name, 23, Art.TEXT if can else Art.MUTED, true)
@@ -809,6 +1006,8 @@ func _part_card(id: String, on: bool) -> Control:
 	row.add_child(price)
 	col.add_child(row)
 	var sum := LandParts.summary(id)
+	if id != "torso" and not evo.land_body.has("torso"):
+		sum = "Сначала туловище"
 	if sum != "":
 		var s := Kit.label(sum, 17, Art.GREEN if can else Art.MUTED)
 		s.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART

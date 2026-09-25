@@ -36,8 +36,9 @@ func test_поставить_и_снять(c) -> void:
 	c.ok("поставил ноги", e.land_put("legs4").ok)
 	c.eq("списалось", e.land_free(), free - 20)
 	c.ok("сменил на шесть — старые вернулись", e.land_put("legs6").ok and e.land_free() == free - 34)
-	c.ok("снял ноги — лапки", e.land_take("legs").ok and e.land_body.legs == "stubs" and e.land_free() == free)
-	c.ok("лапки не снять", not e.land_take("legs").ok)
+	c.ok("снял ноги — ног нет, ДНК вернулась", e.land_take("legs").ok and not e.land_body.has("legs") and e.land_free() == free)
+	c.ok("без ног на сушу не выйти", not e.land_can_walk())
+	c.ok("лапки даром", e.land_put("stubs").ok and e.land_can_walk())
 	e.land_put("claws")
 	c.ok("снял когти — места нет", e.land_take("claws").ok and not e.land_body.has("claws"))
 	e.dna_total = 0.0
@@ -56,7 +57,7 @@ func test_сохранение(c) -> void:
 	var bad := e.to_dict()
 	bad.land_body = {"legs": "wings", "mouth": "eyes", "arms": "arms"}
 	var b2 := Evolution.from_dict(bad)
-	c.eq("чужое выброшено, ноги — лапки", b2.land_body, {"arms": "arms", "legs": "stubs"})
+	c.eq("чужое выброшено; старому телу — туловище и лапки", b2.land_body, {"arms": "arms", "torso": "torso", "legs": "stubs"})
 	var old := e.to_dict()
 	old.erase("land_body")
 	old.erase("land_ready")
@@ -82,7 +83,8 @@ func test_свойства(c) -> void:
 
 func _land(body: Dictionary) -> Land:
 	var e := Evolution.create()
-	e.land_body = body
+	e.land_body = body.duplicate()
+	e.land_body.torso = "torso"
 	var l := Land.new(e, 5)
 	l.mobs = []
 	return l
@@ -248,7 +250,9 @@ func test_с_нуля(c) -> void:
 	e.land_put("arms")
 	var free := e.land_free()
 	var r := e.land_clear()
-	c.ok("всё снято: " + r.message, e.land_body == {"legs": "stubs"})
+	c.ok("совсем пусто: " + r.message, e.land_body.is_empty() and not e.land_can_walk())
+	c.ok("без туловища ничего не поставить", not e.land_put("legs4").ok)
+	c.ok("туловище — даром", e.land_put("torso").ok and e.land_put("legs4").ok and e.land_can_walk())
 	c.ok("ДНК вернулась", e.land_free() > free + 40)
 	c.eq("туловище простое", e.land_shape.len, LandParts.blank_shape().len)
 
@@ -269,3 +273,28 @@ func _old(e: Evolution) -> Dictionary:
 	var d := JSON.parse_string(JSON.stringify(e.to_dict())) as Dictionary
 	d.erase("land_paint")
 	return d
+
+func test_размеры_каждой_части(c) -> void:
+	var sh := LandParts.fix_shape({"dims": {"leg0": [2.0, 1.5, 1.2, 1.3], "wings": [1, 1, 1, 1], "arm1": [9, 0, 1, 1]}})
+	c.eq("своя длина у ноги", sh.dims.leg0[0], 2.0)
+	c.ok("чужой части нет", not sh.dims.has("wings"))
+	c.eq("в пределах", sh.dims.arm1, [LandParts.DIM_LIMITS[1], LandParts.DIM_LIMITS[0], 1.0, 1.0])
+	var body := {"torso": "torso", "legs": "legs4", "mouth": "jaws"}
+	var base := LandParts.stats(body, LandParts.default_shape())
+	var long := LandParts.default_shape()
+	for i in 4:
+		long.dims["leg%d" % i] = [2.0, 1.0, 1.0, 1.0]
+	c.ok("все ноги длиннее — быстрее", LandParts.stats(body, long).speed > base.speed * 1.15)
+	var one := LandParts.default_shape()
+	one.dims["leg0"] = [2.0, 1.0, 1.0, 1.0]
+	var s1: float = LandParts.stats(body, one).speed
+	c.ok("одна длинная нога — прибавка меньше", s1 > base.speed and s1 < LandParts.stats(body, long).speed)
+	var mouth := LandParts.default_shape()
+	mouth.dims["mouth"] = [1.5, 1.5, 1.5, 1.2]
+	c.ok("большой рот кусает сильнее", LandParts.stats(body, mouth).bite > base.bite + 1.0)
+	c.ok("без ног ползает", LandParts.stats({"torso": "torso"}, LandParts.default_shape()).speed < 0.5)
+	var e := _evo()
+	e.land_start()
+	e.land_shape.dims = {"leg3": [1.4, 1.1, 0.9, 1.2]}
+	var back := Evolution.from_dict(JSON.parse_string(JSON.stringify(e.to_dict())))
+	c.eq("размеры ноги сохраняются", back.land_shape.dims.leg3, [1.4, 1.1, 0.9, 1.2])

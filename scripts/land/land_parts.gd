@@ -18,6 +18,7 @@ class_name LandParts
 extends RefCounted
 
 const SLOTS := [
+	["torso", "Тело", "body"],
 	["mouth", "Рот", "bite"],
 	["eyes", "Глаза", "eye"],
 	["legs", "Ноги", "dash"],
@@ -31,6 +32,9 @@ const SLOTS := [
 ]
 
 const PARTS := {
+	# Основа.
+	"torso": {"slot": "torso", "name": "Туловище", "cost": 0,
+		"hint": "Основа: к нему крепятся голова, ноги и всё остальное. Даром"},
 	# Рот.
 	"beak": {"slot": "mouth", "name": "Клюв", "cost": 10, "bite": 3.0, "fruit": 2.0, "meat": 0.6,
 		"hint": "Травоядный: с плодов вдвое больше ДНК, кусает слабо"},
@@ -129,7 +133,7 @@ static func why_gone(id: String) -> String:
 ## Сделать тело для суши из тела клетки. {body: место → часть, kept: [[часть клетки,
 ## часть суши]], gone: [[часть клетки, почему]]}. Ноги даются даром — короткие лапки.
 static func from_sea(sea_body: Array) -> Dictionary:
-	var body := {"legs": "stubs"}
+	var body := {"torso": "torso", "legs": "stubs"}
 	var kept: Array = []
 	var gone: Array = []
 	for p in sea_body:
@@ -178,7 +182,7 @@ static func stats(body: Dictionary, shape := {}) -> Dictionary:
 		if not PARTS.has(id):
 			continue
 		var p: Dictionary = PARTS[id]
-		var ps := part_size(sh, slot)
+		var ps := part_size(sh, slot) * dim_k(sh, dim_key(slot))
 		var k := 0.75 + 0.25 * ps
 		heavy += maxf(0.0, ps - 1.0)
 		if slot == "mouth":
@@ -205,15 +209,33 @@ static func stats(body: Dictionary, shape := {}) -> Dictionary:
 	var ls := float(sh.leg_size)
 	var leg_len := (float(sh.leg_len) + float(sh.leg_len_f)) / 2.0 * ls
 	var leg_thick := (float(sh.leg_thick) + float(sh.leg_thick_f)) / 2.0 * ls
+	# У каждой ноги свои длина, ширина, высота и размер — берём в среднем.
+	if int(s.legs) > 0:
+		var sl := 0.0
+		var st := 0.0
+		for i in int(s.legs):
+			var d := dim(sh, "leg%d" % i)
+			sl += float(d[0]) * float(d[3])
+			st += sqrt(float(d[1]) * float(d[2])) * float(d[3])
+		leg_len *= sl / int(s.legs)
+		leg_thick *= st / int(s.legs)
 	s.hp += (leg_thick - 1.0) * 6.0
 	s.speed /= clampf(pow(bulk, 0.15), 0.85, 1.25)
 	s.speed *= clampf(0.75 + 0.25 * leg_len, 0.7, 1.35) * (1.0 - 0.05 * (leg_thick - 1.0))
 	s.speed /= 1.0 + 0.03 * heavy
-	s.bite += (float(sh.head) - 1.0) * 3.0
+	s.bite += (float(sh.head) * dim_k(sh, "head") - 1.0) * 3.0
 	if body.has("arms"):
-		s.reach += (float(sh.arm_len) * float(sh.arm_size) - 1.0) * 0.8
-		s.bite += (float(sh.arm_thick) * float(sh.arm_size) - 1.0) * 1.5
-	s.turn *= clampf(0.85 + 0.15 * float(sh.tail_len) * float(sh.tail_size), 0.8, 1.4)
+		var a0 := dim(sh, "arm0")
+		var a1 := dim(sh, "arm1")
+		var al := (float(a0[0]) * float(a0[3]) + float(a1[0]) * float(a1[3])) / 2.0
+		var at := (sqrt(float(a0[1]) * float(a0[2])) * float(a0[3]) + sqrt(float(a1[1]) * float(a1[2])) * float(a1[3])) / 2.0
+		s.reach += (float(sh.arm_len) * float(sh.arm_size) * al - 1.0) * 0.8
+		s.bite += (float(sh.arm_thick) * float(sh.arm_size) * at - 1.0) * 1.5
+	s.turn *= clampf(0.85 + 0.15 * float(sh.tail_len) * float(sh.tail_size) * float(dim(sh, "tail")[0]), 0.8, 1.4)
+	# Без ног — только ползать.
+	if not body.has("legs"):
+		s.legs = 0
+		s.speed *= 0.3
 	# Быстрее двух обычных не бегает никто — иначе ни стая, ни отшельник не страшны.
 	s.speed = minf(s.speed, 1.9)
 	s.hp = maxf(s.hp, 10.0)
@@ -240,13 +262,19 @@ const SHAPE := {
 	"tail_size": [1.0, 0.5, 2.0], "tail_len": [1.0, 0.2, 3.5], "tail_pitch": [0.25, -0.8, 1.3], "tail_thick": [1.0, 0.5, 2.2],
 }
 const GIRTH := [0.9, 1.0, 1.05, 1.0, 0.9]
+## У каждой части своя длина, ширина, высота и размер: dims[часть] = [Д, Ш, В, Р].
+## Части: голова, рот, глаза, рога (всё, что на голове), спина, хвост, каждая нога
+## (leg0…leg5: 0-1 — передние, дальше — к хвосту; чётные — левые) и каждая рука.
+const DIM_KEYS := ["head", "mouth", "eyes", "horns", "back", "tail", "leg0", "leg1", "leg2", "leg3", "leg4", "leg5", "arm0", "arm1"]
+const DIM_LIMITS := [0.3, 3.0]
+const DIM_SIZE_LIMITS := [0.4, 2.5]
 const GIRTH_LIMITS := [0.35, 2.0]
 const SIZE_LIMITS := [0.5, 2.2]
 ## Обычная «масса» туловища — от неё считается, толще ты или тоньше.
 const BULK_BASE := 0.9445
 
 static func default_shape() -> Dictionary:
-	var d := {"girth": GIRTH.duplicate(), "sizes": {}}
+	var d := {"girth": GIRTH.duplicate(), "sizes": {}, "dims": {}}
 	for k in SHAPE:
 		d[k] = SHAPE[k][0]
 	return d
@@ -268,6 +296,13 @@ static func fix_shape(v: Variant) -> Dictionary:
 	var g = v.get("girth")
 	if g is Array and g.size() == SPINE and g.all(func(x): return x is float or x is int):
 		d.girth = g.map(func(x): return clampf(float(x), GIRTH_LIMITS[0], GIRTH_LIMITS[1]))
+	var dm = v.get("dims")
+	if dm is Dictionary:
+		for k in dm:
+			var a = dm[k]
+			if k is String and DIM_KEYS.has(k) and a is Array and a.size() == 4 and a.all(func(x): return x is float or x is int):
+				d.dims[k] = [clampf(float(a[0]), DIM_LIMITS[0], DIM_LIMITS[1]), clampf(float(a[1]), DIM_LIMITS[0], DIM_LIMITS[1]),
+					clampf(float(a[2]), DIM_LIMITS[0], DIM_LIMITS[1]), clampf(float(a[3]), DIM_SIZE_LIMITS[0], DIM_SIZE_LIMITS[1])]
 	var sz = v.get("sizes")
 	if sz is Dictionary:
 		for slot in sz:
@@ -275,6 +310,19 @@ static func fix_shape(v: Variant) -> Dictionary:
 			if slot is String and SLOTS.any(func(s): return s[0] == slot) and (x is float or x is int):
 				d.sizes[slot] = clampf(float(x), SIZE_LIMITS[0], SIZE_LIMITS[1])
 	return d
+
+## Длина, ширина, высота и размер части (обычные — единицы).
+static func dim(shape: Dictionary, key: String) -> Array:
+	return shape.get("dims", {}).get(key, [1.0, 1.0, 1.0, 1.0])
+
+## Во сколько раз часть больше обычной — по объёму (для силы).
+static func dim_k(shape: Dictionary, key: String) -> float:
+	var d := dim(shape, key)
+	return pow(float(d[0]) * float(d[1]) * float(d[2]), 1.0 / 3.0) * float(d[3])
+
+## Какой кусочек размеров у места: у рта — рот, у головы (рога, гребень) — рога…
+static func dim_key(slot: String) -> String:
+	return {"head": "horns", "mouth": "mouth", "eyes": "eyes", "back": "back", "tail": "tail"}.get(slot, "")
 
 static func part_size(shape: Dictionary, slot: String) -> float:
 	return float(shape.get("sizes", {}).get(slot, 1.0))

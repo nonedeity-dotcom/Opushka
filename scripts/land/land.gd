@@ -103,7 +103,7 @@ func _init(e: Evolution, seed := 1) -> void:
 
 ## Перечитать тело (после редактора): скорость, укус, здоровье…
 func apply_body() -> void:
-	var body: Dictionary = evo.land_body if not evo.land_body.is_empty() else LandParts.from_sea(evo.body).body
+	var body: Dictionary = evo.land_body if evo.land_can_walk() else LandParts.from_sea(evo.body).body
 	var shape: Dictionary = evo.land_shape if not evo.land_shape.is_empty() else LandParts.shape_from_sea(evo.shape)
 	st = LandParts.stats(body, shape)
 	var frac := hp / max_hp if max_hp > 0.0 else 1.0

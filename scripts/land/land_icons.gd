@@ -8,13 +8,13 @@ const DARK := Color("#1e1e28")
 const HORN := Color("#f0b040")
 
 ## Каким значком рисовать место тела, если на нём пусто.
-const SLOT_ICON := {"body": "body", "mouth": "jaws", "eyes": "eyes", "legs": "legs4", "feet": "paws", "claws": "claws",
+const SLOT_ICON := {"torso": "body", "body": "body", "mouth": "jaws", "eyes": "eyes", "legs": "legs4", "feet": "paws", "claws": "claws",
 	"arms": "arms", "back": "back_spikes", "tail": "tail_long", "head": "horns", "skin": "scales", "paint": "paint"}
 
 static func draw(ci: CanvasItem, id: String, rect: Rect2, c: Color, c2: Color) -> void:
 	Art.pen(ci, rect)
 	match id:
-		"body":
+		"body", "torso":
 			# Существо сбоку: туловище, голова, хвост, ножки.
 			Art.ellipse(ci, Vector2(48, 52), 30, 20, c)
 			ci.draw_circle(Vector2(78, 40), 14, c)

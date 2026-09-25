@@ -129,9 +129,13 @@ func paint() -> Dictionary:
 ## Начать с чистого листа: все части сняты (ДНК вернулась), простое туловище на лапках.
 func land_clear() -> Dictionary:
 	var back := land_cost()
-	land_body = {"legs": "stubs"}
+	land_body = {}
 	land_shape = LandParts.blank_shape()
-	return {"ok": true, "message": "Чистый лист: +%d ДНК" % back}
+	return {"ok": true, "message": "Пусто: начинай с туловища (+%d ДНК)" % back}
+
+## Тело готово к суше: есть туловище и ноги.
+func land_can_walk() -> bool:
+	return land_body.has("torso") and land_body.has("legs")
 
 ## Поставить часть на её место (старая с этого места снимается, ДНК за неё возвращается).
 func land_put(id: String) -> Dictionary:
@@ -140,6 +144,8 @@ func land_put(id: String) -> Dictionary:
 	var slot: String = LandParts.PARTS[id].slot
 	if land_body.get(slot, "") == id:
 		return {"ok": true, "message": ""}
+	if slot != "torso" and not land_body.has("torso"):
+		return {"ok": false, "message": "Сначала туловище — к нему всё крепится"}
 	var cost: int = LandParts.PARTS[id].cost
 	var free := land_free()
 	if land_body.has(slot):
@@ -154,12 +160,12 @@ func land_take(slot: String) -> Dictionary:
 	if not land_body.has(slot):
 		return {"ok": false, "message": ""}
 	var id: String = land_body[slot]
-	if slot == "legs":
-		if id == "stubs":
-			return {"ok": false, "message": "Без ног на суше никак"}
-		land_body.legs = "stubs"
-	else:
-		land_body.erase(slot)
+	if slot == "torso":
+		# Без туловища не держится ничего — снимается всё.
+		var back := land_cost()
+		land_body.clear()
+		return {"ok": true, "message": "Пусто: всё снято (+%d ДНК)" % back}
+	land_body.erase(slot)
 	return {"ok": true, "message": "Убрано: %s (+%d ДНК)" % [String(LandParts.PARTS[id].name).to_lower(), int(LandParts.PARTS[id].cost)]}
 
 
@@ -617,8 +623,11 @@ static func from_dict(d: Variant) -> Evolution:
 		var id = d.land_body[slot]
 		if id is String and LandParts.PARTS.has(id) and LandParts.PARTS[id].slot == slot:
 			e.land_body[slot] = id
-	if not e.land_body.is_empty() and not e.land_body.has("legs"):
-		e.land_body.legs = "stubs"
+	# Раньше туловище было всегда и не было частью — старым телам его добавляем.
+	if not e.land_body.is_empty() and not e.land_body.has("torso") and not (d.get("land_body") as Dictionary).has("torso"):
+		e.land_body.torso = "torso"
+		if not e.land_body.has("legs"):
+			e.land_body.legs = "stubs"
 	e.land_ready = d.get("land_ready", false) == true and not e.land_body.is_empty()
 	if not e.land_body.is_empty():
 		e.land_shape = LandParts.fix_shape(d.get("land_shape")) if d.get("land_shape") is Dictionary else LandParts.shape_from_sea(e.shape)

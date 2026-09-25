@@ -109,7 +109,7 @@ func rebuild_player() -> void:
 	var pt := evo.paint()
 	var c := Color(LandParts.COLORS[pt.color])
 	var c2 := Color(LandParts.COLORS[pt.color2]) if pt.pattern != "none" else c.darkened(0.25)
-	var body: Dictionary = evo.land_body if not evo.land_body.is_empty() else LandParts.from_sea(evo.body).body
+	var body: Dictionary = evo.land_body if evo.land_can_walk() else LandParts.from_sea(evo.body).body
 	var shape: Dictionary = evo.land_shape if not evo.land_shape.is_empty() else LandParts.shape_from_sea(evo.shape)
 	_player.build_body(c, c2, 1.0, body, pt.pattern, shape)
 	var sight: float = land.st.sight
