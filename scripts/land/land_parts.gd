@@ -274,6 +274,9 @@ static func stats(body: Dictionary, shape := {}) -> Dictionary:
 		s.sight *= clampf(1.0 + 0.08 * (eye_count(body, sh) - 2), 0.8, 1.35)
 	# Поднял туловище — голова выше, видно дальше.
 	s.sight *= 1.0 + 0.15 * clampf(float(sh.torso_pitch), 0.0, 1.5) / 1.5
+	# Высоко над землёй на длинных ногах — тоже.
+	if body.has("legs"):
+		s.sight *= 1.0 + 0.06 * clampf(float(sh.get("lift", 0.0)), 0.0, 2.5)
 	# Быстрее двух обычных не бегает никто — иначе ни стая, ни отшельник не страшны.
 	s.speed = minf(s.speed, 1.9)
 	s.hp = maxf(s.hp, 10.0)
@@ -298,7 +301,8 @@ const SHAPE := {
 	"leg_size": [1.0, 0.5, 2.0], "leg_len": [1.0, 0.45, 2.4], "leg_thick": [1.0, 0.5, 2.5],
 	"leg_len_f": [1.0, 0.45, 2.4], "leg_thick_f": [1.0, 0.5, 2.5],
 	"arm_size": [1.0, 0.5, 2.0], "arm_pairs": [1.0, 1.0, 3.0],
-	"leg_n": [0.0, 0.0, 8.0], "eye_n": [0.0, 0.0, 6.0], "torso_bend": [0.0, -1.0, 1.0], "tail_curl": [0.0, -2.5, 2.5], "arm_len": [1.0, 0.5, 2.5], "arm_thick": [1.0, 0.5, 2.5], "arm_pitch": [0.0, -1.2, 1.4],
+	"leg_n": [0.0, 0.0, 8.0], "eye_n": [0.0, 0.0, 6.0], "torso_bend": [0.0, -1.0, 1.0], "tail_curl": [0.0, -2.5, 2.5],
+	"lift": [0.0, 0.0, 2.5], "head_on": [1.0, 0.0, 1.0], "tail_on": [1.0, 0.0, 1.0], "arm_len": [1.0, 0.5, 2.5], "arm_thick": [1.0, 0.5, 2.5], "arm_pitch": [0.0, -1.2, 1.4],
 	"tail_size": [1.0, 0.5, 2.0], "tail_len": [1.0, 0.2, 3.5], "tail_pitch": [0.25, -0.8, 1.3], "tail_thick": [1.0, 0.5, 2.2],
 }
 const GIRTH := [0.9, 1.0, 1.05, 1.0, 0.9]
@@ -310,13 +314,17 @@ const DIM_KEYS := ["head", "mouth", "eyes", "horns", "back", "tail", "leg0", "le
 ## Глаза по одному: где на голове — [вокруг головы (0 — прямо вперёд, ± — в стороны),
 ## выше/ниже, размер этого глаза].
 const EYE_KEYS := ["eye0", "eye1", "eye2", "eye3", "eye4", "eye5"]
-const EYE_LIMITS := [[-2.6, 2.6], [-1.2, 1.4], [0.4, 2.5]]
 ## Поворот частей: наклон рта, рогов и гребня, шипов и пластин, кистей, ступней.
 const ROT_KEYS := ["mouth", "horns", "back", "hands", "feet"]
-## Где на теле нога или рука: place[часть] = [вдоль туловища 0–1 (0 — хвост, 1 — голова),
-## выше/ниже (угол по кругу туловища: 0 — сбоку посередине, + выше, − ниже),
-## наклон (только у рук)]. Нет записи — место по умолчанию.
-const PLACE_LIMITS := [[0.0, 1.0], [-1.45, 1.45], [-1.5, 1.5]]
+## Где часть сидит — любую можно поставить куда угодно, на туловище или на голову:
+## place[часть] = [на чём: 0 — туловище, 1 — голова, u, v, ещё].
+##   туловище: u — вдоль (0 — зад, 1 — перёд; −0,25 и 1,25 — самые кончики), v — угол по
+##   кругу туловища (0 — правый бок, π/2 — спина, π — левый бок, −π/2 — брюхо);
+##   голова: u — вокруг (0 — прямо вперёд), v — выше/ниже.
+##   «ещё» — у рук наклон, у глаз размер.
+## Нет записи — место по умолчанию.
+const PLACE_KEYS := ["leg0", "leg1", "leg2", "leg3", "leg4", "leg5", "leg6", "leg7", "arm0", "arm1", "arm2", "arm3", "arm4", "arm5",
+	"eye0", "eye1", "eye2", "eye3", "eye4", "eye5", "mouth", "horns", "back", "tail", "head"]
 const DIM_LIMITS := [0.3, 3.0]
 const DIM_SIZE_LIMITS := [0.4, 2.5]
 const GIRTH_LIMITS := [0.35, 2.0]
@@ -358,10 +366,19 @@ static func fix_shape(v: Variant) -> Dictionary:
 	if pl is Dictionary:
 		for k in pl:
 			var a = pl[k]
-			var lim: Array = EYE_LIMITS if EYE_KEYS.has(k) else PLACE_LIMITS
-			var ok_key: bool = k is String and (EYE_KEYS.has(k) or (DIM_KEYS.has(k) and (k.begins_with("leg") or k.begins_with("arm"))))
-			if ok_key and a is Array and a.size() == 3 and a.all(func(x): return x is float or x is int):
-				d.place[k] = [clampf(float(a[0]), lim[0][0], lim[0][1]), clampf(float(a[1]), lim[1][0], lim[1][1]), clampf(float(a[2]), lim[2][0], lim[2][1])]
+			if not (k is String and PLACE_KEYS.has(k) and a is Array and a.all(func(x): return x is float or x is int)):
+				continue
+			if a.size() == 3:
+				# Старый вид: у ног и рук [вдоль, выше/ниже по своему боку, наклон], у глаз
+				# [вокруг головы, выше/ниже, размер].
+				if k.begins_with("eye"):
+					a = [1.0, a[0], a[1], a[2]]
+				else:
+					var right := int(k.substr(3)) % 2 == 1
+					a = [0.0, a[0], float(a[1]) if right else PI - float(a[1]), a[2]]
+			if a.size() != 4:
+				continue
+			d.place[k] = fix_place(k, a)
 	var rt = v.get("rot")
 	if rt is Dictionary:
 		for k in rt:
@@ -376,25 +393,81 @@ static func fix_shape(v: Variant) -> Dictionary:
 	return d
 
 ## Длина, ширина, высота и размер части (обычные — единицы).
-## Место ноги или руки по умолчанию: [вдоль, выше/ниже, наклон].
-static func default_place(key: String, legs: int, tilt := 0.0, eyes := 2) -> Array:
+## Место в пределах: у головы — угол вокруг и вверх, у туловища — вдоль с кончиками и
+## угол по кругу.
+static func fix_place(key: String, a: Array) -> Array:
+	var on := 1.0 if float(a[0]) >= 0.5 else 0.0
+	var extra := clampf(float(a[3]), 0.4, 2.5) if key.begins_with("eye") else clampf(float(a[3]), -1.5, 1.5)
+	if on == 1.0:
+		return [1.0, wrapf(float(a[1]), -PI, PI), clampf(float(a[2]), -1.45, 1.45), extra]
+	return [0.0, clampf(float(a[1]), -0.25, 1.25), wrapf(float(a[2]), -PI, PI), extra]
+
+## Пределы у ползунка места: i — 1 (вдоль тела / вокруг головы), 2 (угол по кругу тела /
+## выше-ниже на голове), 3 (наклон руки / размер глаза).
+static func place_limits(key: String, pl: Array, i: int) -> Array:
+	if i == 3:
+		return [0.4, 2.5] if key.begins_with("eye") else [-1.5, 1.5]
+	if float(pl[0]) >= 0.5:
+		return [-PI, PI] if i == 1 else [-1.45, 1.45]
+	return [-0.25, 1.25] if i == 1 else [-PI, PI]
+
+## Место на голове → на переднем кончике туловища (когда головы нет): [u, v].
+static func head_to_body(yaw: float, pitch: float) -> Array:
+	var d := Vector3(sin(yaw) * cos(pitch), sin(pitch), cos(yaw) * cos(pitch))
+	var rad := Vector2(d.x, d.y).length()
+	var phi := atan2(maxf(d.z, 0.0), rad)
+	return [1.0 + 0.25 * phi / (PI / 2.0), atan2(d.y, d.x) if rad > 0.001 else 0.0]
+
+## С какой стороны место: больше 0 — правая, меньше — левая, около 0 — посередине.
+static func place_side(pl: Array) -> float:
+	return sin(float(pl[1])) if float(pl[0]) >= 0.5 else cos(float(pl[2]))
+
+## То же место на другой стороне (левое ↔ правое).
+static func mirror_place(a: Array) -> Array:
+	if float(a[0]) >= 0.5:
+		return [1.0, -float(a[1]), a[2], a[3]]
+	return [0.0, a[1], wrapf(PI - float(a[2]), -PI, PI), a[3]]
+
+## Место по умолчанию. head_on — есть ли голова: без неё рот, глаза и рога садятся на
+## перёд туловища.
+static func default_place(key: String, legs: int, tilt := 0.0, eyes := 2, head_on := true) -> Array:
+	match key:
+		"mouth":
+			return [1.0, 0.0, -0.1, 0.0] if head_on else [0.0, 1.25, 0.0, 0.0]
+		"horns":
+			return [1.0, PI, 1.3, 0.0] if head_on else [0.0, 1.0, PI / 2.0, 0.0]
+		"back":
+			return [0.0, 0.5, PI / 2.0, 0.0]
+		"tail":
+			return [0.0, -0.25, 0.0, 0.0]
+		"head":
+			return [0.0, 1.25, 0.0, 0.0]
 	if key.begins_with("eye"):
 		var e := int(key.substr(3))
-		if eyes % 2 == 1 and e == eyes - 1:
+		var center := eyes % 2 == 1 and e == eyes - 1
+		if not head_on:
+			if center:
+				return [0.0, 1.12, PI / 2.0, 1.0]
+			var a: float = [0.55, 0.15, 1.0][mini(e / 2, 2)]
+			return [0.0, [1.1, 1.0, 1.15][mini(e / 2, 2)], a if e % 2 == 1 else PI - a, 1.0]
+		if center:
 			# Непарный глаз — посередине лба.
-			return [0.0, 0.55 if eyes == 1 else 0.9, 1.15 if eyes == 1 else 0.85]
+			return [1.0, 0.0, 0.55 if eyes == 1 else 0.9, 1.15 if eyes == 1 else 0.85]
 		var side := -1.0 if e % 2 == 0 else 1.0
 		var row: Array = [[0.62, 0.5], [0.95, 0.05], [0.35, 1.0]][mini(e / 2, 2)]
-		return [side * float(row[0]), row[1], 1.0]
+		return [1.0, side * float(row[0]), row[1], 1.0]
 	var i := int(key.substr(3))
 	if key.begins_with("arm"):
-		return [[0.86, 0.7, 0.55][i / 2], [0.0, -0.25, -0.45][i / 2], 0.0]
+		var a: float = [0.0, -0.25, -0.45][i / 2]
+		return [0.0, [0.86, 0.7, 0.55][i / 2], a if i % 2 == 1 else PI - a, 0.0]
 	var up := clampf(tilt / 1.3, 0.0, 1.0)
 	var rows := int(ceil(legs / 2.0))
 	var ts: Array = {1: [lerpf(0.5, 0.08, up)], 2: [0.78, 0.22], 3: [0.82, 0.5, 0.18], 4: [0.85, 0.62, 0.38, 0.15]}.get(rows, [0.5])
+	var t: float = ts[mini(i / 2, ts.size() - 1)]
 	# Непарная нога — посередине под брюхом.
-	var mid := legs % 2 == 1 and i == legs - 1
-	return [ts[mini(i / 2, ts.size() - 1)], -1.3 if mid else -0.32, 0.0]
+	if legs % 2 == 1 and i == legs - 1:
+		return [0.0, t, -PI / 2.0, 0.0]
+	return [0.0, t, -0.32 if i % 2 == 1 else -(PI - 0.32), 0.0]
 
 ## Сколько ног: своё число или сколько положено этому виду ног (0 — без ног).
 static func leg_count(body: Dictionary, shape: Dictionary) -> int:
@@ -420,7 +493,7 @@ static func leg_side(i: int, n: int) -> float:
 ## Где нога или рука на самом деле (своё место или по умолчанию).
 static func place(shape: Dictionary, key: String, legs: int, eyes := 2) -> Array:
 	var p = shape.get("place", {}).get(key)
-	return p if p is Array else default_place(key, legs, float(shape.get("torso_pitch", 0.0)), eyes)
+	return p if p is Array else default_place(key, legs, float(shape.get("torso_pitch", 0.0)), eyes, float(shape.get("head_on", 1.0)) >= 0.5)
 
 static func dim(shape: Dictionary, key: String) -> Array:
 	return shape.get("dims", {}).get(key, [1.0, 1.0, 1.0, 1.0])

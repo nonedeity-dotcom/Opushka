@@ -105,15 +105,15 @@ const INSP_W := 360.0
 ## updown — выше/ниже.
 const SEL_HANDLES := {
 	"torso": [["g0", "girth"], ["g1", "girth"], ["g2", "girth"], ["g3", "girth"], ["g4", "girth"],
-		["len_back", "len"], ["len_front", "len"], ["width", "thick"], ["tilt", "move"]],
-	"head": [["head", "move"], ["head_size", "size"]],
+		["len_back", "len"], ["len_front", "len"], ["width", "thick"], ["tilt", "move"], ["lift", "updown"]],
+	"head": [["place:head", "move"], ["head", "move"], ["head_size", "size"]],
 	"leg": [["legs", "updown"], ["legs_back", "updown"], ["leg_thick", "thick"], ["feet", "size"]],
 	"arm": [["arms", "move"], ["arm_thick", "thick"]],
-	"tail": [["tail", "move"], ["tail_base", "thick"]],
-	"mouth": [["mouth", "size"]],
+	"tail": [["place:tail", "move"], ["tail", "move"], ["tail_base", "thick"]],
+	"mouth": [["place:mouth", "move"], ["mouth", "size"]],
 	"eyes": [["eyes", "size"]],
-	"horns": [["horns", "size"]],
-	"back": [["back", "size"]],
+	"horns": [["place:horns", "move"], ["horns", "size"]],
+	"back": [["place:back", "move"], ["back", "size"]],
 }
 ## С какой стороны смотреть на место: сбоку или вполоборота спереди.
 const VIEW_YAW := {"torso": PI / 2.0, "legs": PI / 2.0, "tail": PI / 2.0 + 0.5, "back": PI / 2.0,
@@ -640,18 +640,18 @@ func _fill_insp() -> void:
 	_insp_sub.visible = _insp_sub.text != ""
 	var rows: Array
 	if sel == "torso":
-		rows = [["Поднять туловище", "torso_pitch"], ["Горб / прогиб", "torso_bend"], ["Длина", "len"], ["Ширина", "width"], ["Высота", "height"], ["Размер", "torso"]]
+		rows = [["Высота над землёй", "lift"], ["Поднять туловище", "torso_pitch"], ["Горб / прогиб", "torso_bend"], ["Длина", "len"],
+			["Ширина", "width"], ["Высота", "height"], ["Размер", "torso"]]
 	elif sel.begins_with("eye"):
-		rows = [["Вокруг головы", "place:%s:0" % sel], ["Выше / ниже", "place:%s:1" % sel], ["Размер", "place:%s:2" % sel],
-			["Все глаза — длина", "dim:eyes:0"], ["Все глаза — ширина", "dim:eyes:1"]]
+		rows = _place_rows(sel) + [["Размер", "place:%s:3" % sel], ["Все глаза — длина", "dim:eyes:0"], ["Все глаза — ширина", "dim:eyes:1"]]
 	else:
 		rows = [["Длина", "dim:%s:0" % sel], ["Ширина", "dim:%s:1" % sel], ["Высота", "dim:%s:2" % sel], ["Размер", "dim:%s:3" % sel]]
 		if sel == "head":
 			rows += [["Шея вперёд", "neck_z"], ["Шея вверх", "neck_y"]]
-		if sel.begins_with("leg") or sel.begins_with("arm"):
-			rows += [["Вдоль тела", "place:%s:0" % sel], ["Выше / ниже", "place:%s:1" % sel]]
+		if LandParts.PLACE_KEYS.has(sel):
+			rows += _place_rows(sel)
 		if sel.begins_with("arm"):
-			rows += [["Наклон", "place:%s:2" % sel], ["Поворот кистей", "rot:hands"]]
+			rows += [["Наклон", "place:%s:3" % sel], ["Поворот кистей", "rot:hands"]]
 		if sel.begins_with("leg"):
 			rows += [["Ступни", "size:feet"], ["Носки врозь", "rot:feet"]]
 		if sel == "tail":
@@ -667,10 +667,9 @@ func _fill_insp() -> void:
 		var lim: Array
 		if key.begins_with("dim:"):
 			lim = LandParts.DIM_SIZE_LIMITS if key.ends_with(":3") else LandParts.DIM_LIMITS
-		elif key.begins_with("place:eye"):
-			lim = LandParts.EYE_LIMITS[int(key.substr(key.length() - 1))]
 		elif key.begins_with("place:"):
-			lim = LandParts.PLACE_LIMITS[int(key.substr(key.length() - 1))]
+			var q := key.split(":")
+			lim = LandParts.place_limits(q[1], LandParts.place(evo.land_shape, q[1], _creature.leg_count, _creature.eye_count), int(q[2]))
 		elif key.begins_with("rot:"):
 			lim = [-1.2, 1.2]
 		elif key.begins_with("size:"):
@@ -679,7 +678,7 @@ func _fill_insp() -> void:
 			lim = [LandParts.SHAPE[key][1], LandParts.SHAPE[key][2]]
 		sl.lo = lim[0]
 		sl.hi = lim[1]
-		sl.angle = key.ends_with("pitch") or key.begins_with("neck") or key.begins_with("rot:") or key.ends_with("curl") or key.ends_with("bend")
+		sl.angle = key.ends_with("pitch") or key.begins_with("neck") or key.begins_with("rot:") or key.ends_with("curl") or key.ends_with("bend") or key == "lift"
 		sl.custom_minimum_size = Vector2(0, 60)
 		_insp_list.add_child(sl)
 	var small := func(text: String, bg: Color, action: Callable) -> Button:
@@ -726,18 +725,35 @@ func _fill_insp() -> void:
 				for i in _creature.leg_count:
 					evo.land_shape.dims["leg%d" % i] = d.duplicate()
 				_after_change.call_deferred("Все ноги одинаковые")))
+	if LandParts.PLACE_KEYS.has(sel) and evo.land_shape.place.has(sel):
+		_insp_list.add_child(small.call("На обычное место", Art.CARD_BORDER, func():
+			_snap()
+			evo.land_shape.place.erase(sel)
+			if mirror and _pair(sel) != "":
+				evo.land_shape.place.erase(_pair(sel))
+			_after_change.call_deferred("На обычном месте")))
+	if sel in ["torso", "head"]:
+		var has_head := float(evo.land_shape.get("head_on", 1.0)) >= 0.5
+		_insp_list.add_child(small.call("Убрать голову — глаза и рот на тело" if has_head else "Вернуть голову", Art.CARD_BORDER,
+			func(): toggle_part.call_deferred("head_on")))
+	if sel in ["torso", "tail"]:
+		var has_tail := float(evo.land_shape.get("tail_on", 1.0)) >= 0.5 or evo.land_body.has("tail")
+		_insp_list.add_child(small.call("Убрать хвост" if has_tail else "Вернуть хвост", Art.CARD_BORDER,
+			func(): toggle_part.call_deferred("tail_on")))
 	_insp_list.add_child(small.call("Как обычно", Art.CARD_BORDER, func():
 		_snap()
 		if sel == "torso":
-			for k in ["len", "width", "height", "torso", "torso_pitch", "torso_bend"]:
+			for k in ["len", "width", "height", "torso", "torso_pitch", "torso_bend", "lift"]:
 				evo.land_shape[k] = LandParts.SHAPE[k][0]
 		elif sel == "tail":
 			evo.land_shape.dims.erase("tail")
+			evo.land_shape.place.erase("tail")
 			evo.land_shape.tail_curl = 0.0
 			evo.land_shape.tail_pitch = LandParts.SHAPE.tail_pitch[0]
 		elif sel in ["mouth", "horns", "back"]:
 			evo.land_shape.dims.erase(sel)
 			evo.land_shape.rot.erase(sel)
+			evo.land_shape.place.erase(sel)
 		else:
 			evo.land_shape.dims.erase(sel)
 			evo.land_shape.place.erase(sel)
@@ -756,7 +772,34 @@ func _fill_insp() -> void:
 			changed.emit(r.ok, true)
 			_after_change.call_deferred(r.message)))
 
+## Ползунки места: на туловище — вдоль и вокруг, на голове — вокруг и выше/ниже.
+func _place_rows(key: String) -> Array:
+	var pl := LandParts.place(evo.land_shape, key, _creature.leg_count, _creature.eye_count)
+	if float(pl[0]) >= 0.5:
+		return [["Вокруг головы", "place:%s:1" % key], ["Выше / ниже на голове", "place:%s:2" % key]]
+	return [["Вдоль тела", "place:%s:1" % key], ["Вокруг тела", "place:%s:2" % key]]
+
 # --- действия -------------------------------------------------------------------------
+
+## Убрать или вернуть голову (head_on) или хвост (tail_on). Без хвоста — и хвостовая
+## часть снимается (ДНК назад).
+func toggle_part(k: String) -> void:
+	_snap()
+	var on := float(evo.land_shape.get(k, 1.0)) >= 0.5 or (k == "tail_on" and evo.land_body.has("tail"))
+	evo.land_shape[k] = 0.0 if on else 1.0
+	var msg := ""
+	if k == "head_on":
+		msg = "Без головы: рот, глаза, рога — на теле" if on else "Голова вернулась"
+	else:
+		msg = "Без хвоста" if on else "Хвост вернулся"
+		if on and evo.land_body.has("tail"):
+			var r := evo.land_take("tail")
+			if r.ok:
+				msg = r.message
+	if on and ((k == "head_on" and sel == "head") or (k == "tail_on" and sel == "tail")):
+		sel = "torso"
+	changed.emit(true, on)
+	_after_change(msg)
 
 ## Запомнить, как было, — для «Отменить».
 func _state() -> Dictionary:
@@ -1073,7 +1116,8 @@ func _process(delta: float) -> void:
 	var fit := clampf(sqrt(size.y / maxf(free.size.y, 1.0)), 1.0, 1.45)
 	var ext := _creature.extent()
 	var dist := ((6.0 if _walk_t > 0.0 or _pos.length() > 0.3 else 2.6) + ext * 1.45) * fit * _zoom
-	var target := Vector3(0, clampf(ext * 0.35, 0.5, 2.4), 0)
+	# Смотреть в середину по высоте — и на высоко поднятое туловище тоже.
+	var target := Vector3(0, clampf(maxf(ext * 0.35, _creature.height() * 0.5), 0.5, 3.5), 0)
 	var want := target + Vector3(sin(_yaw) * cos(_elev), sin(_elev), cos(_yaw) * cos(_elev)) * dist
 	_cam.position = _cam.position.lerp(want, 1.0 - exp(-5.0 * delta)) if _cam.position != Vector3.ZERO else want
 	_cam.look_at(target, Vector3.UP)
@@ -1223,7 +1267,12 @@ func _slot_of(key: String) -> String:
 func default_value(key: String) -> float:
 	if key.begins_with("place:"):
 		var q := key.split(":")
-		return float(LandParts.default_place(q[1], _creature.leg_count, float(evo.land_shape.get("torso_pitch", 0.0)), _creature.eye_count)[int(q[2])])
+		var sh: Dictionary = evo.land_shape
+		var dp := LandParts.default_place(q[1], _creature.leg_count, float(sh.get("torso_pitch", 0.0)), _creature.eye_count, float(sh.get("head_on", 1.0)) >= 0.5)
+		# Обычное место на другом (голова ↔ тело) — отметки нет: показываем как есть.
+		if int(q[2]) < 3 and float(dp[0]) != float(LandParts.place(sh, q[1], _creature.leg_count, _creature.eye_count)[0]):
+			return shape_value(key)
+		return float(dp[int(q[2])])
 	if key.begins_with("rot:"):
 		return 0.0
 	if LandParts.SHAPE.has(key):
@@ -1252,20 +1301,22 @@ func sel_name(key: String) -> String:
 	if key.begins_with("leg"):
 		var i := int(key.substr(3))
 		var n := _creature.leg_count
-		var sd := LandParts.leg_side(i, n)
-		var side := "посередине" if sd == 0.0 else ("левая" if sd < 0.0 else "правая")
+		var sd := LandParts.place_side(LandParts.place(evo.land_shape, key, n))
+		var side := "посередине" if absf(sd) < 0.15 else ("левая" if sd < 0.0 else "правая")
 		if n <= 2:
 			return "Нога — " + side
 		return "Нога %d из %d — %s" % [i + 1, n, side]
 	if key.begins_with("eye"):
 		var i := int(key.substr(3))
 		var n := _creature.eye_count
-		if n % 2 == 1 and i == n - 1:
-			return "Глаз — средний"
-		return "Глаз — %s%s" % ["левый" if i % 2 == 0 else "правый", "" if n <= 2 else ", %d-я пара" % (i / 2 + 1)]
+		var sd := LandParts.place_side(LandParts.place(evo.land_shape, key, _creature.leg_count, n))
+		if absf(sd) < 0.15:
+			return "Глаз — средний" if n <= 2 else "Глаз %d — посередине" % (i + 1)
+		return "Глаз — %s%s" % ["левый" if sd < 0.0 else "правый", "" if n <= 2 else ", %d-я пара" % (i / 2 + 1)]
 	if key.begins_with("arm"):
 		var i := int(key.substr(3))
-		var side := "левая" if i % 2 == 0 else "правая"
+		var sd := LandParts.place_side(LandParts.place(evo.land_shape, key, _creature.leg_count))
+		var side := "посередине" if absf(sd) < 0.15 else ("левая" if sd < 0.0 else "правая")
 		if LandParts.arm_pairs(evo.land_shape) == 1:
 			return "Рука — " + side
 		return "Рука — %s, %d-я пара" % [side, i / 2 + 1]
@@ -1289,51 +1340,45 @@ func _pair(key: String) -> String:
 		return "eye%d" % (i ^ 1) if (i ^ 1) < n else ""
 	return ""
 
-## Точка на поверхности туловища под пальцем: {t, a, side} или пусто (мимо).
-func surface_hit(p: Vector2) -> Dictionary:
-	if _creature._sp.is_empty():
-		return {}
-	var best := {}
-	var best_d := 90.0
-	var cam_side := signf((_creature.global_transform.affine_inverse() * _cam.global_position).x)
-	for side in [cam_side if cam_side != 0.0 else 1.0, -cam_side if cam_side != 0.0 else -1.0]:
-		for ti in 26:
-			var t := ti / 25.0
-			for ai in 21:
-				var a := -1.45 + ai * 0.145
-				var w: Vector3 = _creature.global_transform * _creature._b(_creature._surf(t, a, side))
-				if _cam.is_position_behind(w):
-					continue
-				var dd := _cam.unproject_position(w).distance_to(p)
-				if dd < best_d:
-					best_d = dd
-					best = {"t": t, "a": a, "side": side}
-		if not best.is_empty():
-			return best
-	return best
-
-## Точка на голове под пальцем: {yaw, pitch} или пусто.
-func head_hit(p: Vector2) -> Dictionary:
-	var hn: Node3D = _creature._head_node
-	if hn == null:
-		return {}
-	var best := {}
-	var best_d := 80.0
-	var hr := 0.39 * _creature.size * 0.9
-	for yi in 33:
-		var yaw := -2.4 + yi * 0.15
-		for pi_ in 21:
-			var pitch := -1.0 + pi_ * 0.115
-			var dir := Vector3(sin(yaw) * cos(pitch), sin(pitch), cos(yaw) * cos(pitch))
-			var w := hn.global_transform * (dir * hr)
-			var toward_cam := (_cam.global_position - w).dot(hn.global_transform.basis * dir) > 0.0
-			if not toward_cam or _cam.is_position_behind(w):
+## Место под пальцем — точка на туловище (с кончиками) или на голове, которая смотрит
+## на нас: [на чём, u, v] (как в LandParts.place) или пусто (мимо). head — можно ли на
+## голову (саму голову на голову — нельзя).
+func place_hit(p: Vector2, head := true) -> Array:
+	if _creature == null or _creature._sp.is_empty():
+		return []
+	# Лямбда не меняет внешние переменные — лучшая точка живёт в словаре.
+	var st := {"best": [], "d": 70.0}
+	var try := func(pl: Array) -> void:
+		var sw: Array = _creature.surface_world(pl)
+		var w: Vector3 = sw[0]
+		if _cam.is_position_behind(w) or (_cam.global_position - w).dot(sw[1]) < 0.0:
+			return
+		var dd := _cam.unproject_position(w).distance_to(p)
+		if dd < float(st.d):
+			st.d = dd
+			st.best = pl
+	# Сперва грубо по всей поверхности, потом мельче вокруг лучшей точки.
+	for ui in 31:
+		for vi in 32:
+			try.call([0.0, -0.25 + ui * 0.05, -PI + vi * TAU / 32.0])
+	if head and _creature._head_node:
+		for yi in 24:
+			for pi_ in 13:
+				try.call([1.0, -PI + yi * TAU / 24.0, -1.45 + pi_ * 2.9 / 12.0])
+	var best: Array = st.best
+	if best.is_empty():
+		return best
+	var c: Array = best.duplicate()
+	var step: Array = [0.05, TAU / 32.0] if float(c[0]) < 0.5 else [TAU / 24.0, 2.9 / 12.0]
+	for i in 5:
+		for j in 5:
+			var q := [c[0], float(c[1]) + (i - 2) * float(step[0]) / 2.5, float(c[2]) + (j - 2) * float(step[1]) / 2.5]
+			if float(q[0]) < 0.5 and (float(q[1]) < -0.25 or float(q[1]) > 1.25):
 				continue
-			var dd := _cam.unproject_position(w).distance_to(p)
-			if dd < best_d:
-				best_d = dd
-				best = {"yaw": yaw, "pitch": pitch}
-	return best
+			if float(q[0]) >= 0.5 and absf(float(q[2])) > 1.45:
+				continue
+			try.call(q)
+	return st.best
 
 ## Начали нести часть с карточки (повели пальцем вверх из ряда).
 func begin_carry(id: String, at: Vector2) -> void:
@@ -1363,10 +1408,10 @@ func drop_carry(at: Vector2) -> void:
 		msg = r.message
 		_rebuild_creature(false)
 	var sh: Dictionary = evo.land_shape
-	match s_:
-		"legs", "arms":
-			var hit := surface_hit(local)
-			if not hit.is_empty():
+	var hit := place_hit(local)
+	if not hit.is_empty():
+		match s_:
+			"legs", "arms":
 				var add := 2 if mirror else 1
 				var key := ""
 				if s_ == "legs":
@@ -1385,12 +1430,14 @@ func drop_carry(at: Vector2) -> void:
 					elif not had:
 						key = "arm0"
 				if key != "":
+					# Чётные — левые, нечётные — правые: какая попала под палец.
 					var i := int(key.substr(3))
-					var side_key := key if (float(hit.side) < 0.0) == (i % 2 == 0) else "%s%d" % [key.substr(0, 3), i + 1]
-					sh.place[side_key] = [hit.t, hit.a, 0.0]
+					var right := LandParts.place_side(hit) > 0.0
+					var side_key := key if right == (i % 2 == 1) else "%s%d" % [key.substr(0, 3), i + 1]
 					var other := "%s%d" % [key.substr(0, 3), i ^ 1 if side_key == key else i]
+					sh.place[side_key] = [hit[0], hit[1], hit[2], 0.0]
 					if add == 2:
-						sh.place[other] = [hit.t, hit.a, 0.0]
+						sh.place[other] = LandParts.mirror_place([hit[0], hit[1], hit[2], 0.0])
 					evo.land_shape = LandParts.fix_shape(sh)
 					if evo.land_free() < 0:
 						_restore(_undo.pop_back())
@@ -1399,16 +1446,14 @@ func drop_carry(at: Vector2) -> void:
 						return
 					msg = "Поставлено сюда"
 					sel = side_key
-		"eyes":
-			var hh := head_hit(local)
-			if not hh.is_empty():
+			"eyes":
 				var n := _creature.eye_count if had else 0
-				var add := 1 if (not mirror or absf(float(hh.yaw)) < 0.15) else 2
+				var add := 1 if (not mirror or absf(LandParts.place_side(hit)) < 0.15) else 2
 				if n + add <= 6:
 					sh.eye_n = float(n + add)
-					sh.place["eye%d" % n] = [hh.yaw, hh.pitch, 1.0]
+					sh.place["eye%d" % n] = [hit[0], hit[1], hit[2], 1.0]
 					if add == 2:
-						sh.place["eye%d" % (n + 1)] = [-float(hh.yaw), hh.pitch, 1.0]
+						sh.place["eye%d" % (n + 1)] = LandParts.mirror_place([hit[0], hit[1], hit[2], 1.0])
 					evo.land_shape = LandParts.fix_shape(sh)
 					if evo.land_free() < 0:
 						_restore(_undo.pop_back())
@@ -1417,6 +1462,17 @@ func drop_carry(at: Vector2) -> void:
 						return
 					msg = "Глаз — сюда"
 					sel = "eye%d" % n
+			"mouth", "head", "back", "tail":
+				# Рот, рога, спина, хвост — ровно туда, где отпустил.
+				var key: String = {"head": "horns"}.get(s_, s_)
+				sh.place[key] = [hit[0], hit[1], hit[2], 0.0]
+				if s_ == "tail":
+					sh.tail_on = 1.0
+				evo.land_shape = LandParts.fix_shape(sh)
+				msg = "Поставлено сюда"
+				sel = key
+	elif s_ == "tail":
+		sh.tail_on = 1.0
 	changed.emit(true, false)
 	_rebuild_creature(false)
 	if not _creature.groups.has(sel):
@@ -1491,24 +1547,17 @@ func _sculpt(id: String, rel: Vector2) -> void:
 					if part != key:
 						continue
 					var pl: Array = LandParts.place(sh, key, _creature.leg_count, _creature.eye_count).duplicate()
-					if key.begins_with("eye"):
-						var hh := head_hit(_finger_at - _box.global_position)
-						if hh.is_empty():
-							continue
-						pl[0] = hh.yaw
-						pl[1] = hh.pitch
-					else:
-						var hit := surface_hit(_finger_at - _box.global_position)
-						if hit.is_empty():
-							continue
-						pl[0] = hit.t
-						pl[1] = hit.a
+					var hit := place_hit(_finger_at - _box.global_position, key != "head")
+					if hit.is_empty():
+						continue
+					pl[0] = hit[0]
+					pl[1] = hit[1]
+					pl[2] = hit[2]
 					sh.place[key] = pl
 					var pk := _pair(key)
 					if mirror and pk != "":
-						var pp: Array = LandParts.place(sh, pk, _creature.leg_count, _creature.eye_count).duplicate()
-						pp[0] = -float(pl[0]) if key.begins_with("eye") else float(pl[0])
-						pp[1] = pl[1]
+						var pp: Array = LandParts.mirror_place(pl)
+						pp[3] = LandParts.place(sh, pk, _creature.leg_count, _creature.eye_count)[3]
 						sh.place[pk] = pp
 				"len":
 					var base := 1.0
@@ -1527,7 +1576,7 @@ func _sculpt(id: String, rel: Vector2) -> void:
 					dm[0] = v.length() / maxf(unit, 0.05)
 					var rest := Vector3(0.1, -0.75, 0.6).normalized()
 					var pl: Array = LandParts.place(sh, part, _creature.leg_count).duplicate()
-					pl[2] = wrapf(atan2(v.y, v.z) - atan2(rest.y, rest.z), -PI, PI) - float(sh.arm_pitch)
+					pl[3] = wrapf(atan2(v.y, v.z * _creature.arm_facing(key)) - atan2(rest.y, rest.z), -PI, PI) - float(sh.arm_pitch)
 					sh.place[part] = pl
 			if kind in ["len", "thick", "hand"]:
 				sh.dims[part] = dm
@@ -1565,6 +1614,9 @@ func _sculpt(id: String, rel: Vector2) -> void:
 			sh.torso_pitch = float(sh.torso_pitch) + d.y / half
 		"arm_thick":
 			sh.arm_thick = float(sh.arm_thick) + grow
+		"lift":
+			# Тянешь брюхо вверх — туловище поднимается, ноги вытягиваются.
+			sh.lift = float(sh.get("lift", 0.0)) + d.y / maxf(_creature.size, 0.3)
 		"tail_base":
 			sh.tail_thick = float(sh.tail_thick) + grow
 		"arms":
@@ -1575,7 +1627,7 @@ func _sculpt(id: String, rel: Vector2) -> void:
 		"tail":
 			var v: Vector3 = (_creature.anchors.tail as Vector3) + d - _creature.tail_base()
 			sh.tail_len = v.length() / maxf(_creature.tail_unit(), 0.01)
-			sh.tail_pitch = atan2(v.y, -v.z)
+			sh.tail_pitch = wrapf(_creature.tail_pitch_of(v), -PI, PI)
 		_:
 			# Размер части: тянешь вверх или вправо — больше.
 			var key: String = {"mouth": "mouth", "eyes": "eyes", "horns": "head", "back": "back", "feet": "feet", "claws": "claws"}.get(id, "")
@@ -1606,9 +1658,16 @@ func set_shape_value(key: String, v: float) -> void:
 			if part == "":
 				continue
 			var pl: Array = LandParts.place(sh, part, _creature.leg_count, _creature.eye_count).duplicate()
-			# У глаз «вокруг головы» зеркалится: левый — влево, правый — вправо.
-			var flip: bool = part != q[1] and part.begins_with("eye") and q[2] == "0"
-			pl[int(q[2])] = -v if flip else v
+			if part != q[1]:
+				# Парная — зеркально: левая влево, правая вправо.
+				var mine: Array = LandParts.place(sh, q[1], _creature.leg_count, _creature.eye_count).duplicate()
+				mine[int(q[2])] = v
+				var keep: float = pl[3]
+				pl = LandParts.mirror_place(mine)
+				if q[2] != "3":
+					pl[3] = keep
+			else:
+				pl[int(q[2])] = v
 			sh.place[part] = pl
 	elif key.begins_with("rot:"):
 		sh.rot[key.substr(4)] = v
@@ -1666,6 +1725,8 @@ func handle_label(id: String) -> String:
 			return "толщина ног " + n.call((float(sh.leg_thick) + float(sh.leg_thick_f)) / 2.0)
 		"arms":
 			return "руки " + n.call(sh.arm_len)
+		"lift":
+			return "над землёй " + LandParts._num(snappedf(float(sh.get("lift", 0.0)), 0.05))
 		"arm_thick":
 			return "толщина рук " + n.call(sh.arm_thick)
 		"tail":
@@ -1885,12 +1946,15 @@ class ValueSlider:
 		var font := get_theme_default_font()
 		draw_string(font, Vector2(16, 24), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 19, Art.TEXT)
 		var num := "×" + LandParts._num(snappedf(v, 0.05))
-		if key.begins_with("place:eye") and key.ends_with(":2"):
-			num = "×" + LandParts._num(snappedf(v, 0.05))
-		elif key.begins_with("place:") and key.ends_with(":0") and not key.begins_with("place:eye"):
-			num = "%d%%" % int(round(v * 100.0))
-		elif key.begins_with("place:"):
-			num = "%d°" % int(round(rad_to_deg(v)))
+		if key.begins_with("place:"):
+			var q := key.split(":")
+			var on_head := float(LandParts.place(ed.evo.land_shape, q[1], ed._creature.leg_count, ed._creature.eye_count)[0]) >= 0.5
+			if q[2] == "3" and q[1].begins_with("eye"):
+				num = "×" + LandParts._num(snappedf(v, 0.05))
+			elif q[2] == "1" and not on_head:
+				num = "%d%%" % int(round(v * 100.0))
+			else:
+				num = "%d°" % int(round(rad_to_deg(v)))
 		elif key.begins_with("rot:") or key.ends_with("curl") or key.ends_with("pitch"):
 			num = "%d°" % int(round(rad_to_deg(v)))
 		elif angle:

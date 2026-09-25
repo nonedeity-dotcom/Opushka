@@ -1231,6 +1231,24 @@ func _run_script() -> void:
 			var q := p[1].split(",")
 			land_editor.begin_carry(q[0], Vector2(float(q[1]), float(q[2])))
 			land_editor.drop_carry(Vector2(float(q[1]), float(q[2])))
+		"lplace":
+			# lplace:часть,на чём,u,v,ещё — поставить часть на место (для снимков).
+			var q := p[1].split(",")
+			land_editor.evo.land_shape.place[q[0]] = [float(q[1]), float(q[2]), float(q[3]), float(q[4]) if q.size() > 4 else 1.0]
+			land_editor.evo.land_shape = LandParts.fix_shape(land_editor.evo.land_shape)
+			land_editor._after_change("")
+		"ltoggle":
+			land_editor.toggle_part(p[1])
+		"lplace_print":
+			print("МЕСТО: ", land_editor.evo.land_shape.place)
+		"lhit":
+			var q := p[1].split(",")
+			var at := Vector2(float(q[0]), float(q[1]))
+			var hit: Array = land_editor.place_hit(at - land_editor._box.global_position)
+			print("ПОПАЛ: ", hit, " ", land_editor._cam.unproject_position(land_editor._creature.surface_world(hit)[0]) if not hit.is_empty() else "")
+		"lhandles":
+			for h in land_editor.handles():
+				print("РУЧКА: ", h[0], " ", h[2])
 		"lview":
 			var q := p[1].split(",")
 			land_editor.view(float(q[0]), float(q[1]))

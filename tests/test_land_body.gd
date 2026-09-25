@@ -334,16 +334,93 @@ func test_много_рук(c) -> void:
 	c.ok("шесть рук не по карману — не ставятся: " + r.message, not r.ok and LandParts.arm_pairs(e.land_shape) == 1)
 
 func test_место_рук_и_ног(c) -> void:
-	var sh := LandParts.fix_shape({"place": {"leg2": [0.9, 0.5, 0.0], "arm3": [5, -9, 0.2], "head": [0, 0, 0], "leg0": [1, 2]}})
-	c.eq("своё место у ноги", sh.place.leg2, [0.9, 0.5, 0.0])
-	c.eq("в пределах", sh.place.arm3, [1.0, LandParts.PLACE_LIMITS[1][0], 0.2])
-	c.ok("у головы места нет, кривое — выброшено", not sh.place.has("head") and not sh.place.has("leg0"))
-	c.eq("по умолчанию — как раньше", LandParts.place(sh, "leg0", 4)[0], 0.78)
+	# Старый вид (три числа: вдоль, выше/ниже по своему боку, наклон) переводится в новый:
+	# [на туловище, вдоль, угол по кругу, наклон].
+	var sh := LandParts.fix_shape({"place": {"leg2": [0.9, 0.5, 0.0], "arm3": [5, -9, 0.2], "leg0": [1, 2], "wing": [0, 0, 0, 0]}})
+	c.eq("левая нога — на левом боку", [sh.place.leg2[0], sh.place.leg2[1], snappedf(sh.place.leg2[2], 0.001), sh.place.leg2[3]], [0.0, 0.9, snappedf(PI - 0.5, 0.001), 0.0])
+	c.eq("вдоль — в пределах, с кончиком", sh.place.arm3[1], 1.25)
+	c.ok("кривое и чужое — выброшено", not sh.place.has("leg0") and not sh.place.has("wing"))
+	c.eq("по умолчанию — как раньше", LandParts.place(sh, "leg0", 4)[1], 0.78)
 	var e := _evo()
 	e.land_start()
-	e.land_shape.place = {"arm1": [0.4, 0.8, -0.3]}
+	e.land_shape.place = {"arm1": [0.0, 0.4, 0.8, -0.3]}
 	var back := Evolution.from_dict(JSON.parse_string(JSON.stringify(e.to_dict())))
-	c.eq("место сохраняется", back.land_shape.place.arm1, [0.4, 0.8, -0.3])
+	c.eq("место сохраняется", back.land_shape.place.arm1, [0.0, 0.4, 0.8, -0.3])
+
+func _built(sh: Dictionary, body := {"torso": "torso", "legs": "legs4", "eyes": "eyes", "mouth": "jaws"}) -> Creature3D:
+	var cr := Creature3D.new()
+	cr.build_body(Color.WHITE, Color.GRAY, 1.0, body, "none", sh)
+	return cr
+
+func _center(cr: Creature3D, key: String) -> Vector3:
+	var sum := Vector3.ZERO
+	for mi in cr.groups[key]:
+		var t := (mi as Node3D).transform
+		var p := (mi as Node3D).get_parent() as Node3D
+		while p and p != cr:
+			t = p.transform * t
+			p = p.get_parent() as Node3D
+		sum += t.origin
+	return sum / cr.groups[key].size()
+
+func test_полная_свобода(c) -> void:
+	var sh := LandParts.fix_shape({"lift": 9.0, "head_on": 0.0, "tail_on": -3.0,
+		"place": {"eye0": [0.0, -0.25, 0.3, 1.2], "mouth": [0.0, 0.5, -PI / 2.0, 0.0], "horns": [1.0, 0.2, 0.4, 0.0], "head": [0.0, 0.5, PI / 2.0, 0.0]}})
+	c.eq("высота над землёй в пределах", sh.lift, LandParts.SHAPE.lift[2])
+	c.ok("голову и хвост можно убрать", sh.head_on == 0.0 and sh.tail_on == 0.0)
+	c.eq("глаз на заду сохраняется", sh.place.eye0, [0.0, -0.25, 0.3, 1.2])
+	c.eq("рот на брюхе", sh.place.mouth[2], -PI / 2.0)
+	c.eq("зеркально на туловище — другой бок", LandParts.mirror_place([0.0, 0.5, 0.2, 1.0]), [0.0, 0.5, PI - 0.2, 1.0])
+	c.eq("зеркально на голове — другая сторона", LandParts.mirror_place([1.0, 0.4, 0.2, 1.0]), [1.0, -0.4, 0.2, 1.0])
+	c.eq("перёд головы — перёд туловища", LandParts.head_to_body(0.0, 0.0), [1.25, 0.0])
+	c.eq("без головы рот — на переднем кончике", LandParts.default_place("mouth", 4, 0.0, 2, false), [0.0, 1.25, 0.0, 0.0])
+	# Глаз на заду: правда сзади, за туловищем.
+	var eye_back := LandParts.default_shape()
+	eye_back.place = {"eye0": [0.0, -0.25, 0.0, 1.0]}
+	var cr := _built(eye_back)
+	var sp: Array = cr._sp
+	c.ok("глаз на заду — позади туловища", _center(cr, "eye0").z < float(sp[0].z))
+	c.ok("второй глаз — на голове, впереди", _center(cr, "eye1").z > float(sp[sp.size() - 1].z))
+	cr.free()
+	# Без головы — нет ни головы, ни шеи; рот и глаза — на переднем кончике туловища.
+	var headless := LandParts.default_shape()
+	headless.head_on = 0.0
+	cr = _built(headless)
+	sp = cr._sp
+	c.ok("без головы — головы нет", not cr.groups.has("head") and cr._head_node == null)
+	c.ok("рот — на переднем кончике", _center(cr, "mouth").z > float(sp[sp.size() - 1].z))
+	c.ok("глаза есть", cr.groups.has("eye0") and cr.groups.has("eye1"))
+	cr.free()
+	# Без хвоста — хвоста нет; с хвостовой частью — есть.
+	var tailless := LandParts.default_shape()
+	tailless.tail_on = 0.0
+	cr = _built(tailless)
+	c.ok("без хвоста — хвоста нет", not cr.groups.has("tail"))
+	cr.free()
+	cr = _built(tailless, {"torso": "torso", "tail": "tail_long"})
+	c.ok("хвостовая часть — хвост есть", cr.groups.has("tail"))
+	cr.free()
+	# Выше над землёй — туловище выше, ноги длиннее.
+	var low := _built(LandParts.default_shape())
+	var high_sh := LandParts.default_shape()
+	high_sh.lift = 1.0
+	var high := _built(high_sh)
+	c.ok("подняли туловище — оно выше на столько же", absf(high._body_y - low._body_y - 1.0) < 0.05)
+	c.ok("ноги длиннее", float(high._legs[0].len) > float(low._legs[0].len) + 1.0)
+	c.ok("выше — видно дальше", LandParts.stats({"torso": "torso", "legs": "legs4"}, high_sh).sight > LandParts.stats({"torso": "torso", "legs": "legs4"}, LandParts.default_shape()).sight)
+	low.free()
+	high.free()
+	# Рога на спине, нога на спине висит и высоту не задаёт.
+	var odd := LandParts.default_shape()
+	odd.place = {"horns": [0.0, 0.5, PI / 2.0, 0.0], "leg3": [0.0, 0.5, PI / 2.0, 0.0], "tail": [0.0, 0.6, PI / 2.0, 0.0]}
+	cr = _built(odd, {"torso": "torso", "legs": "legs4", "head": "horns"})
+	var mid := LandParts.spine_at(cr._sp, 0.5)
+	c.ok("рога на спине — сверху туловища", _center(cr, "horns").y > float(mid.ry) * 0.8)
+	c.ok("хвост со спины растёт вверх", cr.anchors.tail.y > cr.anchors.tail_base.y + 0.3)
+	low = _built(LandParts.default_shape(), {"torso": "torso", "legs": "legs4", "head": "horns"})
+	c.ok("нога на спине не поднимает туловище", absf(cr._body_y - low._body_y) < 0.05)
+	cr.free()
+	low.free()
 
 func test_число_ног_и_глаз(c) -> void:
 	var e := _evo()
@@ -370,7 +447,7 @@ func test_поворот_и_изгиб(c) -> void:
 	c.eq("поворот в пределах", sh.rot.horns, 1.2)
 	c.ok("чужого поворота нет", not sh.rot.has("wings"))
 	c.eq("изгиб хвоста в пределах", sh.tail_curl, LandParts.SHAPE.tail_curl[2])
-	c.eq("место глаза", sh.place.eye2, [0.3, 1.2, 1.5])
+	c.eq("место глаза (старое — на голове)", sh.place.eye2, [1.0, 0.3, 1.2, 1.5])
 	c.ok("чужого глаза нет", not sh.place.has("eye9"))
 	var sp := LandParts.spine(sh, 1.0)
 	c.ok("горб: середина выше концов", float(sp[2].y) > float(sp[0].y) + 0.2 and absf(float(sp[0].y)) < 0.01)

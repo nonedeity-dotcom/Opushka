@@ -39,6 +39,9 @@ var _tail_dir := Vector3.BACK
 var _tail_len := 0.8
 var _tail_r := 0.2
 var _tail_tip := Vector3.ZERO
+## Куда смотрит основание хвоста (по-земному) и на сколько оно поднято от места.
+var _tail_turn := Basis.IDENTITY
+var _tail_rise := 0.0
 ## Точки для лепки в редакторе — в осях существа (стоит в нуле, смотрит вперёд).
 var anchors := {}
 ## Из чего собрана каждая часть: ключ (torso, head, mouth, leg0…) → её меши.
@@ -159,13 +162,14 @@ func build_body(c: Color, c2: Color, s: float, parts: Dictionary, pattern := "sp
 	_skin(parts.get("skin", ""))
 	var front: Dictionary = sp[sp.size() - 1]
 	# Ноги: сперва где бёдра и какой длины ноги — от этого наклон и высота туловища.
-	# Пары вдоль туловища, ходят накрест; у каждой свои длина, ширина, высота.
+	# У каждой ноги своё место на теле (или по умолчанию — пары вдоль туловища), свои
+	# длина, ширина, высота.
 	var tilt := float(sh.torso_pitch)
 	var hips: Array = []
 	var ls := float(sh.leg_size)
+	# Высота над землёй: ноги длиннее ровно настолько, насколько подняли туловище.
+	var lift := float(sh.get("lift", 0.0)) * size
 	if leg_count > 0:
-		# Где каждая нога — своё место на теле (передвинули) или по умолчанию: пары вдоль
-		# туловища; двуногий, поднявший туловище, стоит на его нижнем конце — как человек.
 		var len_b := _leg_base * float(sh.leg_len) * ls
 		var len_f := _leg_base * float(sh.leg_len_f) * ls if leg_count > 2 else len_b
 		var rows := int(ceil(leg_count / 2.0))
@@ -178,77 +182,111 @@ func build_body(c: Color, c2: Color, s: float, parts: Dictionary, pattern := "sp
 			var fk := 0.0 if rows <= 1 else 1.0 - float(pair) / (rows - 1)
 			var th := lerpf(float(sh.leg_thick), float(sh.leg_thick_f) if leg_count > 2 else float(sh.leg_thick), fk) * ls
 			var d := LandParts.dim(sh, key)
-			hips.append({"hip": _surf(float(pl[0]), float(pl[1]), side), "group": (pair + (1 if side > 0 else 0)) % 2,
-				"len": lerpf(len_b, len_f, fk) * float(d[0]) * float(d[3]), "th": th * float(d[3]), "xs": float(d[1]), "zs": float(d[2]), "key": key})
+			# Опора — ноги снизу и по бокам туловища. Поставленные на спину или на голову
+			# висят и на высоту не влияют (место на голове — когда голова готова).
+			var on_body := float(pl[0]) < 0.5
+			hips.append({"hip": body_point(float(pl[1]), float(pl[2]))[0] if on_body else null, "pl": pl,
+				"low": on_body and sin(float(pl[2])) <= 0.35 and float(pl[1]) >= -0.2 and float(pl[1]) <= 1.2,
+				"group": (pair + (1 if side > 0 else 0)) % 2, "len": lerpf(len_b, len_f, fk) * float(d[0]) * float(d[3]) + lift / 0.85,
+				"th": th * float(d[3]), "xs": float(d[1]), "zs": float(d[2]), "key": key})
+	var support: Array = hips.filter(func(h): return h.low)
 	# Наклон туловища: сколько подняли (прямоходящее — почти стоймя) плюс разница передних и
-	# задних ног. Нос вверх — поворот «назад».
+	# задних опорных ног. Нос вверх — поворот «назад».
 	var leg_pitch := 0.0
-	var fi := 0
-	var ri := 0
-	for i in hips.size():
-		if hips[i].hip.z > hips[fi].hip.z:
-			fi = i
-		if hips[i].hip.z < hips[ri].hip.z:
-			ri = i
-	if leg_count > 2:
-		# Самая передняя и самая задняя нога: разница длины — наклон.
-		var dz: float = hips[fi].hip.z - hips[ri].hip.z
+	if support.size() > 1:
+		var fh: Dictionary = support[0]
+		var rh: Dictionary = support[0]
+		for h in support:
+			if h.hip.z > fh.hip.z:
+				fh = h
+			if h.hip.z < rh.hip.z:
+				rh = h
+		var dz: float = fh.hip.z - rh.hip.z
 		if absf(dz) > 0.05:
-			leg_pitch = asin(clampf(-0.85 * (float(hips[fi].len) - float(hips[ri].len)) / dz, -0.65, 0.65))
+			leg_pitch = asin(clampf(-0.85 * (float(fh.len) - float(rh.len)) / dz, -0.65, 0.65))
 	_pitch = clampf(-tilt + leg_pitch, -1.55, 0.7)
 	var B := Basis(Vector3.RIGHT, _pitch)
 	var U := B.inverse()
 	var cs := cos(_pitch)
 	var sn := sin(_pitch)
-	# Высота: опорные (задние) ноги стоят на земле; туловище и голова — не в земле.
+	# Высота: туловище и голова — не в земле; опорные ноги стоят на земле (самая короткая
+	# — прямо, остальные чуть сгибают колени).
 	var need := 0.0
 	for p in sp:
 		need = maxf(need, p.z * sn - p.y * cs + 0.8 * (p.ry * absf(cs) + p.r * absf(sn)))
-	_body_y = need + 0.08 * size if leg_count == 0 else maxf(need + 0.08 * size, 0.0)
-	if leg_count > 0:
-		# Стоит на самой задней ноге (у двуногого — на обеих).
-		var hb: Vector3 = hips[ri].hip
-		var lb: float = hips[ri].len
-		_body_y = maxf(0.85 * lb - (hb.y * cs - hb.z * sn), need + 0.08 * size)
-	elif need <= 0.0:
+	_body_y = maxf(need + 0.08 * size, 0.0)
+	if not support.is_empty():
+		var low := INF
+		for h in support:
+			var hb: Vector3 = h.hip
+			low = minf(low, 0.85 * float(h.len) - (hb.y * cs - hb.z * sn))
+		_body_y = maxf(low, need + 0.08 * size)
+	elif leg_count == 0 and need <= 0.0:
 		_body_y = rmax * 0.85
-	# Голова — впереди, на шее. Шея и голова — «по-земному»: как бы ни стояло туловище,
-	# морда смотрит вперёд, «вверх» у шеи — к небу. У головы свои длина, ширина, высота;
-	# всё, что на ней, растягивается вместе с ней.
+	# Голова — на шее, где её поставили (обычно — спереди). Шея и голова — «по-земному»:
+	# как бы ни стояло туловище, «вверх» у головы — к небу, а смотрит она туда, куда
+	# растёт шея (поставил голову на зад — смотрит назад). У головы свои длина, ширина,
+	# высота; всё, что на ней, растягивается вместе с ней. Голову можно и убрать — тогда
+	# рот, глаза и рога сидят прямо на туловище.
 	var hd := LandParts.dim(sh, "head")
 	var hsc := Vector3(float(hd[1]), float(hd[2]), float(hd[0])) * float(hd[3]) * float(sh.head)
 	var hr := 0.39 * size
-	var reach_z := hr * hsc.z
-	var neck_base := Vector3(0, 0.1 * size + front.y, front.z + front.r * 0.55)
-	var head := neck_base + U * Vector3(0, 0.12 * size + float(sh.neck_y) * size, reach_z * 0.8 + float(sh.neck_z) * size)
-	_head_at = B * head
-	_grp = "head"
-	var n := neck_base.distance_to(head)
-	var hmin := hr * minf(hsc.x, hsc.y)
-	if n > reach_z * 0.9:
-		var nr := minf(front.r, hmin) * 0.55
-		var steps := int(ceil(n / (nr * 1.2)))
-		for k in range(1, steps):
-			_sphere(nr, _mat, neck_base.lerp(head, float(k) / steps), _body)
-	_head_node = Node3D.new()
-	_head_node.transform = Transform3D(U * Basis.from_scale(hsc), head)
-	_body.add_child(_head_node)
-	_sphere(hr, _mat, Vector3.ZERO, _head_node)
+	var head := Vector3.ZERO
+	_head_at = Vector3.ZERO
+	if float(sh.get("head_on", 1.0)) >= 0.5:
+		var hpl := LandParts.place(sh, "head", leg_count)
+		var huv: Array = [hpl[1], hpl[2]] if float(hpl[0]) < 0.5 else LandParts.head_to_body(float(hpl[1]), float(hpl[2]))
+		var bp := body_point(float(huv[0]), float(huv[1]))
+		var hn: Vector3 = bp[1]
+		var at_r: float = LandParts.spine_at(sp, float(huv[0])).r
+		var neck_base: Vector3 = bp[0] - hn * 0.35 * at_r
+		var nw := B * hn
+		var hh := Vector3(nw.x, 0, nw.z) + Vector3(0, 0, 0.8)
+		var yaw := atan2(hh.x, hh.z)
+		var face := Vector3(sin(yaw), 0, cos(yaw))
+		var fwd := (nw * 0.6 + face * 0.4).normalized()
+		var reach_z := hr * hsc.z
+		head = neck_base + U * (fwd * (reach_z * 0.8 + float(sh.neck_z) * size) + Vector3(0, 0.22 * size + float(sh.neck_y) * size, 0))
+		_head_at = B * head
+		_grp = "head"
+		var n := neck_base.distance_to(head)
+		var hmin := hr * minf(hsc.x, hsc.y)
+		if n > reach_z * 0.9:
+			var nr := minf(at_r, hmin) * 0.55
+			var steps := int(ceil(n / (nr * 1.2)))
+			for k in range(1, steps):
+				_sphere(nr, _mat, neck_base.lerp(head, float(k) / steps), _body)
+		_head_node = Node3D.new()
+		_head_node.transform = Transform3D(U * Basis(Vector3.UP, yaw) * Basis.from_scale(hsc), head)
+		_body.add_child(_head_node)
+		_sphere(hr, _mat, Vector3.ZERO, _head_node)
+		anchors["place:head"] = _b(bp[0])
 	_grp = "mouth"
-	var mp := _pivot(_head_node, "mouth", "mouth")
+	var mm := _mount("mouth", false)
+	var mp := _pivot(mm, "mouth", "mouth")
 	mp.rotation.x = float(sh.rot.get("mouth", 0.0))
 	_mouth(parts.get("mouth", ""), mp)
+	anchors["place:mouth"] = _anchor_of(mm)
+	anchors.mouth = _anchor_of(mm, Vector3(0, -0.12, 0.3) * size)
 	_grp = "eyes"
-	_eyes(parts.get("eyes", ""), _pivot(_head_node, "eyes", "eyes"))
+	_eyes(parts.get("eyes", ""))
 	_grp = "horns"
-	var hp := _pivot(_head_node, "horns", "head")
+	var hm := _mount("horns", true)
+	var hp := _pivot(hm, "horns", "head")
 	hp.rotation.x = -float(sh.rot.get("horns", 0.0))
 	_head_part(parts.get("head", ""), hp)
+	anchors["place:horns"] = _anchor_of(hm)
+	anchors.horns = _anchor_of(hm, Vector3(0.3, 0.3, 0.0) * size)
 	_grp = "tail"
-	_tail_part(parts.get("tail", ""))
+	if float(sh.get("tail_on", 1.0)) >= 0.5 or parts.has("tail"):
+		_tail_part(parts.get("tail", ""))
 	_grp = "back"
 	_back(parts.get("back", ""))
 	_make_arms(parts.get("arms", ""))
+	# Ноги, поставленные на голову, — теперь, когда голова на месте.
+	for h in hips:
+		if h.hip == null:
+			h.hip = _surface_body(h.pl)[0]
 	var hooves := 1.25 if parts.get("feet", "") == "hooves" else 1.0
 	for h in hips:
 		_grp = h.key
@@ -269,12 +307,11 @@ func build_body(c: Color, c2: Color, s: float, parts: Dictionary, pattern := "sp
 	anchors.len_back = _b(Vector3(0, 0, sp[0].z - sp[0].r))
 	anchors.len_front = _b(Vector3(0, -front.ry * 0.4, front.z + front.r * 0.3))
 	anchors.width = _b(Vector3(LandParts.spine_at(sp, 0.5).rx * 0.95, 0, LandParts.spine_at(sp, 0.5).z))
-	anchors.head = _b(head)
-	anchors.head_size = _b(head + U * Vector3(0, hr * hsc.y + 0.12 * size, 0))
+	anchors.lift = _b(body_point(0.5, -PI / 2.0)[0])
+	if _head_node:
+		anchors.head = _b(head)
+		anchors.head_size = _b(head + _head_node.basis * Vector3(0, hr + 0.12 * size / maxf(hsc.y, 0.1), 0))
 	anchors.tilt = _b(Vector3(0, front.ry * 0.7, front.z + front.r * 0.5))
-	anchors.mouth = _b(head + _head_node.basis * Vector3(0, -0.15, hr + 0.25 * size))
-	anchors.eyes = _b(head + _head_node.basis * Vector3(0.25, 0.25, 0.3) * size)
-	anchors.horns = _b(head + _head_node.basis * Vector3(0.3, 0.45, -0.1) * size)
 	# У каждой ноги: место (у бедра), длина (у колена), толщина, ступня.
 	for h in hips:
 		var hw := _b(h.hip as Vector3)
@@ -285,7 +322,6 @@ func build_body(c: Color, c2: Color, s: float, parts: Dictionary, pattern := "sp
 		anchors["thick:" + k] = Vector3(hw.x * 1.1 + signf(hw.x) * 0.2, lerpf(hw.y, gy, 0.72), hw.z)
 		anchors["feet:" + k] = Vector3(hw.x * 1.2, gy + 0.05, hw.z + 0.15 * size)
 	var mid := LandParts.spine_at(sp, 0.5)
-	anchors.back = _b(Vector3(0, mid.ry + mid.y + 0.45 * size * LandParts.part_size(sh, "back"), mid.z))
 	anchors.skin = _b(Vector3(mid.rx * 0.9, mid.ry * 0.5 + mid.y, mid.z))
 	if _tail:
 		anchors.tail_base = _b(_tail.position + Vector3(0, _tail_r * 1.4, 0))
@@ -312,16 +348,98 @@ func build_body(c: Color, c2: Color, s: float, parts: Dictionary, pattern := "sp
 	shadow.material_override = sm
 	shadow.name = "Shadow"
 	add_child(shadow)
-	_top = _body_y + (B * head).y + hr * hsc.y
+	_top = _body_y + ((B * head).y + hr * hsc.y if _head_node else 0.0)
 	for p in sp:
 		_top = maxf(_top, _body_y + (B * Vector3(0, p.ry + p.y, p.z)).y)
 	_place_feet()
 
-## Точка на поверхности туловища: t — вдоль (0 хвост … 1 голова), a — по кругу (0 — сбоку
-## посередине, + выше, − ниже), side — левый бок (−1) или правый (+1).
-func _surf(t: float, a: float, side: float) -> Vector3:
-	var at := LandParts.spine_at(_sp, t)
-	return Vector3(side * at.rx * cos(a) * 0.92, at.ry * sin(a) * 0.92 + at.y, at.z)
+## Точка на туловище (в его осях) и куда там «наружу»: [точка, направление]. u — вдоль
+## (0 — зад, 1 — перёд; до −0,25 и до 1,25 — закругления на самых кончиках), v — угол по
+## кругу (0 — правый бок, π/2 — спина, π — левый бок, −π/2 — брюхо).
+func body_point(u: float, v: float) -> Array:
+	if _sp.size() < 2:
+		return [Vector3.ZERO, Vector3.UP]
+	var at := LandParts.spine_at(_sp, u)
+	var phi := 0.0
+	var end := 0.0
+	if u < 0.0:
+		phi = minf(-u / 0.25, 1.0) * PI / 2.0
+		end = -1.0
+	elif u > 1.0:
+		phi = minf((u - 1.0) / 0.25, 1.0) * PI / 2.0
+		end = 1.0
+	# Кончик — край крайнего шара: он вытянут вдоль, если шары редкие.
+	var rz: float = maxf(at.r, (_sp[1].z - _sp[0].z) * 0.85)
+	var c := cos(phi)
+	var s := sin(phi)
+	var pos := Vector3(cos(v) * at.rx * c * 0.92, sin(v) * at.ry * c * 0.92 + at.y, at.z + end * rz * s * 0.9)
+	var n := Vector3(cos(v) * c / maxf(at.rx, 0.01), sin(v) * c / maxf(at.ry, 0.01), end * s / maxf(rz, 0.01))
+	return [pos, n.normalized()]
+
+## Точка на голове (в её осях) и наружу: yaw — вокруг (0 — прямо вперёд), pitch — выше/ниже.
+func head_point(yaw: float, pitch: float) -> Array:
+	var dir := Vector3(sin(yaw) * cos(pitch), sin(pitch), cos(yaw) * cos(pitch))
+	return [dir * 0.39 * size * 0.9, dir]
+
+## Место (LandParts.place) → точка и «наружу» в осях туловища. Место на голове, а головы
+## нет — на переднем кончике туловища.
+func _surface_body(pl: Array) -> Array:
+	if float(pl[0]) >= 0.5:
+		if _head_node:
+			var hp := head_point(float(pl[1]), float(pl[2]))
+			return [_head_node.transform * (hp[0] as Vector3), (_head_node.basis * (hp[1] as Vector3)).normalized()]
+		var uv := LandParts.head_to_body(float(pl[1]), float(pl[2]))
+		return body_point(float(uv[0]), float(uv[1]))
+	return body_point(float(pl[1]), float(pl[2]))
+
+## То же, но в мире — для редактора (куда попал палец).
+func surface_world(pl: Array) -> Array:
+	if float(pl[0]) >= 0.5 and _head_node:
+		var hp := head_point(float(pl[1]), float(pl[2]))
+		return [_head_node.global_transform * (hp[0] as Vector3), (_head_node.global_basis * (hp[1] as Vector3)).normalized()]
+	var bp := _surface_body(pl)
+	return [_body.global_transform * (bp[0] as Vector3), (_body.global_basis * (bp[1] as Vector3)).normalized()]
+
+## Узел-«гнездо» для части на её месте: на голове (растягивается с ней) или на туловище.
+## up — часть растёт наружу по своей оси Y (рога, шипы), иначе смотрит наружу осью Z (рот,
+## глаза).
+func _mount(key: String, up: bool, pl: Array = []) -> Node3D:
+	if pl.is_empty():
+		pl = LandParts.place(_shape, key, leg_count, eye_count)
+	var parent: Node3D = _body
+	var pn: Array
+	if float(pl[0]) >= 0.5 and _head_node:
+		parent = _head_node
+		pn = head_point(float(pl[1]), float(pl[2]))
+	else:
+		pn = _surface_body(pl)
+	var m := Node3D.new()
+	m.transform = Transform3D(_up_basis(pn[1]) if up else _out_basis(pn[1]), pn[0])
+	parent.add_child(m)
+	return m
+
+## Точка узла (со сдвигом local в его осях) → в осях существа.
+func _anchor_of(node: Node3D, local := Vector3.ZERO) -> Vector3:
+	var t := node.transform
+	var p := node.get_parent() as Node3D
+	while p and p != _body:
+		t = p.transform * t
+		p = p.get_parent() as Node3D
+	return _b(t * local)
+
+## Базис «смотрит наружу»: ось Z — из поверхности, Y — по возможности вверх.
+static func _out_basis(n: Vector3) -> Basis:
+	var z := n.normalized()
+	var ref := Vector3.UP if absf(z.y) < 0.97 else Vector3(0, 0, -signf(z.y))
+	var x := ref.cross(z).normalized()
+	return Basis(x, z.cross(x), z)
+
+## Базис «растёт наружу»: ось Y — из поверхности, Z — по возможности вперёд.
+static func _up_basis(n: Vector3) -> Basis:
+	var y := n.normalized()
+	var ref := Vector3.BACK if absf(y.z) < 0.97 else Vector3(0, -signf(y.z), 0)
+	var z := (ref - y * y.dot(ref)).normalized()
+	return Basis(y.cross(z), y, z)
 
 ## Точка туловища (в его осях) → в осях существа: с высотой и наклоном.
 func _b(v: Vector3) -> Vector3:
@@ -338,11 +456,27 @@ func arm_shoulder(key := "arm1") -> Vector3:
 func tail_base() -> Vector3:
 	return _b(_tail.position if _tail else Vector3.ZERO)
 
+## Наклон хвоста, при котором он смотрит вдоль v (в осях существа).
+func tail_pitch_of(v: Vector3) -> float:
+	var l := _tail_turn.inverse() * v
+	return atan2(l.y, -l.z) - _tail_rise
+
+## Рука на заду тянется назад: −1, иначе 1.
+func arm_facing(key: String) -> float:
+	for arm in _arms:
+		if arm.key == key:
+			return -1.0 if arm.get("back", false) else 1.0
+	return 1.0
+
 func tail_unit() -> float:
 	return _tail_len / maxf(float(_shape.get("tail_len", 1.0)), 0.01)
 
 func leg_base() -> float:
 	return _leg_base
+
+## Высота существа: от земли до макушки (или до верха туловища).
+func height() -> float:
+	return _top
 
 func extent() -> float:
 	if _sp.is_empty():
@@ -426,12 +560,23 @@ func _pattern(pattern: String) -> void:
 func _tail_part(id: String) -> void:
 	var sh := _shape
 	var rear: Dictionary = _sp[0]
+	# Хвост растёт из своего места (обычно — зад). Наклон хвоста — от земли, а не от
+	# туловища: у прямоходящего хвост не в землю. Поставили на спину — растёт вверх.
+	var pn := _surface_body(LandParts.place(sh, "tail", leg_count))
 	_tail = Node3D.new()
-	_tail.position = Vector3(0, 0.05 * size + float(rear.get("y", 0.0)), rear.z - rear.r * 0.7)
+	_tail.position = (pn[0] as Vector3) - (pn[1] as Vector3) * 0.08 * size
 	_body.add_child(_tail)
+	anchors["place:tail"] = _b(pn[0])
 	var p := float(sh.tail_pitch)
-	# Наклон хвоста — от земли, а не от туловища: у прямоходящего хвост не в землю.
 	var U := Basis(Vector3.RIGHT, _pitch).inverse()
+	var nw := Basis(Vector3.RIGHT, _pitch) * (pn[1] as Vector3)
+	var h := Vector3(nw.x, 0, nw.z)
+	if h.length() < 0.2:
+		h = Vector3(0, 0, -1)
+	_tail_turn = Basis(Vector3.UP, atan2(-h.x, -h.z))
+	_tail_rise = maxf(asin(clampf(nw.y, -1.0, 1.0)), 0.0)
+	U = U * _tail_turn
+	p += _tail_rise
 	_tail_dir = U * Vector3(0, sin(p), -cos(p))
 	var td := LandParts.dim(sh, "tail")
 	_tail_r = rear.r * 0.5 * float(sh.tail_thick) * float(sh.tail_size) * float(td[3])
@@ -465,7 +610,7 @@ func _tail_part(id: String) -> void:
 
 func _mouth(id: String, pv: Node3D) -> void:
 	var tooth := mat(Color("#efe6cf"), 0.4)
-	var o := Vector3(0, 0, 0.39 * size) * 0.8
+	var o := Vector3(0, 0, -0.04 * size)
 	match id:
 		"beak":
 			var horn := mat(Color("#f0b040"), 0.5)
@@ -490,31 +635,39 @@ func _mouth(id: String, pv: Node3D) -> void:
 			# Рта нет — только тёмная щёлка.
 			_sphere(0.08 * size, mat(Color("#2a1e22"), 1.0), o + Vector3(0, -0.12, 0.04) * size, pv, Vector3(2.2, 0.4, 0.6))
 
-## Глаза — каждый на своём месте головы: вокруг (0 — прямо вперёд), выше/ниже, размер.
-func _eyes(id: String, pv: Node3D) -> void:
+## Глаза — каждый на своём месте: на голове или где угодно на туловище. У каждого свой
+## размер; длина и ширина — общие.
+func _eyes(id: String) -> void:
 	if id == "":
 		return
 	var white := mat(Color("#f4f4ec"), 0.3)
 	var black := mat(Color("#1e1e28"), 0.2)
-	var hr := 0.39 * size
 	var k := 1.45 if id == "eyes_big" else 1.0
+	var first: Node3D = null
 	for e in eye_count:
 		_grp = "eye%d" % e
 		var pl := LandParts.place(_shape, _grp, leg_count, eye_count)
-		var yaw := float(pl[0])
-		var pitch := float(pl[1])
-		var ek := float(pl[2])
-		var dir := Vector3(sin(yaw) * cos(pitch), sin(pitch), cos(yaw) * cos(pitch))
+		var em := _mount(_grp, false, pl)
+		var pv := _pivot(em, "eyes", "eyes")
+		var ek := float(pl[3])
 		if id == "eyes_stalk":
-			var base := dir * hr * 0.85
-			var top := base + (dir * 0.45 + Vector3.UP).normalized() * 0.42 * size * ek
+			# Стебелёк — наружу и к небу.
+			var lu := em.basis.inverse() * Vector3.UP
+			var td := Vector3(0, 0, 0.5) + lu
+			td.z = maxf(td.z, 0.35)
+			var base := Vector3(0, 0, -0.05 * size)
+			var top := base + td.normalized() * 0.42 * size * ek
 			_rod(base, top, 0.04 * size * ek, _mat, pv)
 			_sphere(0.12 * size * ek, white, top, pv)
-			_sphere(0.065 * size * ek, black, top + Vector3(dir.x, 0, dir.z).normalized() * 0.1 * size * ek, pv)
+			_sphere(0.065 * size * ek, black, top + Vector3(0, 0, 0.1) * size * ek, pv)
 		else:
-			var eye := dir * hr * 0.9
-			_sphere(0.14 * size * k * ek, white, eye, pv)
-			_sphere(0.075 * size * k * ek, black, eye + dir * 0.1 * size * k * ek, pv)
+			_sphere(0.14 * size * k * ek, white, Vector3.ZERO, pv)
+			_sphere(0.075 * size * k * ek, black, Vector3(0, 0, 0.1) * size * k * ek, pv)
+		anchors["place:" + _grp] = _anchor_of(em)
+		if first == null:
+			first = em
+	if first:
+		anchors.eyes = _anchor_of(first, Vector3(0, 0.22, 0.12) * size)
 	_grp = "eyes"
 
 func _head_part(id: String, pv: Node3D) -> void:
@@ -522,36 +675,57 @@ func _head_part(id: String, pv: Node3D) -> void:
 		"horns":
 			var horn := mat(Color("#e8dcc0"), 0.5)
 			for side in [-1.0, 1.0]:
-				_cone(0.08 * size, 0.42 * size, horn, Vector3(side * 0.25, 0.25, -0.05) * size, Vector3(side * 0.5, 1, -0.6), pv)
+				_cone(0.08 * size, 0.42 * size, horn, Vector3(side * 0.25, -0.09, 0.03) * size, Vector3(side * 0.5, 1, -0.6), pv)
 		"crest":
-			_sphere(0.35 * size, _mat2, Vector3(0, 0.38, -0.15) * size, pv, Vector3(0.12, 0.9, 1.2))
+			_sphere(0.35 * size, _mat2, Vector3(0, 0.04, -0.07) * size, pv, Vector3(0.12, 0.9, 1.2))
 
-## Спина: вдоль позвоночника, по верху туловища; размер части растит каждый шип и пластину.
+## Спина: ряд шипов (пластин, парус) вдоль туловища — там, куда поставили (обычно по
+## хребту; можно по боку, по брюху, на голову). Размер части растит каждый шип и пластину.
 func _back(id: String) -> void:
+	var pl := LandParts.place(_shape, "back", leg_count)
+	var center := _mount("back", true, pl)
+	anchors["place:back"] = _anchor_of(center)
+	anchors.back = _anchor_of(center, Vector3(0, 0.45 * size * LandParts.part_size(_shape, "back"), 0))
+	if id == "":
+		return
 	var bd := LandParts.dim(_shape, "back")
 	var k := LandParts.part_size(_shape, "back") * float(bd[3])
 	var from: int = (groups.get("back", []) as Array).size()
+	# Места в ряду: по туловищу — вдоль, по голове — от лба к затылку. Что вышло за кончик —
+	# пропускается.
+	var row: Array = []
+	for i in 5:
+		var off := 0.36 - i * 0.18
+		var q := pl.duplicate()
+		if float(pl[0]) >= 0.5 and _head_node:
+			q[2] = float(pl[2]) + off * 2.0
+			if absf(float(q[2])) > 1.45:
+				continue
+		else:
+			if float(pl[0]) >= 0.5:
+				var uv := LandParts.head_to_body(float(pl[1]), float(pl[2]))
+				q = [0.0, uv[0], uv[1], 0.0]
+			q[1] = float(q[1]) + off
+			if float(q[1]) < -0.22 or float(q[1]) > 1.22:
+				continue
+		row.append([i, _mount("back", true, q)])
 	match id:
 		"back_spikes":
 			var horn := mat(Color("#e8dcc0"), 0.5)
-			for i in 5:
-				var at := LandParts.spine_at(_sp, 0.88 - i * 0.18)
-				_cone(0.1 * size * k, (0.42 - absf(i - 1.5) * 0.06) * size * k, horn, Vector3(0, at.ry * 0.78 + at.y, at.z), Vector3(0, 1, -0.35), _body)
+			for r in row:
+				_cone(0.1 * size * k, (0.42 - absf(r[0] - 1.5) * 0.06) * size * k, horn, Vector3(0, -0.06 * size, 0), Vector3(0, 1, -0.35), r[1])
 		"plates":
 			var plate := mat(color2.darkened(0.2), 0.6)
-			for i in 5:
-				var at := LandParts.spine_at(_sp, 0.86 - i * 0.18)
-				_sphere(0.24 * size * k, plate, Vector3(0.1 * (1 if i % 2 == 0 else -1) * size, at.ry * 0.95 + 0.04 * size * k, at.z) + Vector3(0, at.y, 0), _body, Vector3(0.25, 1.0, 0.9))
+			for r in row:
+				_sphere(0.24 * size * k, plate, Vector3(0.1 * (1 if r[0] % 2 == 0 else -1) * size, 0.04 * size * k, 0), r[1], Vector3(0.25, 1.0, 0.9))
 		"sail":
 			var m := mat(color2.lightened(0.15), 0.5)
 			var bone := mat(Color("#e8dcc0"), 0.5)
 			var L: float = _sp[_sp.size() - 1].z - _sp[0].z
-			var mid := LandParts.spine_at(_sp, 0.5)
-			_sphere(0.6 * size, m, Vector3(0, mid.ry * 0.8 + mid.y + 0.25 * size * k, mid.z), _body, Vector3(0.08, 0.85 * k, maxf(L / (1.2 * size), 0.6)))
-			for i in 5:
-				var at := LandParts.spine_at(_sp, 0.85 - i * 0.175)
-				var hgt := (0.85 - absf(i - 2) * 0.12) * k
-				_rod(Vector3(0, at.ry * 0.7 + at.y, at.z), Vector3(0, at.ry * 0.7 + at.y + hgt * size, at.z - 0.05 * size), 0.03 * size, bone)
+			_sphere(0.6 * size, m, Vector3(0, -0.06 * size + 0.25 * size * k, 0), center, Vector3(0.08, 0.85 * k, maxf(L / (1.2 * size), 0.6)))
+			for r in row:
+				var hgt := (0.85 - absf(r[0] - 2) * 0.12) * k
+				_rod(Vector3(0, -0.1 * size, 0), Vector3(0, (-0.1 + hgt) * size, -0.05 * size), 0.03 * size, bone, r[1])
 	# Длина — вдоль спины, ширина — вбок, высота — вверх: каждой шипине и пластине;
 	# поворот наклоняет их вперёд или назад.
 	var els: Array = groups.get("back", [])
@@ -599,9 +773,18 @@ func _make_arms(id: String) -> void:
 		var pl := LandParts.place(sh, key, leg_count)
 		var ln := float(sh.arm_len) * asz * float(d[0]) * float(d[3])
 		var th := float(sh.arm_thick) * asz * float(d[3])
-		# Руки висят вниз по-земному, как бы ни стояло туловище.
-		var dir := Basis(Vector3.RIGHT, _pitch).inverse() * Vector3(side * 0.1, -0.75, 0.6).normalized().rotated(Vector3.RIGHT, -float(sh.arm_pitch) - float(pl[2]))
-		var arm := {"side": side, "shoulder": _surf(float(pl[0]), float(pl[1]), side), "dir": dir, "reach": 0.74 * size * ln,
+		var pn := _surface_body(pl)
+		var shoulder: Vector3 = pn[0]
+		if absf(shoulder.x) > 0.02 * size:
+			side = signf(shoulder.x)
+		# Руки висят вниз по-земному, как бы ни стояло туловище; поставленные на зад —
+		# тянутся назад.
+		var back := (Basis(Vector3.RIGHT, _pitch) * (pn[1] as Vector3)).z < -0.5
+		var rest := Vector3(side * 0.1, -0.75, 0.6).normalized().rotated(Vector3.RIGHT, -float(sh.arm_pitch) - float(pl[3]))
+		if back:
+			rest.z = -rest.z
+		var dir := Basis(Vector3.RIGHT, _pitch).inverse() * rest
+		var arm := {"side": side, "shoulder": shoulder, "dir": dir, "reach": 0.74 * size * ln, "back": back,
 			"claw": id == "arms_claw", "xs": float(d[1]), "zs": float(d[2]), "key": key}
 		var seg := 0.43 * size * ln
 		arm.seg = seg
@@ -818,7 +1001,7 @@ func update(dt: float, at: Vector3, heading: float, vel: Vector3) -> void:
 		_seg(arm.upper, sh, elbow, arm.xs, arm.zs)
 		_seg(arm.lower, elbow, hand, arm.xs, arm.zs)
 		(arm.hand as Node3D).global_position = hand
-		(arm.hand as Node3D).global_rotation = Vector3(0, global_rotation.y, float(_shape.rot.get("hands", 0.0)) * arm.side)
+		(arm.hand as Node3D).global_rotation = Vector3(0, global_rotation.y + (PI if arm.get("back", false) else 0.0), float(_shape.rot.get("hands", 0.0)) * arm.side)
 	if _tail:
 		_tail.rotation.y = sin(_phase * 0.5) * (0.15 + 0.2 * walk)
 	var sh := get_node_or_null("Shadow") as Node3D
