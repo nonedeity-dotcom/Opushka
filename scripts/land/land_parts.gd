@@ -165,35 +165,157 @@ static func slot_name(slot: String) -> String:
 static func in_slot(slot: String) -> Array:
 	return PARTS.keys().filter(func(id): return PARTS[id].slot == slot)
 
-## Что умеет тело: всё, что нужно правилам суши.
-static func stats(body: Dictionary) -> Dictionary:
+## Что умеет тело: всё, что нужно правилам суши. shape — вылепленная форма: толще —
+## крепче, но медленнее; длинные ноги — быстрее; большая часть — сильнее.
+static func stats(body: Dictionary, shape := {}) -> Dictionary:
+	var sh := fix_shape(shape)
 	var s := {"speed": 1.0, "bite": 2.0, "hp": 30.0, "armor": 0.0, "thorns": 0.0, "poison": 0.0, "regen": 0.8,
 		"sight": 0.55, "fruit": 1.0, "meat": 1.0, "bone": 1.0, "reach": 0.0, "stealth": 1.0, "wade": false,
 		"legs": 4, "turn": 1.0, "scare": false, "mouth": false, "long": false}
+	var heavy := 0.0
 	for slot in body:
 		var id: String = body[slot]
 		if not PARTS.has(id):
 			continue
 		var p: Dictionary = PARTS[id]
+		var ps := part_size(sh, slot)
+		var k := 0.75 + 0.25 * ps
+		heavy += maxf(0.0, ps - 1.0)
 		if slot == "mouth":
 			s.mouth = true
 		if slot == "eyes":
-			s.sight = p.sight
-		for k in ["speed", "fruit", "meat", "bone", "stealth", "turn"]:
-			if p.has(k):
-				s[k] *= float(p[k])
-		for k in ["bite", "hp", "regen", "reach", "poison"]:
-			if p.has(k):
-				s[k] += float(p[k])
-		for k in ["armor", "thorns"]:
-			if p.has(k):
-				s[k] = 1.0 - (1.0 - s[k]) * (1.0 - float(p[k]))
-		for k in ["wade", "scare", "long"]:
-			if p.has(k):
-				s[k] = true
+			s.sight = float(p.sight) * (0.85 + 0.15 * ps)
+		for key in ["speed", "fruit", "meat", "bone", "stealth", "turn"]:
+			if p.has(key):
+				s[key] *= float(p[key])
+		for key in ["bite", "hp", "regen", "reach", "poison"]:
+			if p.has(key):
+				s[key] += float(p[key]) * k
+		for key in ["armor", "thorns"]:
+			if p.has(key):
+				s[key] = 1.0 - (1.0 - s[key]) * (1.0 - minf(float(p[key]) * k, 0.6))
+		for key in ["wade", "scare", "long"]:
+			if p.has(key):
+				s[key] = true
 		if p.has("legs"):
 			s.legs = p.legs
+	# Форма тела.
+	var bulk := bulk_of(sh)
+	s.hp *= clampf(sqrt(bulk), 0.6, 1.8)
+	s.hp += (float(sh.leg_thick) - 1.0) * 6.0
+	s.speed /= clampf(pow(bulk, 0.15), 0.85, 1.25)
+	s.speed *= clampf(0.75 + 0.25 * float(sh.leg_len), 0.7, 1.35) * (1.0 - 0.05 * (float(sh.leg_thick) - 1.0))
+	s.speed /= 1.0 + 0.03 * heavy
+	s.bite += (float(sh.head) - 1.0) * 3.0
+	if body.has("arms"):
+		s.reach += (float(sh.arm_len) - 1.0) * 0.8
+		s.bite += (float(sh.arm_thick) - 1.0) * 1.5
+	s.turn *= clampf(0.85 + 0.15 * float(sh.tail_len), 0.8, 1.4)
+	# Быстрее двух обычных не бегает никто — иначе ни стая, ни отшельник не страшны.
+	s.speed = minf(s.speed, 1.9)
+	s.hp = maxf(s.hp, 10.0)
+	s.bite = maxf(s.bite, 1.0)
 	return s
+
+# --- форма тела -----------------------------------------------------------------------
+#
+# Туловище — позвоночник из SPINE точек от хвоста к голове, у каждой своя толщина
+# (girth); ещё длина, голова и шея, ноги, руки, хвост и размер каждой части. Всё это
+# лепится пальцем в редакторе. Числа — в долях обычного.
+
+const SPINE := 5
+## ключ → [обычное, меньше некуда, больше некуда]
+const SHAPE := {
+	"len": [1.0, 0.6, 2.4], "head": [1.0, 0.5, 2.0], "neck_z": [0.0, -0.2, 1.4], "neck_y": [0.0, -0.4, 1.4],
+	"leg_len": [1.0, 0.45, 2.4], "leg_thick": [1.0, 0.5, 2.5],
+	"arm_len": [1.0, 0.5, 2.5], "arm_thick": [1.0, 0.5, 2.5], "arm_pitch": [0.0, -1.2, 1.4],
+	"tail_len": [1.0, 0.2, 3.5], "tail_pitch": [0.25, -0.8, 1.3], "tail_thick": [1.0, 0.5, 2.2],
+}
+const GIRTH := [0.9, 1.0, 1.05, 1.0, 0.9]
+const GIRTH_LIMITS := [0.35, 2.0]
+const SIZE_LIMITS := [0.5, 2.2]
+## Обычная «масса» туловища — от неё считается, толще ты или тоньше.
+const BULK_BASE := 0.9445
+
+static func default_shape() -> Dictionary:
+	var d := {"girth": GIRTH.duplicate(), "sizes": {}}
+	for k in SHAPE:
+		d[k] = SHAPE[k][0]
+	return d
+
+## Форма с проверкой: чего нет — обычное, лишнее — в пределах.
+static func fix_shape(v: Variant) -> Dictionary:
+	var d := default_shape()
+	if not v is Dictionary:
+		return d
+	for k in SHAPE:
+		var x = v.get(k)
+		if x is float or x is int:
+			d[k] = clampf(float(x), SHAPE[k][1], SHAPE[k][2])
+	var g = v.get("girth")
+	if g is Array and g.size() == SPINE and g.all(func(x): return x is float or x is int):
+		d.girth = g.map(func(x): return clampf(float(x), GIRTH_LIMITS[0], GIRTH_LIMITS[1]))
+	var sz = v.get("sizes")
+	if sz is Dictionary:
+		for slot in sz:
+			var x = sz[slot]
+			if slot is String and SLOTS.any(func(s): return s[0] == slot) and (x is float or x is int):
+				d.sizes[slot] = clampf(float(x), SIZE_LIMITS[0], SIZE_LIMITS[1])
+	return d
+
+static func part_size(shape: Dictionary, slot: String) -> float:
+	return float(shape.get("sizes", {}).get(slot, 1.0))
+
+static func bulk_of(shape: Dictionary) -> float:
+	var g: Array = shape.get("girth", GIRTH)
+	var sum := 0.0
+	for x in g:
+		sum += float(x) * float(x)
+	return float(shape.get("len", 1.0)) * sum / g.size() / BULK_BASE
+
+## Форма с первого этапа: длина — от вытянутости клетки, толщина по длине — от её
+## очертания (где клетка была шире, там и туловище толще).
+static func shape_from_sea(sea: Array) -> Dictionary:
+	var d := default_shape()
+	if sea.size() < 3:
+		return d
+	var st := Content.shape_stats(sea)
+	d.len = clampf(float(st.elong), 0.8, 1.7)
+	var pts: Array = []
+	for i in sea.size():
+		var a := TAU * i / sea.size()
+		pts.append(Vector2.from_angle(a) * float(sea[i]))
+	var back := -Content.shape_at(sea, PI)
+	var front := Content.shape_at(sea, 0.0)
+	for i in SPINE:
+		var x := lerpf(back, front, 0.12 + 0.76 * i / (SPINE - 1.0))
+		var lo := INF
+		var hi := -INF
+		for j in pts.size():
+			var p: Vector2 = pts[j]
+			var q: Vector2 = pts[(j + 1) % pts.size()]
+			if (p.x - x) * (q.x - x) <= 0.0 and absf(q.x - p.x) > 0.0001:
+				var y := lerpf(p.y, q.y, (x - p.x) / (q.x - p.x))
+				lo = minf(lo, y)
+				hi = maxf(hi, y)
+		if hi > lo:
+			d.girth[i] = clampf((hi - lo) / 2.0 * 1.05, 0.5, 1.6)
+	return d
+
+## Точки позвоночника в метрах (s — размер существа): [{z, r}] от хвоста к голове.
+static func spine(shape: Dictionary, s: float) -> Array:
+	var L := 1.2 * s * float(shape.len)
+	var out: Array = []
+	for i in SPINE:
+		out.append({"z": -L / 2.0 + L * i / (SPINE - 1.0), "r": 0.475 * s * float(shape.girth[i])})
+	return out
+
+## Толщина и место на позвоночнике в доле t (0 — хвост, 1 — голова).
+static func spine_at(sp: Array, t: float) -> Dictionary:
+	var f := clampf(t, 0.0, 1.0) * (sp.size() - 1)
+	var i := mini(int(f), sp.size() - 2)
+	var k := f - i
+	return {"z": lerpf(sp[i].z, sp[i + 1].z, k), "r": lerpf(sp[i].r, sp[i + 1].r, k)}
 
 ## Коротко, что даёт часть: «+6 укус · ×1,3 мясо».
 static func summary(id: String) -> String:

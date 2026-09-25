@@ -49,6 +49,8 @@ var gifts := {}
 var land_body := {}
 ## Вышел ли уже на сушу (была сцена выхода из воды).
 var land_ready := false
+## Вылепленная форма тела суши (LandParts.fix_shape).
+var land_shape := {}
 
 
 static func create(diff := "normal") -> Evolution:
@@ -110,6 +112,7 @@ func land_free() -> int:
 func land_start() -> Dictionary:
 	var conv := LandParts.from_sea(body)
 	land_body = conv.body
+	land_shape = LandParts.shape_from_sea(shape)
 	var back := 0
 	for g in conv.gone:
 		back += int(Content.PARTS[g[0]].cost)
@@ -498,6 +501,7 @@ func to_dict() -> Dictionary:
 		"gifts": gifts.duplicate(),
 		"land_body": land_body.duplicate(),
 		"land_ready": land_ready,
+		"land_shape": land_shape.duplicate(true),
 	}
 
 ## Прочитанное с диска. Непонятное выбрасывается по кусочку. null — сохранения нет.
@@ -601,6 +605,8 @@ static func from_dict(d: Variant) -> Evolution:
 	if not e.land_body.is_empty() and not e.land_body.has("legs"):
 		e.land_body.legs = "stubs"
 	e.land_ready = d.get("land_ready", false) == true and not e.land_body.is_empty()
+	if not e.land_body.is_empty():
+		e.land_shape = LandParts.fix_shape(d.get("land_shape")) if d.get("land_shape") is Dictionary else LandParts.shape_from_sea(e.shape)
 	var pl = d.get("played")
 	if pl is int or pl is float:
 		e.played = maxf(0.0, float(pl))

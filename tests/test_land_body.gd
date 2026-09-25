@@ -159,3 +159,60 @@ func test_смерть_на_суше(c) -> void:
 	l.hp = 0.0
 	l.step(1.0 / 30.0, Vector2.ZERO)
 	c.eq("теряешь пятую часть добытого здесь", l.evo.dna_total, 290.0)
+
+func test_форма_проверка(c) -> void:
+	var d := LandParts.fix_shape({"len": 99, "girth": [5, 0, 1, 1, 1], "head": "big", "sizes": {"eyes": 9.0, "wings": 2.0}, "leg_len": -3})
+	c.eq("длина — в пределах", d.len, LandParts.SHAPE.len[2])
+	c.eq("толщина — в пределах", d.girth[0], LandParts.GIRTH_LIMITS[1])
+	c.eq("непонятное — обычное", d.head, 1.0)
+	c.ok("чужих мест нет, размер в пределах", not d.sizes.has("wings") and d.sizes.eyes == LandParts.SIZE_LIMITS[1])
+	c.eq("мусор — обычная форма", LandParts.fix_shape("x"), LandParts.default_shape())
+
+func test_форма_из_воды(c) -> void:
+	var round := LandParts.shape_from_sea(Content.shape_preset("round"))
+	var long := LandParts.shape_from_sea(Content.shape_preset("oval"))
+	c.ok("круглая клетка — обычное туловище (%.2f)" % round.len, absf(round.len - 1.0) < 0.15)
+	var fat: Array = []
+	for i in Content.SHAPE_POINTS:
+		fat.append(1.5)
+	var f := LandParts.shape_from_sea(fat)
+	c.ok("толстая клетка — толстое туловище (%.2f)" % f.girth[2], f.girth[2] > round.girth[2] + 0.3)
+	c.ok("вытянутая клетка — длиннее (%.2f > %.2f)" % [long.len, round.len], long.len > round.len + 0.2)
+
+func test_форма_и_свойства(c) -> void:
+	var body := {"legs": "legs4", "mouth": "jaws", "eyes": "eyes"}
+	var base := LandParts.stats(body, LandParts.default_shape())
+	c.eq("обычная форма ничего не меняет — здоровье", base.hp, LandParts.stats(body).hp)
+	var fat := LandParts.default_shape()
+	fat.girth = [1.6, 1.8, 1.9, 1.8, 1.5]
+	var st := LandParts.stats(body, fat)
+	c.ok("толще — крепче (%.0f > %.0f)" % [st.hp, base.hp], st.hp > base.hp * 1.4)
+	c.ok("но медленнее", st.speed < base.speed)
+	var legs := LandParts.default_shape()
+	legs.leg_len = 2.0
+	c.ok("длинные ноги — быстрее", LandParts.stats(body, legs).speed > base.speed * 1.2)
+	var big := LandParts.default_shape()
+	big.sizes = {"mouth": 2.0}
+	c.ok("большая пасть кусает сильнее", LandParts.stats(body, big).bite > base.bite + 1.0)
+	big.sizes = {"eyes": 2.0}
+	c.ok("большие глаза видят дальше", LandParts.stats(body, big).sight > base.sight)
+	var fast := LandParts.default_shape()
+	fast.leg_len = 2.4
+	c.ok("быстрее предела не бегает", LandParts.stats({"legs": "legs_long", "feet": "hooves", "tail": "tail_long"}, fast).speed <= 1.9)
+
+func test_форма_сохраняется(c) -> void:
+	var e := _evo()
+	e.land_start()
+	e.land_shape.girth = [0.5, 1.2, 1.8, 1.2, 0.5]
+	e.land_shape.neck_y = 1.0
+	e.land_shape.sizes = {"eyes": 1.6}
+	var back := Evolution.from_dict(JSON.parse_string(JSON.stringify(e.to_dict())))
+	c.eq("толщина по спине", back.land_shape.girth, e.land_shape.girth)
+	c.eq("шея", back.land_shape.neck_y, 1.0)
+	c.eq("размер глаз", back.land_shape.sizes.eyes, 1.6)
+	var fat_land := Evolution.create()
+	fat_land.land_body = {"legs": "stubs"}
+	var thin := Land.new(fat_land, 5).max_hp
+	fat_land.land_shape = e.land_shape
+	fat_land.land_shape.girth = [1.8, 1.9, 2.0, 1.9, 1.8]
+	c.ok("на суше толстое тело крепче", Land.new(fat_land, 5).max_hp > thin * 1.3)

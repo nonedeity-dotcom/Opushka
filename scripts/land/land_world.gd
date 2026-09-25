@@ -109,7 +109,8 @@ func rebuild_player() -> void:
 	var c := Color(Content.COLORS[evo.color])
 	var c2 := Color(Content.COLORS[evo.color2]) if evo.pattern != "none" else c.darkened(0.25)
 	var body: Dictionary = evo.land_body if not evo.land_body.is_empty() else LandParts.from_sea(evo.body).body
-	_player.build_body(c, c2, 1.0, body, evo.pattern, Content.shape_stats(evo.shape).elong)
+	var shape: Dictionary = evo.land_shape if not evo.land_shape.is_empty() else LandParts.shape_from_sea(evo.shape)
+	_player.build_body(c, c2, 1.0, body, evo.pattern, shape)
 	var sight: float = land.st.sight
 	_env.fog_density = 0.0025 / pow(maxf(sight, 0.3), 2.0)
 

@@ -1208,6 +1208,15 @@ func _run_script() -> void:
 		"lslot":
 			land_editor.slot = p[1]
 			land_editor._refresh()
+		"lsculpt":
+			# Потянуть кружок лепки: lsculpt:ручка,dx,dy (точки экрана).
+			var q := p[1].split(",")
+			land_editor.sculpt(q[0], Vector2(float(q[1]), float(q[2])))
+		"lpreset":
+			var pr: Array = land_editor.PRESETS[int(p[1])]
+			for k in pr[1]:
+				land_editor.evo.land_shape[k] = pr[1][k]
+			land_editor._after_change(pr[0])
 		"lclose":
 			land_editor.close_overlay()
 		"ldone":
