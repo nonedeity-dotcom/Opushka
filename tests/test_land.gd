@@ -192,3 +192,193 @@ func test_яйцо_и_бегом(c) -> void:
 		if l2.deaths == 0:
 			ok += 1
 	c.ok("выжил у %d гнёзд из %d" % [ok, l.nests.size()], ok >= l.nests.size() - 1)
+
+# --- остров: сила, гнездо, сохранение, находки, живой мир ------------------------------
+
+func test_сила(c) -> void:
+	var e := Evolution.create()
+	var l := Land.new(e, 5)
+	l.mobs = []
+	c.eq("в начале — сила 1", e.land_level(), 1)
+	var hp1 := l.max_hp
+	var bite1 := l.bite
+	l._gain(float(LandParts.LEVELS[1]))
+	c.ok("набрал ДНК — сила 2", e.land_level() == 2 and l.events.any(func(x): return x.t == "level" and x.level == 2))
+	c.ok("здоровья и укуса больше, размер тот же", l.max_hp > hp1 * 1.1 and l.bite > bite1 * 1.1 and l.hp == l.max_hp)
+	l._gain(5000.0)
+	c.eq("больше десятой силы не бывает", e.land_level(), LandParts.LEVELS.size())
+	c.eq("на последней — путь пройден", LandParts.level_progress(e.land_xp), [0.0, 1.0])
+	var xp := e.land_xp
+	l.hp = 0.0
+	l.step(1.0 / 30.0, Vector2.ZERO)
+	c.eq("одолели — сила не теряется", e.land_xp, xp)
+
+func test_своё_гнездо(c) -> void:
+	var l := _land()
+	var h: Dictionary = l.mobs.filter(func(m): return m.kind == "hermit")[0]
+	l.mobs = [h]
+	l.set_nest(h.pos + Vector3(8.0, 0, 0))
+	if l.terrain.is_water(l.home.x, l.home.z):
+		l.set_nest(l._land_point(0.0, 40.0))
+	l.pos = l.home
+	c.ok("в гнезде — можно менять тело", l.at_nest() and l.safe())
+	h.pos = l.home + Vector3(7.0, 0, 0)
+	h.angry = 5.0
+	l.hp = l.max_hp * 0.3
+	var hp0 := l.hp
+	var closest := INF
+	for i in 30 * 5:
+		l.step(1.0 / 30.0, Vector2.ZERO)
+		closest = minf(closest, Vector2(h.pos.x - l.home.x, h.pos.z - l.home.z).length())
+	c.ok("в гнездо никто не заходит (ближе всего %.1f м)" % closest, closest >= Land.NEST_R)
+	c.ok("в гнезде не кусают и лечат (%.0f → %.0f)" % [hp0, l.hp], l.hp >= hp0 + Land.NEST_HEAL * 4.0)
+	l.pos = l._land_point(60.0, 100.0)
+	c.ok("вдали — тело не поменять", not l.at_nest())
+	l.hp = 0.0
+	l.step(1.0 / 30.0, Vector2.ZERO)
+	c.ok("одолели — снова в гнезде", l.pos.distance_to(l.home) < 0.01)
+
+func test_остров_сохраняется(c) -> void:
+	var e := Evolution.create()
+	var l := Land.new(e, 9)
+	var nest := l._land_point(10.0, 60.0)
+	l.set_nest(nest)
+	l.pos = l._land_point(10.0, 60.0)
+	l.day = 0.7
+	l.hp = l.max_hp * 0.5
+	var r: Dictionary = l.relics[3]
+	l.relics.erase(r)
+	l.relics_taken.append(r.i)
+	l.giants_beaten.append(1)
+	e.land_save = l.snapshot()
+	var back := Evolution.from_dict(JSON.parse_string(JSON.stringify(e.to_dict())))
+	var l2 := Land.new(back, 9)
+	c.ok("там же, где был", Vector2(l2.pos.x - l.pos.x, l2.pos.z - l.pos.z).length() < 0.01)
+	c.ok("гнездо на месте", l2.has_nest and Vector2(l2.home.x - nest.x, l2.home.z - nest.z).length() < 0.01)
+	c.ok("та же ночь и то же здоровье", absf(l2.day - 0.7) < 0.001 and absf(l2.hp / l2.max_hp - 0.5) < 0.01)
+	c.eq("разбитая окаменелость не вернулась", l2.relics.size(), Land.RELICS - 1)
+	c.ok("остальные — на тех же местах", l2.relics.all(func(x): return l.relics.any(func(y): return y.i == x.i and (y.pos as Vector3).distance_to(x.pos) < 0.01)))
+	c.ok("побеждённого гиганта нет", l2.mobs.filter(func(m): return m.kind == "giant").size() == Land.GIANTS - 1 and not l2.mobs.any(func(m): return m.kind == "giant" and m.gi == 1))
+	c.eq("кривое сохранение — пусто", Land.fix_save({"pos": "где-то", "relics": [1, "x", 1]}), {"relics": [1]})
+
+func test_находки(c) -> void:
+	var e := Evolution.create()
+	e.dna_total = 500.0
+	e.land_start()
+	c.ok("клыков сразу нет — не поставить", not e.land_has("fangs") and not e.land_put("fangs").ok)
+	c.ok("основа есть сразу", e.land_has("legs4") and e.land_put("legs4").ok)
+	var l := Land.new(e, 5)
+	l.mobs = []
+	var r: Dictionary = l.relics[0]
+	_face(l, r.pos, 1.9)
+	var before := e.land_found.size()
+	var id := ""
+	for i in 30 * 20:
+		l.step(1.0 / 30.0, Vector2.ZERO, true)
+		for x in l.events:
+			if x.t == "find":
+				id = x.id
+		if not r.alive:
+			break
+	c.ok("разбил окаменелость — находка: %s" % id, not r.alive and id != "" and e.land_has(id) and e.land_found.size() == before + 1)
+	c.ok("и её можно поставить", e.land_put(id).ok)
+	c.ok("окаменелость помнится разбитой", l.relics_taken.has(r.i) and not l.relics.has(r))
+	var best := l._find("giant", l.pos)
+	var left: Array = LandParts.PARTS.keys().filter(func(x): return not e.land_has(x) or x == best)
+	c.ok("гигант даёт самую дорогую из ненайденных (%s)" % best, left.all(func(x): return int(LandParts.PARTS[x].cost) <= int(LandParts.PARTS[best].cost)))
+	for x in LandParts.PARTS:
+		e.land_found[x] = true
+	var dna := l.dna
+	l._find("relic", l.pos)
+	c.eq("всё найдено — ДНК", l.dna - dna, 20.0)
+
+func test_хищник_и_туша(c) -> void:
+	var l := _land()
+	l.day = 0.2
+	var hunter: Dictionary = l.mobs.filter(func(m): return m.kind == "hunter")[0]
+	var prey: Dictionary = l.mobs.filter(func(m): return m.kind == "wander")[0]
+	l.mobs = [hunter, prey]
+	prey.pos = hunter.pos + Vector3(4.0, 0, 0)
+	if l.terrain.is_water(prey.pos.x, prey.pos.z):
+		prey.pos = hunter.pos
+	l.pos = l._land_point(0.0, 150.0)
+	while l.pos.distance_to(hunter.pos) < 60.0:
+		l.pos = l._land_point(0.0, 150.0)
+	var killed := false
+	for i in 30 * 40:
+		l.step(1.0 / 30.0, Vector2.ZERO)
+		if not l.carcasses.is_empty():
+			killed = true
+			break
+	c.ok("хищник загрыз бродягу — осталась туша", killed)
+	c.ok("ДНК за чужую добычу не дают", l.dna == 0.0)
+	var cc: Dictionary = l.carcasses[0]
+	l.mobs = []
+	l.bushes = []
+	_face(l, cc.pos, 1.2)
+	l.step(1.0 / 30.0, Vector2.ZERO)
+	c.ok("доел тушу — +ДНК", l.dna > 0.0 and cc.meat == 2 and l.events.any(func(x): return x.t == "meat"))
+
+func test_вожак(c) -> void:
+	var l := _land()
+	_only(l, func(m): return m.kind == "pack" and m.nest == 0)
+	var boss: Array = l.mobs.filter(func(m): return m.leader)
+	c.eq("у стаи один вожак", boss.size(), 1)
+	var lead: Dictionary = boss[0]
+	c.ok("вожак крупнее и крепче", lead.size > 1.2 and lead.max_hp > 14.0 * 1.2 * 1.2 * 2.0)
+	lead.hp = 1.0
+	_face(l, lead.pos, float(lead.size) * 0.7 + 0.8)
+	l.step(1.0 / 30.0, Vector2.ZERO, true)
+	c.ok("вожак повержен", l.events.any(func(x): return x.t == "leader"))
+	var nest: Dictionary = l.nests[0]
+	_face(l, nest.pos, 1.0)
+	l.step(1.0 / 30.0, Vector2.ZERO)
+	c.ok("без вожака стащил яйцо — никто не злится", l.events.any(func(x): return x.t == "egg") and l.mobs.all(func(m): return m.angry <= 0.0))
+	for i in 30 * int(nest.leader_t + 1.0):
+		l.step(1.0 / 30.0, Vector2(0.0, 0.0))
+	c.ok("со временем новый вожак", l.mobs.any(func(m): return m.leader and m.nest == 0))
+
+func test_день_и_ночь(c) -> void:
+	c.eq("утро — светло", Land.daylight(0.1), 1.0)
+	c.eq("ночь — темно", Land.daylight(0.75), 0.0)
+	c.ok("закат — между", Land.daylight(0.6) > 0.0 and Land.daylight(0.6) < 1.0)
+	var l := _land()
+	l.day = 0.75
+	var w: Dictionary = l.mobs.filter(func(m): return m.kind == "wander")[0]
+	var hunter: Dictionary = l.mobs.filter(func(m): return m.kind == "hunter")[0]
+	l.mobs = [w]
+	l.pos = l._land_point(0.0, 150.0)
+	while l.pos.distance_to(w.pos) < 30.0:
+		l.pos = l._land_point(0.0, 150.0)
+	var at: Vector3 = w.pos
+	for i in 30 * 5:
+		l.step(1.0 / 30.0, Vector2.ZERO)
+	c.ok("ночью бродяга спит", (w.pos as Vector3).distance_to(at) < 0.5)
+	# Хищник: ночью бросается издалека, днём — нет.
+	for night in [true, false]:
+		var l2 := _land()
+		l2.day = 0.75 if night else 0.2
+		var h: Dictionary = l2.mobs.filter(func(m): return m.kind == "hunter")[0]
+		l2.mobs = [h]
+		_face(l2, h.pos, 10.0)
+		var hurt := false
+		for i in 30 * 6:
+			l2.step(1.0 / 30.0, Vector2.ZERO)
+			if l2.events.any(func(x): return x.t == "hurt"):
+				hurt = true
+		c.ok(("ночью хищник нападает" if night else "днём хищник не трогает, если не подходить"), hurt == night)
+
+func test_гиганты(c) -> void:
+	var l := _land()
+	var gs: Array = l.mobs.filter(func(m): return m.kind == "giant")
+	c.eq("на острове три гиганта", gs.size(), Land.GIANTS)
+	c.ok("огромные и очень крепкие", gs.all(func(g): return g.size >= 3.0 and g.max_hp > 250.0))
+	for i in 30 * 30:
+		l.step(1.0 / 30.0, Vector2.ZERO)
+	c.ok("держатся своих мест", gs.all(func(g): return (g.pos as Vector3).distance_to(g.home) < Land.GIANT_HOME + 5.0))
+	var g: Dictionary = gs[0]
+	l.mobs = [g]
+	g.hp = 1.0
+	_face(l, g.pos, float(g.size) * 0.7 + 0.8)
+	l.step(1.0 / 30.0, Vector2.ZERO, true)
+	c.ok("повержен — находка и не вернётся", l.events.any(func(x): return x.t == "giant_down") and l.events.any(func(x): return x.t == "find") and l.giants_beaten.has(g.gi))

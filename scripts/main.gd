@@ -278,10 +278,22 @@ func _to_land() -> void:
 
 ## Остров, ты на нём, экран суши. intro — начать со сцены выхода из воды.
 func _start_land(intro: bool) -> void:
-	var land := Land.new(evo, _seed if _seed != 0 else randi())
+	# Остров у каждой ячейки свой и всегда один и тот же.
+	if evo.land_seed == 0:
+		evo.land_seed = randi_range(1, 1 << 30)
+	var land := Land.new(evo, _seed if _seed != 0 else evo.land_seed)
+	# Старое сохранение без гнезда — гнездо там, где стоишь.
+	if not intro and not land.has_nest:
+		land.set_nest(land.pos)
 	land_world = LandWorld.new()
 	add_child(land_world)
 	land_world.setup(land)
+	# Сохраняться понемногу, пока ходишь по острову.
+	var t := Timer.new()
+	t.wait_time = 20.0
+	t.autostart = true
+	t.timeout.connect(_save)
+	land_world.add_child(t)
 	land_hud = preload("res://scripts/land/land_hud.gd").new()
 	land_hud.world = land_world
 	land_hud.back.connect(_to_menu)
@@ -364,10 +376,51 @@ func _land_event(e: Dictionary) -> void:
 			_buzz(30)
 			if e.kind == "hermit":
 				land_hud.say("Отшельник повержен! +%d ДНК" % int(e.dna))
+			elif e.kind == "hunter":
+				land_hud.say("Хищник повержен! +%d ДНК" % int(e.dna))
 		"death":
 			sound.play("death")
 			_buzz(120)
-			land_hud.say("Тебя одолели — снова у начала (−%d ДНК)" % int(e.lost))
+			land_hud.say("Тебя одолели — снова в гнезде (−%d ДНК, сила осталась)" % int(e.lost))
+			_save()
+		"level":
+			sound.play("levelup")
+			_buzz(80)
+			var pw := LandParts.power(int(e.level))
+			land_hud.say("Сила %d! Здоровье ×%s, укус ×%s" % [int(e.level), LandParts._num(snappedf(pw.hp, 0.01)), LandParts._num(snappedf(pw.bite, 0.01))])
+			_save()
+		"find":
+			sound.play("newpart")
+			_buzz(60)
+			if e.id == "":
+				land_hud.say("Всё уже найдено — +%d ДНК" % int(e.dna))
+			else:
+				land_hud.say("Находка: %s! Поставь в гнезде" % String(LandParts.PARTS[e.id].name).to_lower())
+			_save()
+		"leader":
+			sound.play("growl", 0.8)
+			land_hud.say("Вожак повержен — стая разбежалась, гнездо без охраны!")
+			_save()
+		"giant_down":
+			sound.play("boss")
+			_buzz(150)
+			land_hud.say("Гигант повержен!")
+			_save()
+		"nest_moved":
+			sound.play("place")
+			_buzz(30)
+			land_hud.say("Гнездо теперь здесь")
+			_save()
+		"meat":
+			sound.play("eat_meat", randf_range(0.9, 1.1))
+			_buzz(15)
+			land_hud.say("+%d ДНК — туша" % int(e.dna))
+		"hunt":
+			sound.play("growl", randf_range(1.2, 1.4))
+		"night":
+			land_hud.say("Ночь: хищники видят дальше — лучше в гнездо")
+		"day":
+			land_hud.say("Рассвело")
 
 func _leave_land() -> void:
 	if land_world or land_editor:
@@ -960,6 +1013,8 @@ func _pause() -> void:
 ## Сохранить в свою ячейку. Проверочный запуск (ячейка 0) не сохраняется.
 func _save() -> void:
 	_save_in = 0.0
+	if land_world and is_instance_valid(land_world) and land_world.land and land_world.intro_t < 0.0:
+		evo.land_save = land_world.land.snapshot()
 	if slot > 0 and evo:
 		Saves.save_slot(slot, evo)
 
@@ -1004,7 +1059,13 @@ func _apply_debug_args() -> void:
 		for pair in args.landbody.split(","):
 			var q: PackedStringArray = pair.split(":")
 			evo.land_body[q[0]] = q[1]
+			evo.land_found[q[1]] = true
 		evo.land_ready = true
+	if args.has("landxp"):
+		evo.land_xp = float(args.landxp)
+	if args.has("found"):
+		for id in (LandParts.PARTS.keys() if args.found == "all" else Array(args.found.split(","))):
+			evo.land_found[id] = true
 	if args.has("pattern"):
 		evo.pattern = args.pattern
 	if args.has("color2"):
@@ -1201,6 +1262,23 @@ func _run_script() -> void:
 			l.pos = Vector3(float(q[0]), l.terrain.height(float(q[0]), float(q[1])), float(q[1]))
 		"yaw":
 			land_world.cam_yaw = deg_to_rad(float(p[1]))
+		"lday":
+			# Время суток: 0 — утро, 0,75 — ночь.
+			land_world.land.day = float(p[1])
+		"lgo":
+			# Встать рядом с окаменелостью, гигантом или хищником (для снимков).
+			var l: Land = land_world.land
+			var q := p[1].split(",")
+			var at := Vector3.ZERO
+			if q[0] == "relic":
+				at = l.relics[0].pos
+			else:
+				for m in l.mobs:
+					if m.kind == q[0]:
+						at = m.pos
+						break
+			at += Vector3(float(q[1]) if q.size() > 1 else 6.0, 0, 0)
+			l.pos = Vector3(at.x, l.terrain.height(at.x, at.z), at.z)
 		"landbite":
 			land_world.bite_pressed = true
 		"lput":

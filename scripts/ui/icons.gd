@@ -154,4 +154,10 @@ static func draw(ci: CanvasItem, name: String, rect: Rect2, col: Color) -> void:
 			ci.draw_rect(Rect2(58, 18, 16, 64), col)
 		"play":
 			Art.poly(ci, [Vector2(28, 16), Vector2(84, 50), Vector2(28, 84)], col)
+		"nest":
+			# Гнездо: чаша из веток и два яйца в ней.
+			ci.draw_arc(Vector2(50, 46), 36, 0.15, PI - 0.15, 16, col, 9, true)
+			ci.draw_line(Vector2(16, 58), Vector2(84, 58), col, 6, true)
+			ci.draw_circle(Vector2(38, 44), 11, col)
+			ci.draw_circle(Vector2(61, 40), 13, col)
 	Art.unpen(ci)

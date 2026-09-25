@@ -53,6 +53,14 @@ var land_ready := false
 var land_shape := {}
 ## Окрас на суше: цвета и узор (LandParts.fix_paint). Пусто — как у клетки.
 var land_paint := {}
+## Остров этой ячейки: всегда один и тот же (0 — ещё не выбран).
+var land_seed := 0
+## Сколько ДНК добыто на суше за всё время — от этого сила (LandParts.level_of).
+var land_xp := 0.0
+## Найденные части суши (часть → true). Основа и пришедшее из океана — сразу.
+var land_found := {}
+## Остров как его оставили: где ты, гнездо, время суток, что уже найдено (Land.snapshot).
+var land_save := {}
 
 
 static func create(diff := "normal") -> Evolution:
@@ -113,6 +121,8 @@ func land_free() -> int:
 ## {kept, gone, back} — back: сколько ДНК освободилось за ушедшие части.
 func land_start() -> Dictionary:
 	var conv := LandParts.from_sea(body)
+	for id in LandParts.start_found(body):
+		land_found[id] = true
 	land_body = conv.body
 	land_shape = LandParts.shape_from_sea(shape)
 	land_paint = LandParts.default_paint(color, color2, pattern)
@@ -167,6 +177,14 @@ func land_set_count(slot: String, n: int) -> Dictionary:
 		word = "ноги" if slot == "legs" else "глаза"
 	return {"ok": true, "message": "%d %s" % [n, word]}
 
+## Часть уже найдена (или есть сразу)? В песочнице — все.
+func land_has(id: String) -> bool:
+	return sandbox or land_found.has(id) or LandParts.BASE.has(id)
+
+## Сила на суше (1…10).
+func land_level() -> int:
+	return LandParts.level_of(land_xp)
+
 ## Тело готово к суше: есть туловище и ноги.
 func land_can_walk() -> bool:
 	return land_body.has("torso") and land_body.has("legs")
@@ -178,6 +196,8 @@ func land_put(id: String) -> Dictionary:
 	var slot: String = LandParts.PARTS[id].slot
 	if land_body.get(slot, "") == id:
 		return {"ok": true, "message": ""}
+	if not land_has(id):
+		return {"ok": false, "message": "Эту часть ещё не нашёл: ищи окаменелости, побеждай вожаков и гигантов"}
 	if slot != "torso" and not land_body.has("torso"):
 		return {"ok": false, "message": "Сначала туловище — к нему всё крепится"}
 	var cost: int = LandParts.part_cost(id, land_shape)
@@ -569,6 +589,10 @@ func to_dict() -> Dictionary:
 		"land_ready": land_ready,
 		"land_shape": land_shape.duplicate(true),
 		"land_paint": land_paint.duplicate(),
+		"land_seed": land_seed,
+		"land_xp": land_xp,
+		"land_found": land_found.duplicate(),
+		"land_save": land_save.duplicate(true),
 	}
 
 ## Прочитанное с диска. Непонятное выбрасывается по кусочку. null — сохранения нет.
@@ -678,6 +702,20 @@ static func from_dict(d: Variant) -> Evolution:
 	if not e.land_body.is_empty():
 		e.land_shape = LandParts.fix_shape(d.get("land_shape")) if d.get("land_shape") is Dictionary else LandParts.shape_from_sea(e.shape)
 		e.land_paint = LandParts.fix_paint(d.get("land_paint")) if d.get("land_paint") is Dictionary else LandParts.default_paint(e.color, e.color2, e.pattern)
+	var ls = d.get("land_seed")
+	if ls is int or ls is float:
+		e.land_seed = int(ls)
+	var lx = d.get("land_xp")
+	if lx is int or lx is float:
+		e.land_xp = maxf(0.0, float(lx))
+	for id in _dict(d.get("land_found")):
+		if id is String and LandParts.PARTS.has(id):
+			e.land_found[id] = true
+	# Раньше находок не было — всё, что уже стоит на теле, считается найденным.
+	if not d.has("land_found"):
+		for slot in e.land_body:
+			e.land_found[e.land_body[slot]] = true
+	e.land_save = Land.fix_save(d.get("land_save"))
 	var pl = d.get("played")
 	if pl is int or pl is float:
 		e.played = maxf(0.0, float(pl))

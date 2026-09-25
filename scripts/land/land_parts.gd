@@ -120,6 +120,47 @@ const FROM_SEA := {
 	"serpent": "tail_long",
 }
 
+## Части, которые есть сразу. Остальные находятся на острове: в окаменелостях, у гигантов
+## и у вожаков стай. Части, пришедшие из океана (FROM_SEA), тоже есть сразу.
+const BASE := ["torso", "stubs", "legs2", "legs4", "jaws", "beak", "eyes", "tail_long"]
+
+## Сила на суше: существо не растёт, а крепнет. LEVELS — сколько ДНК надо добыть на суше
+## (за всё время, гибель её не отнимает), чтобы стать сильнее: первая сила — с нуля.
+const LEVELS := [0, 30, 80, 150, 250, 380, 550, 760, 1020, 1350]
+
+## Какая сила при стольких добытых ДНК (1…10).
+static func level_of(xp: float) -> int:
+	var l := 1
+	for i in LEVELS.size():
+		if xp >= float(LEVELS[i]):
+			l = i + 1
+	return l
+
+## Сколько ДНК до следующей силы и какая доля пути пройдена: [осталось, доля]. На последней
+## силе — [0, 1].
+static func level_progress(xp: float) -> Array:
+	var l := level_of(xp)
+	if l >= LEVELS.size():
+		return [0.0, 1.0]
+	var a := float(LEVELS[l - 1])
+	var b := float(LEVELS[l])
+	return [b - xp, clampf((xp - a) / (b - a), 0.0, 1.0)]
+
+## Во сколько раз сила прибавляет: здоровье +15%, укус +12%, скорость +1,5% за ступень.
+static func power(level: int) -> Dictionary:
+	var k := float(clampi(level, 1, LEVELS.size()) - 1)
+	return {"hp": 1.0 + 0.15 * k, "bite": 1.0 + 0.12 * k, "speed": 1.0 + 0.015 * k}
+
+## Какие части есть сразу у этого тела клетки: основа и всё, что пришло из океана.
+static func start_found(sea_body: Array) -> Dictionary:
+	var out := {}
+	for id in BASE:
+		out[id] = true
+	for p in sea_body:
+		if FROM_SEA.has(p.id):
+			out[FROM_SEA[p.id]] = true
+	return out
+
 ## Почему часть клетки не нужна на суше — коротко, для экрана перехода.
 static func why_gone(id: String) -> String:
 	var kind: String = Content.PARTS[id].kind if Content.PARTS.has(id) else ""

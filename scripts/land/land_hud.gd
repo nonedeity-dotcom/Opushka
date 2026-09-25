@@ -1,5 +1,6 @@
-## Экран суши (пробный): джойстик, «Укус», поворот камеры пальцем по правой половине,
-## здоровье и ДНК, сколько кадров в секунду (проверить, не тормозит ли) и выход в меню.
+## Экран суши: джойстик, «Укус», поворот камеры пальцем по правой половине, сила и путь
+## до следующей, здоровье, ДНК, день или ночь, стрелка к своему гнезду, полоса гиганта,
+## «Тело» (только в гнезде), «Гнездо сюда» и выход в меню.
 extends Control
 
 signal back
@@ -13,6 +14,18 @@ var pad: Control
 var world: LandWorld
 var _info: Label
 var _fps: Label
+var _lvl: Label
+var _xp: HpLine
+var _time: Label
+var _arrow: NestArrow
+var _boss: Control
+var _boss_line: HpLine
+var _boss_name: Label
+var _near: Label
+var _nest_btn: Control
+var _body_btn: Control
+## «Гнездо сюда» нажали один раз — ждём второго касания (секунды).
+var _nest_confirm := 0.0
 var _hp: HpLine
 var bite_btn: Control
 var _red: ColorRect
@@ -39,17 +52,24 @@ func _ready() -> void:
 	var card := Kit.card(Kit.vbox(2), Color(0.04, 0.08, 0.11, 0.7), 20, 14)
 	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var col: VBoxContainer = card.get_child(0)
-	col.add_child(Kit.label("Суша · пробная версия", 22, Art.TEXT, true))
+	_lvl = Kit.label("Сила 1", 22, Art.GOLD, true)
+	col.add_child(_lvl)
+	_xp = HpLine.new()
+	_xp.gold = true
+	_xp.custom_minimum_size = Vector2(260, 8)
+	col.add_child(_xp)
 	_hp = HpLine.new()
 	_hp.custom_minimum_size = Vector2(260, 16)
 	col.add_child(_hp)
 	_info = Kit.label("", 18, Art.GREEN)
 	col.add_child(_info)
-	_fps = Kit.label("", 16, Art.MUTED)
+	_time = Kit.label("", 17, Art.TEXT)
+	col.add_child(_time)
+	_fps = Kit.label("", 14, Art.MUTED)
 	col.add_child(_fps)
 	card.position = Vector2(18, 18)
 	add_child(card)
-	var hint := Kit.muted("Кусай кости — будет ДНК. Яйца в гнёздах вкусные, но стая их стережёт. Большие с шипами — отшельники: сильные, держись подальше", 17)
+	var hint := Kit.muted("Добывай ДНК — станешь сильнее. Светящиеся камни — окаменелости: в них новые части. Тело меняют в гнезде — туда ведёт стрелка", 17)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.name = "Hint"
 	add_child(hint)
@@ -64,9 +84,39 @@ func _ready() -> void:
 	body.setup("dna", "Тело", 64)
 	body.caption = "Тело"
 	body.floating = true
-	body.pressed.connect(func(): edit.emit())
+	body.pressed.connect(_on_body)
 	body.name = "Body"
 	add_child(body)
+	_body_btn = body
+	var nb := RoundButton.new()
+	nb.setup("nest", "Гнездо сюда", 64)
+	nb.caption = "Гнездо сюда"
+	nb.floating = true
+	nb.pressed.connect(_on_nest)
+	nb.name = "NestHere"
+	add_child(nb)
+	_nest_btn = nb
+	_arrow = NestArrow.new()
+	_arrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_arrow)
+	_near = Kit.label("", 18, Color("#ffd27a"), true)
+	_near.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_near.add_theme_constant_override("outline_size", 6)
+	_near.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.6))
+	_near.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_near)
+	var bc := Kit.card(Kit.vbox(4), Color(0.12, 0.04, 0.05, 0.75), 16, 10)
+	bc.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_boss_name = Kit.label("Гигант", 18, Color("#ffb0a0"), true)
+	_boss_name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	bc.get_child(0).add_child(_boss_name)
+	_boss_line = HpLine.new()
+	_boss_line.red = true
+	_boss_line.custom_minimum_size = Vector2(380, 14)
+	bc.get_child(0).add_child(_boss_line)
+	bc.visible = false
+	add_child(bc)
+	_boss = bc
 	_skip = Kit.label("Нажми, чтобы пропустить", 18, Color(1, 1, 1, 0.7))
 	_skip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_skip.add_theme_constant_override("outline_size", 6)
@@ -114,6 +164,12 @@ func _layout() -> void:
 	var b := get_node("Back") as Control
 	b.position = Vector2(size.x - 64 - 22, 18)
 	(get_node("Body") as Control).position = Vector2(size.x - 2 * (64 + 22) - 10, 18)
+	_nest_btn.position = Vector2(size.x - 3 * (64 + 22) - 20, 18)
+	_arrow.size = Vector2(360, 64)
+	_arrow.position = Vector2((size.x - _arrow.size.x) / 2.0, 14)
+	_near.size = Vector2(size.x, 30)
+	_near.position = Vector2(0, 158)
+	_boss.position = Vector2((size.x - 412) / 2.0, 84)
 	var hint := get_node("Hint") as Label
 	hint.size = Vector2(minf(620.0, size.x - 640), 0)
 	hint.position = Vector2((size.x - hint.size.x) / 2.0, size.y - 90)
@@ -123,7 +179,7 @@ func _layout() -> void:
 	_skip.size = Vector2(size.x, 30)
 	_skip.position = Vector2(0, size.y - 50)
 	_say.size = Vector2(size.x, 40)
-	_say.position = Vector2(0, 110)
+	_say.position = Vector2(0, 196)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 
 func _process(delta: float) -> void:
@@ -140,14 +196,76 @@ func _process(delta: float) -> void:
 		_skip.visible = intro
 	_red.color.a = maxf(0.0, _red.color.a - delta * 0.6)
 	var l := world.land
-	_info.text = "ДНК: %d · здесь добыто %d" % [l.evo.land_free(), int(l.dna)]
+	var lv := l.evo.land_level()
+	var pr := LandParts.level_progress(l.evo.land_xp)
+	_lvl.text = "Сила %d" % lv + ("" if lv < LandParts.LEVELS.size() else " — наибольшая")
+	_xp.k = pr[1]
+	_xp.queue_redraw()
+	_info.text = "ДНК: %d" % l.evo.land_free() + (" · до силы %d: %d" % [lv + 1, int(ceil(pr[0]))] if lv < LandParts.LEVELS.size() else "")
 	_hp.k = l.hp / l.max_hp
 	_hp.queue_redraw()
+	_time.text = "Ночь — хищники видят дальше" if l.is_night() else ("Закат" if Land.daylight(l.day) < 1.0 and l.day < 0.7 else ("Рассвет" if Land.daylight(l.day) < 1.0 else "День"))
+	# Стрелка к гнезду: куда идти относительно камеры и сколько метров.
+	_arrow.visible = l.has_nest and not intro
+	if l.has_nest:
+		var to := Vector2(l.home.x - l.pos.x, l.home.z - l.pos.z)
+		var yaw := world.cam_yaw
+		var fwd := Vector2(-sin(yaw), -cos(yaw))
+		var right := Vector2(cos(yaw), -sin(yaw))
+		_arrow.angle = atan2(to.dot(right), to.dot(fwd))
+		_arrow.dist = to.length()
+		_arrow.home = l.safe()
+		_arrow.queue_redraw()
+	_body_btn.modulate.a = 1.0 if l.at_nest() or not l.has_nest else 0.55
+	_nest_confirm = maxf(0.0, _nest_confirm - delta)
+	_nest_btn.visible = not intro and l.has_nest and (l.pos - l.home).length() > 25.0 and not _danger(l)
+	# Гигант рядом — его полоса здоровья.
+	var g = null
+	for m in l.mobs:
+		if m.kind == "giant" and (m.pos as Vector3).distance_to(l.pos) < 26.0:
+			g = m
+	_boss.visible = g != null and not intro
+	if g != null:
+		_boss_line.k = g.hp / g.max_hp
+		_boss_line.queue_redraw()
+	# Окаменелость рядом — подсказка.
+	var near := false
+	for r in l.relics:
+		if (r.pos as Vector3).distance_to(l.pos) < 22.0:
+			near = true
+	_near.text = "Рядом окаменелость — разбей её, внутри находка" if near and not intro else ""
 	bite_btn.set_cooldown(l.bite_cd / Land.BITE_CD)
 	_fps_t -= delta
 	if _fps_t <= 0.0:
 		_fps_t = 0.5
 		_fps.text = "Кадров в секунду: %d" % Engine.get_frames_per_second()
+
+## Рядом кто-то злой (тогда гнездо не перенести).
+func _danger(l: Land) -> bool:
+	for m in l.mobs:
+		if m.angry > 0.0 and (m.pos as Vector3).distance_to(l.pos) < 20.0:
+			return true
+	return false
+
+## «Тело»: менять тело можно только в своём гнезде.
+func _on_body() -> void:
+	var l := world.land
+	if l.at_nest() or not l.has_nest:
+		edit.emit()
+	else:
+		say("Тело меняют в гнезде — иди по стрелке (%d м)" % int(Vector2(l.home.x - l.pos.x, l.home.z - l.pos.z).length()))
+		_arrow.pulse = 1.0
+
+## «Гнездо сюда»: второе касание переносит гнездо туда, где стоишь.
+func _on_nest() -> void:
+	if _nest_confirm <= 0.0:
+		_nest_confirm = 3.0
+		say("Нажми ещё раз — гнездо будет здесь")
+		return
+	_nest_confirm = 0.0
+	world.land.set_nest(world.land.pos)
+	world._trees()
+	world.happened.emit({"t": "nest_moved", "pos": world.land.pos})
 
 ## Палец справа (не на кнопке) — крутит камеру вокруг тебя.
 func _input(e: InputEvent) -> void:
@@ -170,9 +288,47 @@ func _input(e: InputEvent) -> void:
 class HpLine:
 	extends Control
 	var k := 1.0
+	## Полоса силы — золотая, гиганта — красная.
+	var gold := false
+	var red := false
 
 	func _draw() -> void:
 		var r := Rect2(Vector2.ZERO, size)
 		draw_rect(r, Color(0, 0, 0, 0.4))
-		var c := Color("#e0484a") if k < 0.35 else Color("#6fcf6a")
+		var c := Color("#e0484a") if k < 0.35 or red else Color("#6fcf6a")
+		if gold:
+			c = Art.GOLD
 		draw_rect(Rect2(Vector2.ZERO, Vector2(size.x * clampf(k, 0.0, 1.0), size.y)), c)
+
+## Стрелка к своему гнезду: круг со стрелкой (куда идти, если смотреть с камеры) и
+## сколько метров. В гнезде — «Ты в гнезде».
+class NestArrow:
+	extends Control
+	var angle := 0.0
+	var dist := 0.0
+	var home := false
+	## Мигнуть (нажали «Тело» вдали от гнезда).
+	var pulse := 0.0
+
+	func _process(delta: float) -> void:
+		if pulse > 0.0:
+			pulse = maxf(0.0, pulse - delta * 0.7)
+			queue_redraw()
+
+	func _draw() -> void:
+		var font := get_theme_default_font()
+		var text := "Ты в гнезде: тут лечишься и меняешь тело" if home else "Гнездо · %d м" % int(dist)
+		var w := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 19).x
+		var total := w + (0.0 if home else 52.0) + 28.0
+		var x0 := (size.x - total) / 2.0
+		var glow := 0.5 + 0.5 * sin(pulse * 18.0) if pulse > 0.0 else 0.0
+		draw_style_box(Kit.box(Color(0.04, 0.08, 0.11, 0.7).lerp(Color(0.5, 0.4, 0.1, 0.9), glow), 20, Color(0, 0, 0, 0), 0), Rect2(x0, 6, total, 46))
+		var tx := x0 + 14.0
+		if not home:
+			var c := Vector2(x0 + 34, 29)
+			draw_circle(c, 17, Color(1, 1, 1, 0.12))
+			var d := Vector2(sin(angle), -cos(angle))
+			var side := Vector2(-d.y, d.x)
+			draw_colored_polygon(PackedVector2Array([c + d * 14, c - d * 9 + side * 9, c - d * 4, c - d * 9 - side * 9]), Art.GOLD)
+			tx = x0 + 60.0
+		draw_string(font, Vector2(tx, 36), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 19, Art.GOLD if home else Art.TEXT)

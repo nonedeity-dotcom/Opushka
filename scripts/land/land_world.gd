@@ -28,6 +28,14 @@ var _bubbles: CPUParticles3D
 var _drips: CPUParticles3D
 var _ripples: Array = []
 var _env: Environment
+var _sun: DirectionalLight3D
+var _sky: ProceduralSkyMaterial
+var _fog_base := 0.0025
+## Своё гнездо (с маяком — столбом света, видно издалека).
+var _own: Node3D
+var _beacon: MeshInstance3D
+var _relics := {}  # номер окаменелости → Node3D
+var _carcasses := {}  # uid туши → Node3D
 const INTRO_LEN := 9.0
 ## Дальше этого существ и кости не рисуем — всё равно не видно, а телефону легче.
 const DRAW_DIST := 70.0
@@ -48,6 +56,7 @@ func setup(l: Land) -> void:
 	sm.ground_horizon_color = Color("#cfe8f0")
 	sm.ground_bottom_color = Color("#3a7fa0")
 	sky.sky_material = sm
+	_sky = sm
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	env.ambient_light_energy = 0.4
@@ -65,6 +74,7 @@ func setup(l: Land) -> void:
 	sun.light_energy = 1.0
 	sun.light_color = Color("#fff4e0")
 	add_child(sun)
+	_sun = sun
 	# Земля.
 	var ground := MeshInstance3D.new()
 	ground.mesh = l.terrain.build_mesh()
@@ -89,6 +99,7 @@ func setup(l: Land) -> void:
 	_trees()
 	_make_bushes()
 	_make_nests()
+	_make_own_nest()
 	# Ты — цвета своего вида. Соседи — свои цвета и ноги.
 	_ground_fn = func(x: float, z: float) -> float: return land.terrain.height(x, z)
 	_player = Creature3D.new()
@@ -97,6 +108,7 @@ func setup(l: Land) -> void:
 	rebuild_player()
 	_sync_mobs(0.0)
 	_sync_bones()
+	_sync_things()
 	camera = Camera3D.new()
 	camera.fov = 50.0
 	camera.far = 600.0
@@ -113,7 +125,9 @@ func rebuild_player() -> void:
 	var shape: Dictionary = evo.land_shape if not evo.land_shape.is_empty() else LandParts.shape_from_sea(evo.shape)
 	_player.build_body(c, c2, 1.0, body, pt.pattern, shape)
 	var sight: float = land.st.sight
-	_env.fog_density = 0.0025 / pow(maxf(sight, 0.3), 2.0)
+	_fog_base = 0.0025 / pow(maxf(sight, 0.3), 2.0)
+	_env.fog_density = _fog_base
+	_daylight()
 
 ## Где выходить из воды: луч от середины острова в сторону дома — от глубины к берегу.
 func _shore_path() -> void:
@@ -305,7 +319,9 @@ func finish_intro() -> void:
 	intro_t = -1.0
 	var p := _intro_to
 	land.pos = Vector3(p.x, land.terrain.height(p.x, p.z), p.z)
-	land.home = land.pos
+	# Где вышел на берег — там твоё гнездо (потом его можно перенести).
+	land.set_nest(land.pos)
+	_trees()
 	land.vel = Vector3.ZERO
 	land.scripted = false
 	_player._body.rotation.z = 0.0
@@ -323,7 +339,14 @@ func finish_intro() -> void:
 func _cam_dist() -> float:
 	return CAM_DIST * clampf(0.85 + 0.2 * float(land.st.sight), 0.9, 1.2)
 
+## Деревья (перестраиваются, когда переносишь гнездо: в гнезде деревьев нет).
+var _tree_nodes: Array = []
+
 func _trees() -> void:
+	for n in _tree_nodes:
+		n.queue_free()
+	_tree_nodes.clear()
+	var list: Array = land.trees.filter(func(t): return not land.has_nest or Vector2(t.pos.x - land.home.x, t.pos.z - land.home.z).length() > Land.NEST_R + 1.0)
 	var trunk := CylinderMesh.new()
 	trunk.top_radius = 0.18
 	trunk.bottom_radius = 0.3
@@ -339,9 +362,9 @@ func _trees() -> void:
 		mm.transform_format = MultiMesh.TRANSFORM_3D
 		mm.use_colors = true
 		mm.mesh = pair[0]
-		mm.instance_count = land.trees.size()
-		for i in land.trees.size():
-			var t: Dictionary = land.trees[i]
+		mm.instance_count = list.size()
+		for i in list.size():
+			var t: Dictionary = list[i]
 			var s: float = t.size
 			var p: Vector3 = t.pos
 			var xf := Transform3D(Basis().scaled(Vector3(s, s, s)), p + Vector3(0, float(pair[2]) * s, 0))
@@ -355,6 +378,7 @@ func _trees() -> void:
 		m.roughness = 0.9
 		mi.material_override = m
 		add_child(mi)
+		_tree_nodes.append(mi)
 
 func _make_bushes() -> void:
 	var leaf := Creature3D.mat(Color("#4fa84a"), 0.9)
@@ -396,34 +420,9 @@ func _make_nests() -> void:
 	var egg := Creature3D.mat(Color("#f2ead2"), 0.5)
 	var spot := Creature3D.mat(Color("#b89a70"), 0.8)
 	for n in land.nests:
-		var node := Node3D.new()
+		var node := _nest_ring(twig, twig2)
 		node.position = n.pos
 		add_child(node)
-		var cm := CylinderMesh.new()
-		cm.top_radius = 0.09
-		cm.bottom_radius = 0.11
-		cm.height = 1.5
-		cm.radial_segments = 5
-		cm.rings = 1
-		for i in 16:
-			var a := TAU * i / 16.0
-			var tw := MeshInstance3D.new()
-			tw.mesh = cm
-			tw.material_override = twig if i % 2 == 0 else twig2
-			tw.position = Vector3(cos(a) * 1.35, 0.22 + 0.12 * (i % 3), sin(a) * 1.35)
-			# Ветки лежат по кругу, чуть вкось.
-			tw.basis = Creature3D._basis_y(Vector3(-sin(a), 0.15 * ((i % 3) - 1), cos(a)).rotated(Vector3.UP, 0.35))
-			node.add_child(tw)
-		var bed := MeshInstance3D.new()
-		var bm := CylinderMesh.new()
-		bm.top_radius = 1.3
-		bm.bottom_radius = 1.1
-		bm.height = 0.25
-		bm.radial_segments = 10
-		bed.mesh = bm
-		bed.material_override = twig2
-		bed.position.y = 0.08
-		node.add_child(bed)
 		var eggs: Array = []
 		for i in Land.EGGS:
 			var e := MeshInstance3D.new()
@@ -450,6 +449,215 @@ func _make_nests() -> void:
 			node.add_child(e)
 			eggs.append(e)
 		_nests.append({"node": node, "eggs": eggs})
+
+## Кольцо из веток — основа гнезда. k — во сколько раз больше.
+func _nest_ring(twig: Material, twig2: Material, k := 1.0) -> Node3D:
+	var node := Node3D.new()
+	node.scale = Vector3.ONE * k
+	var cm := CylinderMesh.new()
+	cm.top_radius = 0.09
+	cm.bottom_radius = 0.11
+	cm.height = 1.5
+	cm.radial_segments = 5
+	cm.rings = 1
+	for i in 16:
+		var a := TAU * i / 16.0
+		var tw := MeshInstance3D.new()
+		tw.mesh = cm
+		tw.material_override = twig if i % 2 == 0 else twig2
+		tw.position = Vector3(cos(a) * 1.35, 0.22 + 0.12 * (i % 3), sin(a) * 1.35)
+		# Ветки лежат по кругу, чуть вкось.
+		tw.basis = Creature3D._basis_y(Vector3(-sin(a), 0.15 * ((i % 3) - 1), cos(a)).rotated(Vector3.UP, 0.35))
+		node.add_child(tw)
+	var bed := MeshInstance3D.new()
+	var bm := CylinderMesh.new()
+	bm.top_radius = 1.3
+	bm.bottom_radius = 1.1
+	bm.height = 0.25
+	bm.radial_segments = 10
+	bed.mesh = bm
+	bed.material_override = twig2
+	bed.position.y = 0.08
+	node.add_child(bed)
+	return node
+
+## Своё гнездо: побольше, из твоих цветов; над ним — столб света, чтобы найти издалека.
+func _make_own_nest() -> void:
+	var pt := land.evo.paint()
+	var c := Color(LandParts.COLORS[pt.color])
+	_own = _nest_ring(Creature3D.mat(c.darkened(0.35), 1.0), Creature3D.mat(Color("#8a6a44"), 1.0), 1.6)
+	add_child(_own)
+	var ring := MeshInstance3D.new()
+	var tm := TorusMesh.new()
+	tm.inner_radius = Land.NEST_R - 0.15
+	tm.outer_radius = Land.NEST_R + 0.15
+	tm.rings = 32
+	tm.ring_segments = 4
+	ring.mesh = tm
+	var glow := StandardMaterial3D.new()
+	glow.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	glow.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	glow.albedo_color = Color(1.0, 0.9, 0.5, 0.45)
+	ring.material_override = glow
+	ring.position.y = 0.1
+	ring.scale = Vector3.ONE / 1.6
+	_own.add_child(ring)
+	_beacon = MeshInstance3D.new()
+	var bm := CylinderMesh.new()
+	bm.top_radius = 0.5
+	bm.bottom_radius = 0.9
+	bm.height = 40.0
+	bm.radial_segments = 10
+	bm.cap_top = false
+	bm.cap_bottom = false
+	_beacon.mesh = bm
+	var bmat := StandardMaterial3D.new()
+	bmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	bmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	bmat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	bmat.albedo_color = Color(1.0, 0.92, 0.6, 0.18)
+	_beacon.material_override = bmat
+	_beacon.position.y = 20.0
+	add_child(_beacon)
+
+## Окаменелость: камень с золотой ракушкой-спиралью, светится.
+func _make_relic(r: Dictionary) -> Node3D:
+	var node := Node3D.new()
+	node.position = r.pos
+	var inner := Node3D.new()
+	inner.name = "Inner"
+	node.add_child(inner)
+	var stone := MeshInstance3D.new()
+	var sm := SphereMesh.new()
+	sm.radius = 1.0
+	sm.height = 1.6
+	sm.radial_segments = 7
+	sm.rings = 4
+	stone.mesh = sm
+	stone.material_override = Creature3D.mat(Color("#8f8474"), 0.95)
+	stone.position.y = 0.55
+	stone.scale = Vector3(1.0, 1.0, 0.8)
+	inner.add_child(stone)
+	var gold := StandardMaterial3D.new()
+	gold.albedo_color = Color("#f0c050")
+	gold.emission_enabled = true
+	gold.emission = Color("#ffb830")
+	gold.emission_energy_multiplier = 1.2
+	gold.roughness = 0.3
+	# Спираль ракушки: шарики всё мельче по кругу.
+	for i in 14:
+		var a := i * 0.62
+		var rr := 0.5 * (1.0 - i / 16.0)
+		var dot := MeshInstance3D.new()
+		var dm := SphereMesh.new()
+		dm.radius = 0.12 * (1.0 - i / 18.0)
+		dm.height = dm.radius * 2.0
+		dm.radial_segments = 6
+		dm.rings = 3
+		dot.mesh = dm
+		dot.material_override = gold
+		dot.position = Vector3(cos(a) * rr, 0.6 + sin(a) * rr, 0.78)
+		inner.add_child(dot)
+	var col := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = 0.15
+	cm.bottom_radius = 0.35
+	cm.height = 9.0
+	cm.radial_segments = 8
+	cm.cap_top = false
+	cm.cap_bottom = false
+	col.mesh = cm
+	var cmat := StandardMaterial3D.new()
+	cmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	cmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	cmat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	cmat.albedo_color = Color(1.0, 0.75, 0.3, 0.22)
+	col.material_override = cmat
+	col.position.y = 5.0
+	col.name = "Glow"
+	node.add_child(col)
+	return node
+
+## Туша: тёмный бугор и торчащие рёбра. Чем меньше мяса — тем меньше.
+func _make_carcass(cc: Dictionary) -> Node3D:
+	var node := Node3D.new()
+	node.position = cc.pos
+	var s: float = cc.get("size", 1.0)
+	var meat := MeshInstance3D.new()
+	var mm := SphereMesh.new()
+	mm.radius = 0.6 * s
+	mm.height = 0.7 * s
+	mm.radial_segments = 8
+	mm.rings = 4
+	meat.mesh = mm
+	meat.material_override = Creature3D.mat(Color("#8a3a34"), 0.7)
+	meat.position.y = 0.2 * s
+	meat.scale = Vector3(1.0, 1.0, 1.5)
+	meat.name = "Meat"
+	node.add_child(meat)
+	var bone := Creature3D.mat(Color("#ece2c8"), 0.6)
+	for i in 3:
+		var rib := MeshInstance3D.new()
+		var rm := CylinderMesh.new()
+		rm.top_radius = 0.04 * s
+		rm.bottom_radius = 0.05 * s
+		rm.height = 0.7 * s
+		rm.radial_segments = 5
+		rib.mesh = rm
+		rib.material_override = bone
+		rib.position = Vector3(0, 0.45 * s, (i - 1) * 0.3 * s)
+		rib.rotation.z = 0.5
+		node.add_child(rib)
+	return node
+
+## Окаменелости и туши: новые — построить, пропавшие — убрать.
+func _sync_things() -> void:
+	var seen := {}
+	for r in land.relics:
+		seen[r.i] = true
+		var n: Node3D = _relics.get(r.i)
+		if n == null:
+			n = _make_relic(r)
+			add_child(n)
+			_relics[r.i] = n
+		n.visible = (r.pos as Vector3).distance_to(land.pos) < DRAW_DIST + 40.0
+		var inner := n.get_node("Inner") as Node3D
+		inner.position.x = sin(land.time * 60.0) * 0.08 * float(r.hit)
+		inner.scale = Vector3.ONE * (0.75 + 0.25 * float(r.hp) / float(r.max_hp))
+	for i in _relics.keys():
+		if not seen.has(i):
+			(_relics[i] as Node3D).queue_free()
+			_relics.erase(i)
+	seen = {}
+	for cc in land.carcasses:
+		seen[cc.uid] = true
+		var n: Node3D = _carcasses.get(cc.uid)
+		if n == null:
+			n = _make_carcass(cc)
+			add_child(n)
+			_carcasses[cc.uid] = n
+		(n.get_node("Meat") as Node3D).scale = Vector3(1.0, 1.0, 1.5) * (0.4 + 0.2 * float(cc.meat))
+	for u in _carcasses.keys():
+		if not seen.has(u):
+			(_carcasses[u] as Node3D).queue_free()
+			_carcasses.erase(u)
+
+## Свет по времени суток: днём солнце, на закате оранжево, ночью темно-синее и туман гуще.
+func _daylight() -> void:
+	if _sun == null:
+		return
+	var l := Land.daylight(land.day)
+	var dusk := 4.0 * l * (1.0 - l)
+	_sun.light_energy = lerpf(0.18, 1.0, l)
+	_sun.light_color = Color("#8a9ad8").lerp(Color("#fff4e0"), l).lerp(Color("#ffb070"), dusk * 0.6)
+	_sky.sky_top_color = Color("#0c1630").lerp(Color("#5fa8e0"), l)
+	_sky.sky_horizon_color = Color("#23304e").lerp(Color("#cfe8f0"), l).lerp(Color("#f0a070"), dusk * 0.7)
+	_sky.ground_horizon_color = _sky.sky_horizon_color
+	_env.ambient_light_energy = lerpf(0.22, 0.4, l)
+	_env.fog_light_color = Color("#1c2844").lerp(Color("#9fcbe6"), l)
+	_env.fog_density = _fog_base * lerpf(2.2, 1.0, l)
+	if _beacon:
+		(_beacon.material_override as StandardMaterial3D).albedo_color.a = lerpf(0.35, 0.16, l)
 
 ## Кость: большой скелет (череп, хребет, рёбра) или кучка (череп и пара костей).
 func _make_bone(b: Dictionary) -> Node3D:
@@ -562,9 +770,10 @@ func _sync_mobs(delta: float) -> void:
 			add_child(cr)
 			var nc := Color(m.color)
 			var hermit: bool = m.kind == "hermit"
-			cr.build(nc, nc.darkened(0.45 if hermit else 0.3), m.size, m.legs, hermit)
+			var kind: String = "leader" if m.get("leader", false) else m.kind
+			cr.build(nc, nc.darkened(0.45 if hermit or kind == "giant" else 0.3), m.size, m.legs, hermit, kind)
 			_mobs[m.uid] = cr
-		var far: bool = (m.pos as Vector3).distance_to(land.pos) > DRAW_DIST
+		var far: bool = (m.pos as Vector3).distance_to(land.pos) > DRAW_DIST * (1.6 if m.kind == "giant" else 1.0)
 		cr.visible = not far
 		if far:
 			continue
@@ -604,6 +813,13 @@ func _process(delta: float) -> void:
 	_player.update(delta, land.pos, land.heading, land.vel)
 	_sync_mobs(delta)
 	_sync_bones()
+	_sync_things()
+	_daylight()
+	_own.visible = land.has_nest
+	_beacon.visible = land.has_nest
+	if land.has_nest:
+		_own.position = land.home
+		_beacon.position = land.home + Vector3(0, 20.0, 0)
 	for i in _nests.size():
 		var eggs: Array = _nests[i].eggs
 		for j in eggs.size():

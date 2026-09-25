@@ -388,8 +388,12 @@ func _refresh_stats() -> void:
 		_stats.add_child(Kit.info_chip("", "Пусто — начни с туловища", Art.GOLD))
 		return
 	var st := LandParts.stats(evo.land_body, evo.land_shape)
-	var chips := [["dash", "%d%%" % int(round(st.speed * 100.0))], ["bite", "%d" % int(st.bite)],
-		["heart", "%d" % int(st.hp)], ["eye", "%d%%" % int(round(st.sight * 100.0))]]
+	# С силой на суше: тело то же, а здоровья и укуса больше.
+	var pw := LandParts.power(evo.land_level())
+	var chips := [["dash", "%d%%" % int(round(st.speed * pw.speed * 100.0))], ["bite", "%d" % int(st.bite * pw.bite)],
+		["heart", "%d" % int(st.hp * pw.hp)], ["eye", "%d%%" % int(round(st.sight * 100.0))]]
+	if evo.land_level() > 1:
+		chips.append(["trophy", "сила %d" % evo.land_level()])
 	if st.armor > 0.0:
 		chips.append(["shield", "%d%%" % int(round(st.armor * 100.0))])
 	if not evo.land_body.has("legs"):
@@ -528,9 +532,19 @@ func _part_tile(id: String, cc: Array) -> Control:
 	t.price = "стоит" if on else ("даром" if price == 0 else "%d ДНК" % price)
 	t.on = on
 	t.dim = not on and (need_torso or price > free)
+	# Ещё не найдена — поставить нельзя, подсказка, где искать.
+	var locked := not on and not evo.land_has(id)
+	if locked:
+		t.locked = true
+		t.dim = true
+		t.sub = "ищи на острове"
+		t.price = "не найдено"
 	t.custom_minimum_size = Vector2(168, 146)
 	t.pressed.connect(func():
-		if on:
+		if locked:
+			changed.emit(false, false)
+			_toast("%s — ещё не найдено. Разбивай светящиеся окаменелости, побеждай вожаков стай и гигантов" % p.name)
+		elif on:
 			select(_default_sel(s), true)
 			_toast(p.name + ": " + (sum if sum != "" else p.hint))
 			_refresh.call_deferred()
@@ -2101,6 +2115,8 @@ class Tile:
 	var on := false
 	var dim := false
 	var warn := false
+	## Ещё не найдена: замок в углу.
+	var locked := false
 
 	func _ready() -> void:
 		mouse_filter = Control.MOUSE_FILTER_STOP
@@ -2142,8 +2158,10 @@ class Tile:
 		if sub != "":
 			_line(font, sub, y + 21, 14, Color(Art.GREEN if not dim else Art.MUTED, a))
 		if price != "":
-			var col := Art.GREEN if on else (Art.DANGER if dim else Art.GOLD)
+			var col := Art.GREEN if on else (Art.MUTED if locked else (Art.DANGER if dim else Art.GOLD))
 			_line(font, price, size.y - 10, 16, col)
+		if locked:
+			Icons.draw(self, "lock", Rect2(size.x - 38, 8, 30, 30), Color(Art.GOLD, 0.9))
 
 	## Строка по центру; не влезла — с многоточием.
 	func _line(font: Font, text: String, y: float, fs: int, col: Color) -> void:

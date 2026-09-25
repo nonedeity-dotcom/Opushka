@@ -7,6 +7,9 @@ func _evo() -> Evolution:
 	e.dna_total = 100.0
 	e.body = [{"id": "jaws", "a": 0, "d": 1.0}, {"id": "flagellum", "a": 180, "d": 1.0}, {"id": "cilia", "a": 135, "d": 1.0},
 		{"id": "eye", "a": 0, "d": 0.3}, {"id": "spike", "a": 90, "d": 1.0}, {"id": "spike2", "a": -90, "d": 1.0}]
+	# Здесь проверяются цены и места — все части уже найдены.
+	for id in LandParts.PARTS:
+		e.land_found[id] = true
 	return e
 
 func test_переход(c) -> void:

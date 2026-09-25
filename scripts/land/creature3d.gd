@@ -99,12 +99,31 @@ static func _basis_y(dir: Vector3) -> Basis:
 
 ## Собрать простое существо (соседи на суше): ноги 2 или 4, челюсти, глаза; spikes —
 ## шипы по спине и рога (отшельники).
-func build(c: Color, c2: Color, s: float, legs: int, spikes := false) -> void:
+## kind — кто это: leader (вожак: гребень и когти), hunter (хищник: клыки, когти, хвост),
+## giant (гигант: рога, пластины, большие когти, хвост-булава).
+func build(c: Color, c2: Color, s: float, legs: int, spikes := false, kind := "") -> void:
 	var parts := {"torso": "torso", "legs": "legs2" if legs == 2 else "legs4", "mouth": "jaws", "eyes": "eyes"}
 	if spikes:
 		parts.back = "back_spikes"
 		parts.head = "horns"
-	build_body(c, c2, s, parts, "spots")
+	var pattern := "spots"
+	match kind:
+		"leader":
+			parts.head = "crest"
+			parts.claws = "claws"
+		"hunter":
+			parts.mouth = "fangs"
+			parts.claws = "claws"
+			parts.tail = "tail_long"
+			pattern = "tiger"
+		"giant":
+			parts.head = "horns"
+			parts.back = "plates"
+			parts.claws = "claws_big"
+			parts.tail = "tail_club"
+			parts.mouth = "fangs"
+			pattern = "back"
+	build_body(c, c2, s, parts, pattern)
 
 ## Собрать тело из частей суши (LandParts): место → часть. pattern — узор, shape —
 ## вылепленная форма (LandParts.fix_shape). Вперёд — ось +Z. Без туловища — пусто.
